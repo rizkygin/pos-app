@@ -14,6 +14,14 @@ export const relations = defineRelations(schema, (r) => ({
         hasRoleCourier: r.many.couriersTable({
             from: r.usersTable.id,
             to: r.couriersTable.user_id
+        }),
+        sessions: r.many.session({
+            from: r.usersTable.id,
+            to: r.session.userId
+        }),
+        accounts: r.many.account({
+            from: r.usersTable.id,
+            to: r.account.userId
         })
     },
     outletsTable: {
@@ -93,5 +101,18 @@ export const relations = defineRelations(schema, (r) => ({
             from: r.ordersTable.id,
             to: r.orderDetailsTable.order_id
         })
-    }
+    },
+    session: {
+        hasUserId: r.one.usersTable({
+            from: r.session.userId,
+            to: r.usersTable.id
+        })
+    },
+    account: {
+        hasUserId: r.one.usersTable({
+            from: r.account.userId,
+            to: r.usersTable.id
+        })
+    },
+
 }));

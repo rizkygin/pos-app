@@ -9,12 +9,19 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@opentelemetry/api": "^1.9.1",
+    "@untitledui/icons": "^0.0.22",
+    "better-auth": "^1.6.4",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^1.0.0-beta.21",
+    "motion": "^12.38.0",
     "next": "16.2.3",
     "pg": "^8.20.0",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-aria": "^3.48.0",
+    "react-aria-components": "^1.17.0",
+    "react-dom": "19.2.4",
+    "tailwind-merge": "^3.5.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -28,5 +35,10 @@
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5"
+  },
+  "manifest": {
+    "host_permissions": [
+      "http://localhost:3000"
+    ]
   }
 }
