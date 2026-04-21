@@ -8,81 +8,81 @@ export const RECIEPENT = pgEnum('receipt', ['customer', 'courier', 'outlet']);
 
 export const usersTable = pgTable("users", {
     id: text('id').primaryKey(),
-    name: varchar({ length: 255 }).notNull(),
-    phone: varchar({ length: 255 }).default('082222222222'),
-    email: varchar({ length: 255 }).notNull().unique(),
-    address: varchar({ length: 255 }).default('Jl. Contoh'),
+    name: varchar("name", { length: 255 }).notNull(),
+    phone: varchar("phone", { length: 255 }).default('082222222222'),
+    email: varchar("email", { length: 255 }).notNull().unique(),
+    address: varchar("address", { length: 255 }).default('Jl. Contoh'),
     emailVerified: boolean("email_verified").default(false).notNull(),
     image: text("image").default('avatar.png'),
     ...timestamps
 });
 
 export const outletsTable = pgTable("outlets", {
-    id: integer().primaryKey().generatedAlwaysAsIdentity(),
-    name: varchar({ length: 255 }).notNull(),
-    address: varchar({ length: 255 }).notNull(),
-    phone: varchar({ length: 255 }).notNull(),
-    email: varchar({ length: 255 }).notNull().unique(),
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    name: varchar("name", { length: 255 }).notNull(),
+    address: varchar("address", { length: 255 }).notNull(),
+    phone: varchar("phone", { length: 255 }).notNull(),
+    email: varchar("email", { length: 255 }).notNull().unique(),
     user_id: text('user_id').notNull().references(() => usersTable.id),
-    avatar: varchar({ length: 255 }).notNull().default('avatar.png'),
-    ratings: varchar().default('5'),
+    avatar: varchar("avatar", { length: 255 }).notNull().default('avatar.png'),
+    ratings: varchar("ratings").default('5'),
     ...timestamps,
 });
 
 export const customersTable = pgTable("customers", {
-    id: integer().primaryKey().generatedByDefaultAsIdentity(),
+    id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
     user_id: text('user_id').notNull().references(() => usersTable.id),
-    ratings: varchar().default('5'),
+    ratings: varchar("ratings").default('5'),
     ...timestamps,
 });
 
 export const couriersTable = pgTable("couriers", {
-    id: integer().primaryKey().generatedByDefaultAsIdentity(),
+    id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
     user_id: text('user_id').notNull().references(() => usersTable.id),
-    avatar: varchar({ length: 255 }).notNull().default('avatar-courier.png'),
-    vehicle_plate: varchar({ length: 255 }).notNull(),
-    vehicle_type: VEHICLE_TYPE().notNull(),
-    ratings: varchar().default('5'),
+    avatar: varchar("avatar", { length: 255 }).notNull().default('avatar-courier.png'),
+    vehicle_plate: varchar("vehicle_plate", { length: 255 }).notNull(),
+    vehicle_type: VEHICLE_TYPE("vehicle_type").notNull(),
+    ratings: varchar("ratings").default('5'),
     ...timestamps,
 });
 
 export const productsTable = pgTable('products', {
     id: text('id').primaryKey(),
-    product_name: varchar({ length: 255 }).notNull(),
-    price: varchar({ length: 10 }).notNull(),
-    price_mark_down: varchar({ length: 10 }).notNull(),
-    outlet_id: integer().notNull().references(() => outletsTable.id),
-    ratings: varchar().default('5'),
+    product_name: varchar("product_name", { length: 255 }).notNull(),
+    price: varchar("price", { length: 10 }).notNull(),
+    price_mark_down: varchar("price_mark_down", { length: 10 }).notNull(),
+    outlet_id: integer("outlet_id").notNull().references(() => outletsTable.id),
+    ratings: varchar("ratings").default('5'),
     ...timestamps,
 });
 
 export const ordersTable = pgTable('orders', {
     id: text('id').primaryKey(),
-    costomer_id: integer().notNull().references(() => customersTable.id),
-    courier_id: integer().notNull().references(() => couriersTable.id),
+    costomer_id: integer("costomer_id").notNull().references(() => customersTable.id),
+    courier_id: integer("courier_id").notNull().references(() => couriersTable.id),
 })
 //you can place discount on this coloumn later 
 //discount : varchar(lenght: 5) ex: OUPIS , AUGUS, RIZKY 
 
 export const orderDetailsTable = pgTable('orderDetails', {
-    id: integer().primaryKey().generatedByDefaultAsIdentity(),
+    id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
     order_id: text('order_id').notNull().references(() => ordersTable.id),
     product_id: text('product_id').notNull().references(() => productsTable.id),
-    quantity: integer().notNull(),
-    note_product: varchar({ length: 255 }).notNull(),
-    extra: json(),
-    summary_price: varchar({ length: 10 }).notNull(),
-    created_at: timestamp().defaultNow().notNull(),
-    status: STATUS(),
+    quantity: integer("quantity").notNull(),
+    note_product: varchar("note_product", { length: 255 }).notNull(),
+    extra: json("extra"),
+    summary_price: varchar("summary_price", { length: 10 }).notNull(),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+    status: STATUS("status"),
 })
 
 export const ratingsTable = pgTable('ratings', {
     id: text('id').primaryKey(),
-    orderDetailsTable: integer().notNull().references(() => orderDetailsTable.id),
-    ratings: varchar().default('5'),
+    orderDetailsTable: integer("order_details_id").notNull().references(() => orderDetailsTable.id),
+    ratings: varchar("ratings").default('5'),
     reviewer: text('reviewer_id').notNull().references(() => usersTable.id),
     reciepent: text('reciepent_id').notNull().references(() => usersTable.id),
-    reciepent_as: RECIEPENT(),
+    reciepent_as: RECIEPENT("reciepent_as"),
     ...timestamps,
 })
 

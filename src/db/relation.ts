@@ -1,118 +1,101 @@
-import { defineRelations } from "drizzle-orm";
+import { relations } from "drizzle-orm";
 import * as schema from "./schema";
 
-export const relations = defineRelations(schema, (r) => ({
-    usersTable: {
-        hasRoleCustomer: r.one.customersTable({
-            from: r.usersTable.id,
-            to: r.customersTable.user_id
-        }),
-        hasOutlets: r.many.outletsTable({
-            from: r.usersTable.id,
-            to: r.outletsTable.user_id
-        }),
-        hasRoleCourier: r.many.couriersTable({
-            from: r.usersTable.id,
-            to: r.couriersTable.user_id
-        }),
-        sessions: r.many.session({
-            from: r.usersTable.id,
-            to: r.session.userId
-        }),
-        accounts: r.many.account({
-            from: r.usersTable.id,
-            to: r.account.userId
-        })
-    },
-    outletsTable: {
-        hasRoleUser: r.one.usersTable({
-            from: r.outletsTable.user_id,
-            to: r.usersTable.id
-        }),
-        products: r.many.productsTable({
-            from: r.outletsTable.id,
-            to: r.productsTable.outlet_id
-        }),
-    },
-    customersTable: {
-        hasRoleUser: r.one.usersTable({
-            from: r.customersTable.user_id,
-            to: r.usersTable.id
-        }),
-        orders: r.many.ordersTable({
-            from: r.customersTable.id,
-            to: r.ordersTable.costomer_id
-        })
-    },
-    couriersTable: {
-        hasRoleUser: r.one.usersTable({
-            from: r.couriersTable.user_id,
-            to: r.usersTable.id
-        }),
-        orders: r.many.ordersTable({
-            from: r.couriersTable.id,
-            to: r.ordersTable.courier_id
-        })
-    },
-    productsTable: {
-        hasOutlet: r.one.outletsTable({
-            from: r.productsTable.outlet_id,
-            to: r.outletsTable.id
-        }),
-        orderDetails: r.many.orderDetailsTable({
-            from: r.productsTable.id,
-            to: r.orderDetailsTable.product_id
-        })
-    },
-    orderDetailsTable: {
-        hasProduct: r.one.productsTable({
-            from: r.orderDetailsTable.product_id,
-            to: r.productsTable.id
-        }),
-        hasOrder: r.one.ordersTable({
-            from: r.orderDetailsTable.order_id,
-            to: r.ordersTable.id
-        })
-    },
-    ratingsTable: {
-        hasOrderDetails: r.one.orderDetailsTable({
-            from: r.ratingsTable.orderDetailsTable,
-            to: r.orderDetailsTable.id
-        }),
-        hasReviewer: r.one.usersTable({
-            from: r.ratingsTable.reviewer,
-            to: r.usersTable.id
-        }),
-        hasReciepent: r.one.usersTable({
-            from: r.ratingsTable.reciepent,
-            to: r.usersTable.id
-        })
-    },
-    ordersTable: {
-        hasCustomer: r.one.customersTable({
-            from: r.ordersTable.costomer_id,
-            to: r.customersTable.id
-        }),
-        hasCourier: r.one.couriersTable({
-            from: r.ordersTable.courier_id,
-            to: r.couriersTable.id
-        }),
-        hasOrderDetails: r.many.orderDetailsTable({
-            from: r.ordersTable.id,
-            to: r.orderDetailsTable.order_id
-        })
-    },
-    session: {
-        hasUserId: r.one.usersTable({
-            from: r.session.userId,
-            to: r.usersTable.id
-        })
-    },
-    account: {
-        hasUserId: r.one.usersTable({
-            from: r.account.userId,
-            to: r.usersTable.id
-        })
-    },
+export const usersRelations = relations(schema.usersTable, ({ one, many }) => ({
+    hasRoleCustomer: one(schema.customersTable, {
+        fields: [schema.usersTable.id],
+        references: [schema.customersTable.user_id]
+    }),
+    hasOutlets: many(schema.outletsTable),
+    hasRoleCourier: many(schema.couriersTable),
+    sessions: many(schema.session),
+    accounts: many(schema.account),
+    hasGivenRatings: many(schema.ratingsTable, { relationName: "reviewer" }),
+    hasReceivedRatings: many(schema.ratingsTable, { relationName: "reciepent" })
+}));
 
+export const outletsRelations = relations(schema.outletsTable, ({ one, many }) => ({
+    hasRoleUser: one(schema.usersTable, {
+        fields: [schema.outletsTable.user_id],
+        references: [schema.usersTable.id]
+    }),
+    products: many(schema.productsTable),
+}));
+
+export const customersRelations = relations(schema.customersTable, ({ one, many }) => ({
+    hasRoleUser: one(schema.usersTable, {
+        fields: [schema.customersTable.user_id],
+        references: [schema.usersTable.id]
+    }),
+    orders: many(schema.ordersTable)
+}));
+
+export const couriersRelations = relations(schema.couriersTable, ({ one, many }) => ({
+    hasRoleUser: one(schema.usersTable, {
+        fields: [schema.couriersTable.user_id],
+        references: [schema.usersTable.id]
+    }),
+    orders: many(schema.ordersTable)
+}));
+
+export const productsRelations = relations(schema.productsTable, ({ one, many }) => ({
+    hasOutlet: one(schema.outletsTable, {
+        fields: [schema.productsTable.outlet_id],
+        references: [schema.outletsTable.id]
+    }),
+    orderDetails: many(schema.orderDetailsTable)
+}));
+
+export const orderDetailsRelations = relations(schema.orderDetailsTable, ({ one }) => ({
+    hasProduct: one(schema.productsTable, {
+        fields: [schema.orderDetailsTable.product_id],
+        references: [schema.productsTable.id]
+    }),
+    hasOrder: one(schema.ordersTable, {
+        fields: [schema.orderDetailsTable.order_id],
+        references: [schema.ordersTable.id]
+    })
+}));
+
+export const ratingsRelations = relations(schema.ratingsTable, ({ one }) => ({
+    hasOrderDetails: one(schema.orderDetailsTable, {
+        fields: [schema.ratingsTable.orderDetailsTable],
+        references: [schema.orderDetailsTable.id]
+    }),
+    hasReviewer: one(schema.usersTable, {
+        fields: [schema.ratingsTable.reviewer],
+        references: [schema.usersTable.id],
+        relationName: "reviewer"
+    }),
+    hasReciepent: one(schema.usersTable, {
+        fields: [schema.ratingsTable.reciepent],
+        references: [schema.usersTable.id],
+        relationName: "reciepent"
+    })
+}));
+
+export const ordersRelations = relations(schema.ordersTable, ({ one, many }) => ({
+    hasCustomer: one(schema.customersTable, {
+        fields: [schema.ordersTable.costomer_id],
+        references: [schema.customersTable.id]
+    }),
+    hasCourier: one(schema.couriersTable, {
+        fields: [schema.ordersTable.courier_id],
+        references: [schema.couriersTable.id]
+    }),
+    hasOrderDetails: many(schema.orderDetailsTable)
+}));
+
+export const sessionRelations = relations(schema.session, ({ one }) => ({
+    hasUserId: one(schema.usersTable, {
+        fields: [schema.session.userId],
+        references: [schema.usersTable.id]
+    })
+}));
+
+export const accountRelations = relations(schema.account, ({ one }) => ({
+    hasUserId: one(schema.usersTable, {
+        fields: [schema.account.userId],
+        references: [schema.usersTable.id]
+    })
 }));

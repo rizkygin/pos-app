@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { signIn, authClient } from "@/lib/auth-client";
+import { authClient } from "@/lib/auth-client";
 
 export default function Home() {
   const [isLogin, setIsLogin] = useState(true);
@@ -16,7 +16,7 @@ export default function Home() {
     setErrorMSG("");
     try {
       if (isLogin) {
-        const { data, error } = await signIn.email({
+        const { data, error } = await authClient.signIn.email({
           email,
           password,
           callbackURL: "/dashboard"

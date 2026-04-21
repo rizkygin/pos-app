@@ -1,23 +1,8 @@
-DO $$ BEGIN
- CREATE TYPE "receipt" AS ENUM('customer', 'courier', 'outlet');
-EXCEPTION
- WHEN duplicate_object THEN null;
-END $$;
---> statement-breakpoint
-DO $$ BEGIN
- CREATE TYPE "state" AS ENUM('addToChart', 'checkout');
-EXCEPTION
- WHEN duplicate_object THEN null;
-END $$;
---> statement-breakpoint
-DO $$ BEGIN
- CREATE TYPE "vechile_type" AS ENUM('car', 'motorcycle');
-EXCEPTION
- WHEN duplicate_object THEN null;
-END $$;
---> statement-breakpoint
+CREATE TYPE "public"."receipt" AS ENUM('customer', 'courier', 'outlet');--> statement-breakpoint
+CREATE TYPE "public"."state" AS ENUM('addToChart', 'checkout');--> statement-breakpoint
+CREATE TYPE "public"."vechile_type" AS ENUM('car', 'motorcycle');--> statement-breakpoint
 CREATE TABLE "account" (
-	"id" text PRIMARY KEY,
+	"id" text PRIMARY KEY NOT NULL,
 	"account_id" text NOT NULL,
 	"provider_id" text NOT NULL,
 	"user_id" text NOT NULL,
@@ -66,7 +51,7 @@ CREATE TABLE "orderDetails" (
 );
 --> statement-breakpoint
 CREATE TABLE "orders" (
-	"id" text PRIMARY KEY,
+	"id" text PRIMARY KEY NOT NULL,
 	"costomer_id" integer NOT NULL,
 	"courier_id" integer NOT NULL
 );
@@ -76,17 +61,18 @@ CREATE TABLE "outlets" (
 	"name" varchar(255) NOT NULL,
 	"address" varchar(255) NOT NULL,
 	"phone" varchar(255) NOT NULL,
-	"email" varchar(255) NOT NULL UNIQUE,
+	"email" varchar(255) NOT NULL,
 	"user_id" text NOT NULL,
 	"avatar" varchar(255) DEFAULT 'avatar.png' NOT NULL,
 	"ratings" varchar DEFAULT '5',
 	"updated_at" timestamp,
 	"created_at" timestamp DEFAULT now() NOT NULL,
-	"deleted_at" timestamp
+	"deleted_at" timestamp,
+	CONSTRAINT "outlets_email_unique" UNIQUE("email")
 );
 --> statement-breakpoint
 CREATE TABLE "products" (
-	"id" text PRIMARY KEY,
+	"id" text PRIMARY KEY NOT NULL,
 	"product_name" varchar(255) NOT NULL,
 	"price" varchar(10) NOT NULL,
 	"price_mark_down" varchar(10) NOT NULL,
@@ -98,8 +84,8 @@ CREATE TABLE "products" (
 );
 --> statement-breakpoint
 CREATE TABLE "ratings" (
-	"id" text PRIMARY KEY,
-	"orderDetailsTable" integer NOT NULL,
+	"id" text PRIMARY KEY NOT NULL,
+	"order_details_id" integer NOT NULL,
 	"ratings" varchar DEFAULT '5',
 	"reviewer_id" text NOT NULL,
 	"reciepent_id" text NOT NULL,
@@ -110,31 +96,33 @@ CREATE TABLE "ratings" (
 );
 --> statement-breakpoint
 CREATE TABLE "session" (
-	"id" text PRIMARY KEY,
+	"id" text PRIMARY KEY NOT NULL,
 	"expires_at" timestamp NOT NULL,
-	"token" text NOT NULL UNIQUE,
+	"token" text NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"updated_at" timestamp NOT NULL,
 	"ip_address" text,
 	"user_agent" text,
-	"user_id" text NOT NULL
+	"user_id" text NOT NULL,
+	CONSTRAINT "session_token_unique" UNIQUE("token")
 );
 --> statement-breakpoint
 CREATE TABLE "users" (
-	"id" text PRIMARY KEY,
+	"id" text PRIMARY KEY NOT NULL,
 	"name" varchar(255) NOT NULL,
 	"phone" varchar(255) DEFAULT '082222222222',
-	"email" varchar(255) NOT NULL UNIQUE,
+	"email" varchar(255) NOT NULL,
 	"address" varchar(255) DEFAULT 'Jl. Contoh',
 	"email_verified" boolean DEFAULT false NOT NULL,
 	"image" text DEFAULT 'avatar.png',
 	"updated_at" timestamp,
 	"created_at" timestamp DEFAULT now() NOT NULL,
-	"deleted_at" timestamp
+	"deleted_at" timestamp,
+	CONSTRAINT "users_email_unique" UNIQUE("email")
 );
 --> statement-breakpoint
 CREATE TABLE "verification" (
-	"id" text PRIMARY KEY,
+	"id" text PRIMARY KEY NOT NULL,
 	"identifier" text NOT NULL,
 	"value" text NOT NULL,
 	"expires_at" timestamp NOT NULL,
@@ -142,16 +130,16 @@ CREATE TABLE "verification" (
 	"updated_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-ALTER TABLE "account" ADD CONSTRAINT "account_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE;--> statement-breakpoint
-ALTER TABLE "couriers" ADD CONSTRAINT "couriers_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id");--> statement-breakpoint
-ALTER TABLE "customers" ADD CONSTRAINT "customers_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id");--> statement-breakpoint
-ALTER TABLE "orderDetails" ADD CONSTRAINT "orderDetails_order_id_orders_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("id");--> statement-breakpoint
-ALTER TABLE "orderDetails" ADD CONSTRAINT "orderDetails_product_id_products_id_fkey" FOREIGN KEY ("product_id") REFERENCES "products"("id");--> statement-breakpoint
-ALTER TABLE "orders" ADD CONSTRAINT "orders_costomer_id_customers_id_fkey" FOREIGN KEY ("costomer_id") REFERENCES "customers"("id");--> statement-breakpoint
-ALTER TABLE "orders" ADD CONSTRAINT "orders_courier_id_couriers_id_fkey" FOREIGN KEY ("courier_id") REFERENCES "couriers"("id");--> statement-breakpoint
-ALTER TABLE "outlets" ADD CONSTRAINT "outlets_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id");--> statement-breakpoint
-ALTER TABLE "products" ADD CONSTRAINT "products_outlet_id_outlets_id_fkey" FOREIGN KEY ("outlet_id") REFERENCES "outlets"("id");--> statement-breakpoint
-ALTER TABLE "ratings" ADD CONSTRAINT "ratings_orderDetailsTable_orderDetails_id_fkey" FOREIGN KEY ("orderDetailsTable") REFERENCES "orderDetails"("id");--> statement-breakpoint
-ALTER TABLE "ratings" ADD CONSTRAINT "ratings_reviewer_id_users_id_fkey" FOREIGN KEY ("reviewer_id") REFERENCES "users"("id");--> statement-breakpoint
-ALTER TABLE "ratings" ADD CONSTRAINT "ratings_reciepent_id_users_id_fkey" FOREIGN KEY ("reciepent_id") REFERENCES "users"("id");--> statement-breakpoint
-ALTER TABLE "session" ADD CONSTRAINT "session_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE;
+ALTER TABLE "account" ADD CONSTRAINT "account_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "couriers" ADD CONSTRAINT "couriers_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "customers" ADD CONSTRAINT "customers_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "orderDetails" ADD CONSTRAINT "orderDetails_order_id_orders_id_fk" FOREIGN KEY ("order_id") REFERENCES "public"."orders"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "orderDetails" ADD CONSTRAINT "orderDetails_product_id_products_id_fk" FOREIGN KEY ("product_id") REFERENCES "public"."products"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "orders" ADD CONSTRAINT "orders_costomer_id_customers_id_fk" FOREIGN KEY ("costomer_id") REFERENCES "public"."customers"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "orders" ADD CONSTRAINT "orders_courier_id_couriers_id_fk" FOREIGN KEY ("courier_id") REFERENCES "public"."couriers"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "outlets" ADD CONSTRAINT "outlets_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "products" ADD CONSTRAINT "products_outlet_id_outlets_id_fk" FOREIGN KEY ("outlet_id") REFERENCES "public"."outlets"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "ratings" ADD CONSTRAINT "ratings_order_details_id_orderDetails_id_fk" FOREIGN KEY ("order_details_id") REFERENCES "public"."orderDetails"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "ratings" ADD CONSTRAINT "ratings_reviewer_id_users_id_fk" FOREIGN KEY ("reviewer_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "ratings" ADD CONSTRAINT "ratings_reciepent_id_users_id_fk" FOREIGN KEY ("reciepent_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "session" ADD CONSTRAINT "session_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
