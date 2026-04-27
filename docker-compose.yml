@@ -15,16 +15,13 @@ services:
       - db
       - redis
     volumes:
-      - ./src:/app/src
+      - ./app:/app/app
       - ./pages:/app/pages
     develop:
       watch:
         - action: sync
-          path: ./src
-          target: /app/src
-        - action: sync
-          path: ./pages
-          target: /app/pages
+          path: ./*
+          target: /app
         - action: rebuild
           path: package.json
 
@@ -41,7 +38,7 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER}"]
       interval: 10s
       timeout: 5s
       retries: 5
