@@ -5,6 +5,7 @@ import { usersTable, session, account, verification } from "@/src/db/schema";
 import { cache } from "react";
 import { headers } from "next/headers";
 import { nextCookies } from "better-auth/next-js";
+import { redirect } from "next/navigation";
 
 
 export const auth = betterAuth({
@@ -28,7 +29,7 @@ export const getSession = cache(async () => {
     headers: await headers(),
   });
   if (!session) {
-    throw new Error("Session not found");
+    redirect('/')
   }
 
   return session;

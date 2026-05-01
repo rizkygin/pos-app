@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Search, Bell, Calendar as CalendarIcon, User, ChevronDown, ShoppingCart, MessageSquare, Landmark, History } from "lucide-react";
+import { Search, Bell, Calendar as CalendarIcon, User, ChevronDown, ShoppingCart, MessageSquare, Landmark, History, MessageCircle } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,10 +18,10 @@ interface DashboardHeaderProps {
 export function DashboardHeader({ title, description }: DashboardHeaderProps) {
     const [isOpen, setIsOpen] = useState(false);
 
-    const today = new Date().toLocaleDateString('en-US', {
+    const today = new Date().toLocaleDateString('id-ID', {
         weekday: 'long',
         year: 'numeric',
-        month: 'long',
+        month: 'short',
         day: 'numeric'
     });
 
@@ -34,16 +34,12 @@ export function DashboardHeader({ title, description }: DashboardHeaderProps) {
 
     return (
         <header className="flex flex-col gap-4 py-8">
+
             <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                 <div className="flex flex-col gap-1">
                     <h1 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
                         {title}
                     </h1>
-                    {description && (
-                        <p className="text-sm text-muted-foreground sm:text-base">
-                            {description}
-                        </p>
-                    )}
                 </div>
 
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center">

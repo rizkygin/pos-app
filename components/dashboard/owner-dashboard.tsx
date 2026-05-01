@@ -12,6 +12,8 @@ import {
     MessageSquare
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+
+import Link from "next/link";
 export const OwnerDashboard = () => {
     return (
         <main className="px-4 mx-2 md:mx-6 pb-12">
@@ -140,18 +142,18 @@ export const OwnerDashboard = () => {
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                         {[
-                            { name: "Add Product", icon: ShoppingBag, color: "text-blue-600", bg: "bg-blue-50", border: "border-blue-100" },
-                            { name: "View Reports", icon: TrendingUp, color: "text-purple-600", bg: "bg-purple-50", border: "border-purple-100" },
-                            { name: "Manage Users", icon: User, color: "text-amber-600", bg: "bg-amber-50", border: "border-amber-100" },
-                            { name: "Settings", icon: Layers, color: "text-rose-600", bg: "bg-rose-50", border: "border-rose-100" },
+                            { name: "Add Product", icon: ShoppingBag, color: "text-blue-600", bg: "bg-blue-50", border: "border-blue-100", href: "/dashboard/addproducts" },
+                            { name: "View Reports", icon: TrendingUp, color: "text-purple-600", bg: "bg-purple-50", border: "border-purple-100", href: "/dashboard/reports" },
+                            { name: "Manage Users", icon: User, color: "text-amber-600", bg: "bg-amber-50", border: "border-amber-100", href: "/dashboard/users" },
+                            { name: "Settings", icon: Layers, color: "text-rose-600", bg: "bg-rose-50", border: "border-rose-100", href: "/dashboard/settings" },
                         ].map((action, i) => (
-                            <button key={i} className={`flex flex-col items-center justify-center gap-3 p-6 rounded-2xl border ${action.border} bg-background hover:border-blue-600/30 hover:shadow-md transition-all group relative overflow-hidden`}>
+                            <Link key={i} href={action.href} className={`flex flex-col items-center justify-center gap-3 p-6 rounded-2xl border ${action.border} bg-background hover:border-blue-600/30 hover:shadow-md transition-all group relative overflow-hidden`}>
                                 <div className={`p-3 rounded-xl ${action.bg} ${action.color} group-hover:scale-110 transition-transform relative z-10`}>
                                     <action.icon className="h-6 w-6" />
                                 </div>
                                 <span className="text-sm font-bold text-muted-foreground group-hover:text-foreground transition-colors relative z-10">{action.name}</span>
                                 <div className="absolute inset-0 bg-gradient-to-br from-transparent to-muted/10 opacity-0 group-hover:opacity-100 transition-opacity" />
-                            </button>
+                            </Link>
                         ))}
                     </div>
                 </div>

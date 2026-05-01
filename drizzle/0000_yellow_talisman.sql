@@ -78,6 +78,11 @@ CREATE TABLE "products" (
 	"price_mark_down" varchar(10) NOT NULL,
 	"outlet_id" integer NOT NULL,
 	"ratings" varchar DEFAULT '5',
+	"image" varchar(255) DEFAULT 'avatar.png' NOT NULL,
+	"category" varchar(255) DEFAULT 'avatar.png' NOT NULL,
+	"is_available" boolean DEFAULT true NOT NULL,
+	"description" varchar(255) DEFAULT '',
+	"unit" varchar(10) DEFAULT 'pcs' NOT NULL,
 	"updated_at" timestamp,
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"deleted_at" timestamp

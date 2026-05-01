@@ -53,6 +53,11 @@ export const productsTable = pgTable('products', {
     price_mark_down: varchar("price_mark_down", { length: 10 }).notNull(),
     outlet_id: integer("outlet_id").notNull().references(() => outletsTable.id),
     ratings: varchar("ratings").default('5'),
+    image: varchar("image", { length: 255 }).notNull().default('avatar.png'),
+    category: varchar("category", { length: 255 }).notNull().default('avatar.png'),
+    isAvailable: boolean("is_available").default(true).notNull(),
+    description: varchar("description", { length: 255 }).default(''),
+    unit: varchar("unit", { length: 10 }).notNull().default('pcs'),
     ...timestamps,
 });
 

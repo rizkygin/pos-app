@@ -1,5 +1,5 @@
 {
-  "id": "2986c21a-f80c-40e9-b7f1-07cce8ff9a09",
+  "id": "0e82597a-39d1-4ae8-98cc-54df4a180814",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -602,6 +602,41 @@
           "primaryKey": false,
           "notNull": false,
           "default": "'5'"
+        },
+        "image": {
+          "name": "image",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'avatar.png'"
+        },
+        "category": {
+          "name": "category",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'avatar.png'"
+        },
+        "is_available": {
+          "name": "is_available",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "description": {
+          "name": "description",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "''"
+        },
+        "unit": {
+          "name": "unit",
+          "type": "varchar(10)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pcs'"
         },
         "updated_at": {
           "name": "updated_at",
