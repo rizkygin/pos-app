@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import Image from "next/image";
-import { 
-    Search, 
-    ShoppingCart, 
-    Plus, 
-    Minus, 
-    Trash2, 
+import {
+    Search,
+    ShoppingCart,
+    Plus,
+    Minus,
+    Trash2,
     CreditCard,
     Coffee,
     Pizza,
@@ -39,12 +39,8 @@ type CashierClientProps = {
     initialProducts: Product[];
 };
 
-const CATEGORIES = [
+let CATEGORIES = [
     { id: "All", label: "All Items", icon: LayoutGrid, color: "text-blue-500", bg: "bg-blue-50", border: "border-blue-200" },
-    { id: "Food", label: "Food", icon: Pizza, color: "text-orange-500", bg: "bg-orange-50", border: "border-orange-200" },
-    { id: "Beverage", label: "Beverage", icon: Coffee, color: "text-amber-600", bg: "bg-amber-50", border: "border-amber-200" },
-    { id: "Snack", label: "Snack", icon: Cookie, color: "text-amber-500", bg: "bg-amber-50", border: "border-amber-200" },
-    { id: "Other", label: "Other", icon: Package, color: "text-indigo-500", bg: "bg-indigo-50", border: "border-indigo-200" },
 ];
 
 export const CashierClient = ({ outletId, initialProducts }: CashierClientProps) => {
@@ -52,7 +48,38 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
     const [searchQuery, setSearchQuery] = useState("");
     const [cart, setCart] = useState<CartItem[]>([]);
 
-    // Filter products
+    // Fetch categories
+    useEffect(() => {
+        const fetchCategories = async () => {
+            try {
+                // GET requests cannot have a body, so we pass outletId as a query parameter
+                const res = await fetch(`/api/get-categories?outletId=${outletId}`);
+                if (!res.ok) {
+                    throw new Error("Failed to fetch categories");
+                }
+                const { data } = await res.json();
+
+                console.log(data, "data");
+                data?.map((category: any) => {
+                    CATEGORIES.push({
+                        id: category.category,
+                        label: category.category,
+                        icon: LayoutGrid,
+                        color: "text-red-500",
+                        bg: "bg-red-50",
+                        border: "border-red-200",
+                    });
+                })
+            } catch (err) {
+                console.error(err);
+            }
+        };
+        fetchCategories()
+
+
+
+    }, [outletId, CATEGORIES]);
+
     const filteredProducts = useMemo(() => {
         return initialProducts.filter(product => {
             const matchesCategory = selectedCategory === "All" || product.category === selectedCategory;
@@ -64,12 +91,12 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
     // Cart operations
     const addToCart = (product: Product) => {
         if (!product.isAvailable) return;
-        
+
         setCart(prev => {
             const existing = prev.find(item => item.product.id === product.id);
             if (existing) {
-                return prev.map(item => 
-                    item.product.id === product.id 
+                return prev.map(item =>
+                    item.product.id === product.id
                         ? { ...item, quantity: item.quantity + 1 }
                         : item
                 );
@@ -96,23 +123,48 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
 
     // Calculations
     const cartTotal = cart.reduce((total, item) => {
-        const price = item.product.price_mark_down && item.product.price_mark_down !== "0" 
-            ? parseFloat(item.product.price_mark_down) 
+        const price = item.product.price_mark_down && item.product.price_mark_down !== "0"
+            ? parseFloat(item.product.price_mark_down)
             : parseFloat(item.product.price);
         return total + (price * item.quantity);
     }, 0);
 
-    const handleCheckout = () => {
+    const handleCheckout = async () => {
         if (cart.length === 0) return;
-        alert("Checkout feature coming soon! (Will save to ordersTable)");
-        // clearCart();
+        try {
+            const response = await fetch('/api/add-order-detail', {
+                method: 'POST',
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    outletId,
+                    cart,
+                    total: cartTotal,
+                }),
+            });
+            let errorMsg = "Failed to add order detail";
+            if (!response.ok) {
+                try {
+                    const data = await response.json();
+                    errorMsg = data?.error?.message || data?.error || errorMsg;
+                } catch {
+                    errorMsg = `Server error: ${response.status} ${response.statusText}`;
+                }
+                throw new Error(errorMsg);
+            }
+            clearCart();
+            alert("Order detail added successfully");
+        } catch (error: any) {
+            alert(error.message);
+        }
     };
 
     return (
         <div className="flex h-full max-h-[calc(100vh-4rem)] overflow-hidden">
             {/* Main Content: Products Grid */}
             <div className="flex-1 flex flex-col min-w-0 bg-background/50 backdrop-blur-sm border-r">
-                
+
                 {/* Header & Search */}
                 <div className="p-4 md:p-6 pb-0">
                     <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between mb-6">
@@ -122,7 +174,7 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
                         </div>
                         <div className="relative w-full md:w-72">
                             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                            <input 
+                            <input
                                 type="text"
                                 placeholder="Search products..."
                                 value={searchQuery}
@@ -138,11 +190,10 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
                             <button
                                 key={cat.id}
                                 onClick={() => setSelectedCategory(cat.id)}
-                                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 whitespace-nowrap transition-all duration-300 font-semibold ${
-                                    selectedCategory === cat.id 
-                                        ? `${cat.border} ${cat.bg} ${cat.color} shadow-sm ring-1 ring-current` 
-                                        : 'border-transparent bg-background/60 hover:bg-muted text-muted-foreground hover:text-foreground hover:border-border'
-                                }`}
+                                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 whitespace-nowrap transition-all duration-300 font-semibold ${selectedCategory === cat.id
+                                    ? `${cat.border} ${cat.bg} ${cat.color} shadow-sm ring-1 ring-current`
+                                    : 'border-transparent bg-background/60 hover:bg-muted text-muted-foreground hover:text-foreground hover:border-border'
+                                    }`}
                             >
                                 <cat.icon className="h-4 w-4" />
                                 {cat.label}
@@ -171,26 +222,25 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
                                         key={product.id}
                                         onClick={() => addToCart(product)}
                                         disabled={!product.isAvailable}
-                                        className={`group relative flex flex-col text-left bg-background rounded-2xl overflow-hidden border-2 transition-all duration-300 hover:shadow-xl hover:-translate-y-1 ${
-                                            !product.isAvailable ? 'opacity-60 cursor-not-allowed border-muted grayscale-[0.5]' : 
+                                        className={`group relative flex flex-col text-left bg-background rounded-2xl overflow-hidden border-2 transition-all duration-300 hover:shadow-xl hover:-translate-y-1 ${!product.isAvailable ? 'opacity-60 cursor-not-allowed border-muted grayscale-[0.5]' :
                                             inCart > 0 ? 'border-blue-500 ring-2 ring-blue-500/20' : 'border-transparent hover:border-blue-200'
-                                        }`}
+                                            }`}
                                     >
                                         {/* Image Container */}
                                         <div className="relative aspect-square w-full bg-muted/20 overflow-hidden">
                                             {product.image && product.image !== "avatar.png" ? (
-                                                <Image 
-                                                    src={product.image} 
-                                                    fill 
-                                                    className="object-cover transition-transform duration-700 group-hover:scale-110" 
-                                                    alt={product.product_name} 
+                                                <Image
+                                                    src={product.image}
+                                                    fill
+                                                    className="object-cover transition-transform duration-700 group-hover:scale-110"
+                                                    alt={product.product_name}
                                                 />
                                             ) : (
                                                 <div className="w-full h-full flex items-center justify-center bg-muted/30">
                                                     <Package className="h-12 w-12 text-muted-foreground/40" />
                                                 </div>
                                             )}
-                                            
+
                                             {/* Stock Badge */}
                                             <div className="absolute top-3 left-3 flex flex-col gap-2">
                                                 {!product.isAvailable && (
@@ -221,7 +271,7 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
                                             <h3 className="font-bold text-sm md:text-base leading-tight line-clamp-2 mb-2 group-hover:text-blue-600 transition-colors">
                                                 {product.product_name}
                                             </h3>
-                                            
+
                                             <div className="mt-auto flex items-end justify-between">
                                                 <div className="flex flex-col">
                                                     {isDiscounted && (
@@ -260,7 +310,7 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
                             </div>
                         </div>
                         {cart.length > 0 && (
-                            <button 
+                            <button
                                 onClick={clearCart}
                                 className="text-xs font-bold text-rose-500 hover:text-rose-600 hover:bg-rose-50 px-3 py-1.5 rounded-lg transition-colors"
                             >
@@ -282,7 +332,7 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
                         cart.map(item => {
                             const isDiscounted = item.product.price_mark_down && item.product.price_mark_down !== "0";
                             const displayPrice = isDiscounted ? item.product.price_mark_down : item.product.price;
-                            
+
                             return (
                                 <div key={item.product.id} className="flex gap-3 bg-muted/30 p-3 rounded-2xl border animate-in slide-in-from-right-4">
                                     {/* Item Image */}
@@ -293,34 +343,34 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
                                             <Package className="h-8 w-8 m-auto mt-4 text-muted-foreground/30" />
                                         )}
                                     </div>
-                                    
+
                                     {/* Item Details */}
                                     <div className="flex-1 flex flex-col justify-between min-w-0">
                                         <div className="flex justify-between items-start gap-2">
                                             <h4 className="font-bold text-sm line-clamp-2 leading-tight">{item.product.product_name}</h4>
-                                            <button 
+                                            <button
                                                 onClick={() => removeFromCart(item.product.id)}
                                                 className="text-muted-foreground hover:text-rose-500 transition-colors p-1"
                                             >
                                                 <Trash2 className="h-4 w-4" />
                                             </button>
                                         </div>
-                                        
+
                                         <div className="flex items-center justify-between mt-2">
                                             <span className="font-bold text-blue-600 text-sm">
                                                 Rp {displayPrice}
                                             </span>
-                                            
+
                                             {/* Quantity Controls */}
                                             <div className="flex items-center gap-3 bg-background border rounded-lg p-1 shadow-sm">
-                                                <button 
+                                                <button
                                                     onClick={() => updateQuantity(item.product.id, -1)}
                                                     className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-muted text-muted-foreground transition-colors"
                                                 >
                                                     <Minus className="h-3 w-3" />
                                                 </button>
                                                 <span className="text-sm font-bold w-4 text-center">{item.quantity}</span>
-                                                <button 
+                                                <button
                                                     onClick={() => updateQuantity(item.product.id, 1)}
                                                     className="w-6 h-6 flex items-center justify-center rounded-md bg-blue-50 hover:bg-blue-100 text-blue-600 transition-colors"
                                                 >
@@ -352,8 +402,8 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
                             <span className="text-3xl font-black text-blue-600 tracking-tight">Rp {cartTotal}</span>
                         </div>
                     </div>
-                    
-                    <Button 
+
+                    <Button
                         onClick={handleCheckout}
                         disabled={cart.length === 0}
                         className="w-full h-14 rounded-2xl text-lg font-bold shadow-xl shadow-blue-600/20 bg-blue-600 hover:bg-blue-700 transition-all hover:-translate-y-1"

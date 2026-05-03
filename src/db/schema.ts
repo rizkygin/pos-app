@@ -65,6 +65,7 @@ export const ordersTable = pgTable('orders', {
     id: text('id').primaryKey(),
     costomer_id: integer("costomer_id").notNull().references(() => customersTable.id),
     courier_id: integer("courier_id").notNull().references(() => couriersTable.id),
+
 })
 //you can place discount on this coloumn later 
 //discount : varchar(lenght: 5) ex: OUPIS , AUGUS, RIZKY 

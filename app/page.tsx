@@ -21,6 +21,7 @@ export default function Home() {
           password,
           callbackURL: "/dashboard"
         });
+
         if (error) throw new Error(error.message);
         // Handle successful login
       } else {

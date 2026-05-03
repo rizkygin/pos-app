@@ -13,6 +13,8 @@ const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
         console.log(session, "session");
         return <Forbidden />
     }
+    //check cookies is empty and if empty , redirect to login page
+
     return (
         <>
 

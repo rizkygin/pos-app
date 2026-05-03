@@ -38,7 +38,7 @@ const main = async () => {
                 }
             });
 
-            if (user.name === "customer_test") {
+            if (user.name === "customers_test") {
                 await db.insert(customersTable).values({
                     user_id: res.user.id,
                 });

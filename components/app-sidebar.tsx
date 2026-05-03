@@ -36,6 +36,7 @@ const projects = [
     { name: "Order", url: "/dashboard/order", icon: Building2, color: "blue" },
     { name: "Product", url: "/dashboard/product", icon: LayoutGrid, color: "red" },
     { name: "Category", url: "/dashboard/category", icon: LetterText, color: "yellow" },
+    { name: "Cashier", url: "/dashboard/cashier", icon: Building2, color: "green" },
     { name: "User", url: "/dashboard/user", icon: IdCard, color: "green" },
     { name: "Setting", url: "/dashboard/setting", icon: SunDim, color: "purple" },
 ]

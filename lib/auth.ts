@@ -21,7 +21,19 @@ export const auth = betterAuth({
   emailAndPassword: { enabled: true },
   plugins: [
     nextCookies()
-  ]
+  ],
+  advanced: {
+    cookies: {
+      session_token: {
+        name: "auth_session",
+        attributes: {
+          sameSite: "lax",
+          secure: true,
+          path: "/"
+        }
+      }
+    }
+  }
 });
 
 export const getSession = cache(async () => {
