@@ -5,6 +5,10 @@ import Forbidden from "@/lib/forbidden"
 import { AppSidebar } from "@/components/app-sidebar"
 import MessageChatComponent from "@/components/message/message-components"
 
+import { AppContent } from '@/components/app-content';
+import { AppShell } from '@/components/app-shell';
+import { AppSidebarHeader } from "@/components/app-sidebar-header"
+
 
 const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
 
@@ -17,17 +21,15 @@ const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
 
     return (
         <>
-
-            <SidebarProvider>
+            <AppShell variant="sidebar">
                 <AppSidebar />
-                <main>
-                    <SidebarTrigger />
+
+                <AppContent variant="sidebar" className="overflow-x-hidden">
+                    <AppSidebarHeader breadcrumbs={[]} />
                     {children}
                     <MessageChatComponent />
-
-                </main>
-
-            </SidebarProvider>
+                </AppContent>
+            </AppShell>
         </>
 
     )

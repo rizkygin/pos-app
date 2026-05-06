@@ -14,10 +14,6 @@ export const getRole = async () => {
         }
     }
 
-    return ({
-        role: 'owner',
-        data: null
-    });
     const customer = db.query.customersTable.findFirst({
         where: eq(customersTable.user_id, session.user.id),
     })

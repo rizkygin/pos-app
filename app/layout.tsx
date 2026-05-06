@@ -14,8 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "POS App",
+  title: "POS Gratis",
   description: "Point of Sale Application",
+
 };
 
 export default function RootLayout({

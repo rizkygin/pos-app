@@ -4,19 +4,10 @@ import { outletsTable, productsTable } from "@/src/db/schema";
 import { eq } from "drizzle-orm";
 import Forbidden from "@/lib/forbidden";
 import { ProductsManager } from "./products-manager";
+import getOutletID from "@/lib/outlet-id"
 
 export const Page = async () => {
-    const session = await getSession();
-
-    if (!session || !session.user) {
-        return <Forbidden />;
-    }
-
-    console.log(session.user.id + "user");
-
-    // Find the outlet belonging to this user
-    const outletRes = await db.select().from(outletsTable).where(eq(outletsTable.user_id, session.user.id)).limit(1);
-    const outlet = outletRes[0];
+    const outlet = await getOutletID();
 
     if (!outlet) {
         return (

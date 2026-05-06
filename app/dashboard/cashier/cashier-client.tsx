@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import Image from "next/image";
 import {
     Search,
@@ -39,7 +39,7 @@ type CashierClientProps = {
     initialProducts: Product[];
 };
 
-let CATEGORIES = [
+const INITIAL_CATEGORIES = [
     { id: "All", label: "All Items", icon: LayoutGrid, color: "text-blue-500", bg: "bg-blue-50", border: "border-blue-200" },
 ];
 
@@ -48,37 +48,39 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
     const [searchQuery, setSearchQuery] = useState("");
     const [cart, setCart] = useState<CartItem[]>([]);
 
+    const [categories, setCatagories] = useState(INITIAL_CATEGORIES);
+
+    const fetchCategories = async () => {
+        try {
+            // GET requests cannot have a body, so we pass outletId as a query parameter
+            const res = await fetch(`/api/get-categories?outletId=${outletId}`);
+            if (!res.ok) {
+                throw new Error("Failed to fetch categories");
+            }
+            const { data } = await res.json();
+
+            const waitAllCategories = data?.map((category: any) => {
+                return {
+                    id: category.category,
+                    label: category.category,
+                    icon: LayoutGrid,
+                    color: "text-red-500",
+                    bg: "bg-red-50",
+                    border: "border-red-200",
+                }
+
+            })
+            setCatagories((prev) => {
+                return [...prev, ...waitAllCategories];
+            });
+        } catch (err) {
+            console.error(err);
+        }
+    };
     // Fetch categories
     useEffect(() => {
-        const fetchCategories = async () => {
-            try {
-                // GET requests cannot have a body, so we pass outletId as a query parameter
-                const res = await fetch(`/api/get-categories?outletId=${outletId}`);
-                if (!res.ok) {
-                    throw new Error("Failed to fetch categories");
-                }
-                const { data } = await res.json();
-
-                console.log(data, "data");
-                data?.map((category: any) => {
-                    CATEGORIES.push({
-                        id: category.category,
-                        label: category.category,
-                        icon: LayoutGrid,
-                        color: "text-red-500",
-                        bg: "bg-red-50",
-                        border: "border-red-200",
-                    });
-                })
-            } catch (err) {
-                console.error(err);
-            }
-        };
         fetchCategories()
-
-
-
-    }, [outletId, CATEGORIES]);
+    }, []);
 
     const filteredProducts = useMemo(() => {
         return initialProducts.filter(product => {
@@ -129,7 +131,7 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
         return total + (price * item.quantity);
     }, 0);
 
-    const handleCheckout = async () => {
+    const handleCheckout = useCallback(async () => {
         if (cart.length === 0) return;
         try {
             const response = await fetch('/api/add-order-detail', {
@@ -158,7 +160,20 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
         } catch (error: any) {
             alert(error.message);
         }
-    };
+    }, [cart, cartTotal, outletId]);
+
+    // Adds a keyboard shortcut (CMD/Ctrl + Enter) for Checkout
+    useEffect(() => {
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault();
+                handleCheckout();
+            }
+        };
+
+        window.addEventListener("keydown", handleKeyDown);
+        return () => window.removeEventListener("keydown", handleKeyDown);
+    }, [handleCheckout]);
 
     return (
         <div className="flex h-full max-h-[calc(100vh-4rem)] overflow-hidden">
@@ -186,7 +201,7 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
 
                     {/* Categories */}
                     <div className="flex gap-3 overflow-x-auto pb-4 scrollbar-hide">
-                        {CATEGORIES.map(cat => (
+                        {categories.map(cat => (
                             <button
                                 key={cat.id}
                                 onClick={() => setSelectedCategory(cat.id)}
@@ -276,11 +291,11 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
                                                 <div className="flex flex-col">
                                                     {isDiscounted && (
                                                         <span className="text-xs text-muted-foreground line-through decoration-rose-500/50">
-                                                            Rp {product.price}
+                                                            {new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(Number(product.price))}
                                                         </span>
                                                     )}
                                                     <span className="font-extrabold text-blue-600 text-lg">
-                                                        Rp {displayPrice}
+                                                        {new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(Number(displayPrice))}
                                                     </span>
                                                 </div>
                                             </div>
@@ -390,7 +405,7 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
                     <div className="space-y-3 mb-6">
                         <div className="flex justify-between text-muted-foreground text-sm font-medium">
                             <span>Subtotal</span>
-                            <span>Rp {cartTotal}</span>
+                            <span>{new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(Number(cartTotal))}</span>
                         </div>
                         <div className="flex justify-between text-muted-foreground text-sm font-medium">
                             <span>Tax (0%)</span>
@@ -399,17 +414,20 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
                         <div className="h-px w-full bg-border my-2" />
                         <div className="flex justify-between items-end">
                             <span className="text-base font-bold">Total</span>
-                            <span className="text-3xl font-black text-blue-600 tracking-tight">Rp {cartTotal}</span>
+                            <span className="text-3xl font-black text-blue-600 tracking-tight">{new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(Number(cartTotal))}</span>
                         </div>
                     </div>
 
                     <Button
                         onClick={handleCheckout}
                         disabled={cart.length === 0}
-                        className="w-full h-14 rounded-2xl text-lg font-bold shadow-xl shadow-blue-600/20 bg-blue-600 hover:bg-blue-700 transition-all hover:-translate-y-1"
+                        className="w-full h-14 rounded-2xl text-lg font-bold shadow-xl shadow-blue-600/20 bg-blue-600 hover:bg-blue-700 transition-all hover:-translate-y-1 relative group"
                     >
                         <CreditCard className="mr-2 h-5 w-5" />
                         Checkout Now
+                        <span className="absolute right-4 text-xs font-medium text-white/50 bg-white/10 px-2 py-1 rounded hidden lg:block group-hover:bg-white/20 transition-colors">
+                            ⌘ ↵
+                        </span>
                     </Button>
                 </div>
             </div>

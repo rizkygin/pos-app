@@ -7,7 +7,6 @@ import { OwnerDashboard } from "@/components/dashboard/owner-dashboard";
 
 const dashboardPage = async () => {
 
-    const session = await getSession();
 
     const role = await getRole();
 

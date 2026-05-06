@@ -21,6 +21,7 @@ export type AddProductInput = {
 
 export async function addProductAction(data: AddProductInput) {
     try {
+
         const id = crypto.randomUUID();
 
         await db.insert(productsTable).values({
@@ -44,6 +45,7 @@ export async function addProductAction(data: AddProductInput) {
 }
 
 export async function uploadImage(formData: FormData) {
+
     try {
         const file = formData.get("image") as File | null;
         if (!file) {
@@ -73,6 +75,24 @@ export async function uploadImage(formData: FormData) {
     } catch (error) {
         console.error("Failed to upload image:", error);
         return { success: false, message: "Failed to process and upload image." };
+    }
+}
+
+export async function removeImage(imageUrl: string) {
+    try {
+        if (!imageUrl.startsWith("/products/")) {
+            return { success: false, message: "Invalid image URL." };
+        }
+        if (imageUrl === "/products/avatar.png") {
+            return { success: false, message: "Default image cannot be removed." };
+        }
+        const filePath = path.join(process.cwd(), "public", imageUrl);
+        await fs.unlink(filePath);
+        revalidatePath("/dashboard/addproducts");
+        return { success: true, message: "Image removed successfully." };
+    } catch (error) {
+        console.error("Failed to remove image:", error);
+        return { success: false, message: "Failed to remove image." };
     }
 }
 

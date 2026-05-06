@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Plus, ArrowLeft, Coffee, Pizza, Cookie, Package, Layers, Tag, DollarSign, Loader2, Image as ImageIcon, Edit, Trash2 } from "lucide-react";
+import { Plus, ArrowLeft, Coffee, Pizza, Cookie, Package, Layers, Tag, DollarSign, Loader2, Image as ImageIcon, Edit, Trash2, User2, Handbag } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { addProductAction, AddProductInput, uploadImage, deleteProductAction, updateProductAction } from "./actions";
+import { addProductAction, AddProductInput, uploadImage, deleteProductAction, updateProductAction, removeImage } from "./actions";
 import Image from "next/image";
 import { DashboardHeader } from "@/components/dashboard-header";
 
@@ -25,9 +25,11 @@ type ProductsManagerProps = {
 };
 
 const CATEGORIES = [
-    { id: "Food", label: "Food", icon: Pizza, color: "text-orange-500", bg: "bg-orange-50", border: "border-orange-100" },
-    { id: "Beverage", label: "Beverage", icon: Coffee, color: "text-amber-600", bg: "bg-amber-50", border: "border-amber-100" },
-    { id: "Snack", label: "Snack", icon: Cookie, color: "text-amber-500", bg: "bg-amber-50", border: "border-amber-100" },
+    { id: "Makan", label: "Ulun Makan", icon: Pizza, color: "text-orange-500", bg: "bg-orange-50", border: "border-orange-100" },
+    { id: "Minum", label: "Ulun Minum", icon: Coffee, color: "text-amber-600", bg: "bg-amber-50", border: "border-amber-100" },
+    { id: "Nyemil", label: "Ulun Nyemil", icon: Cookie, color: "text-amber-500", bg: "bg-amber-50", border: "border-amber-100" },
+    { id: "Jasa", label: "Ulun Pesan Jasa", icon: User2, color: "text-amber-500", bg: "bg-amber-50", border: "border-amber-100" },
+    { id: "Barang", label: "Ulun Jual Barang", icon: Handbag, color: "text-amber-500", bg: "bg-amber-50", border: "border-amber-100" },
     { id: "Other", label: "Other", icon: Package, color: "text-blue-500", bg: "bg-blue-50", border: "border-blue-100" },
 ];
 
@@ -123,7 +125,7 @@ export const ProductsManager = ({ outletId, initialProducts }: ProductsManagerPr
     };
 
     const handleDelete = async (id: string) => {
-        if (!window.confirm("Are you sure you want to delete this product?")) return;
+        if (!window.confirm("Yakin pian handak hapus produk ini?")) return;
         setIsSubmitting(true);
         const result = await deleteProductAction(id);
         setIsSubmitting(false);
@@ -134,17 +136,39 @@ export const ProductsManager = ({ outletId, initialProducts }: ProductsManagerPr
 
     //handle Image Upload
 
+    const handleRemoveImage = async () => {
+        //remove image from public folder
+        if (imageUrl === "/products/avatar.png" || imageUrl === "/avatar.png" || imageUrl === "") {
+            setImageUrl("");
+            return;
+        }
+        const result = await removeImage(imageUrl);
+        if (result.success) {
+            setImageUrl("");
+        } else {
+            alert(result.message);
+        }
+    }
+
     const ImageInputRef = useRef<HTMLInputElement>(null);
 
     const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (file) {
+            if (file.size >= 1000000) {
+                alert("Image size must be less than 1MB.");
+                setImageUrl("");
+                return;
+            }
             const formData = new FormData();
             formData.append("image", file);
 
-            const result = await uploadImage(formData);
+            const result = await uploadImage(formData)
             if (result.success && result.imageUrl) {
                 setImageUrl(result.imageUrl);
+            }
+            if (!result.success) {
+                alert(result.message);
             }
         }
     }
@@ -263,12 +287,12 @@ export const ProductsManager = ({ outletId, initialProducts }: ProductsManagerPr
                         className="mb-6 hover:bg-muted/50 text-muted-foreground hover:text-foreground -ml-4 rounded-xl"
                     >
                         <ArrowLeft className="mr-2 h-4 w-4" />
-                        Back to Products
+                        Kembali Ke Etalase
                     </Button>
 
                     <div className="mb-8 text-center">
-                        <h2 className="text-3xl font-extrabold tracking-tight text-foreground">Choose Category</h2>
-                        <p className="text-muted-foreground mt-2 text-lg">What kind of product are you adding?</p>
+                        <h2 className="text-3xl font-extrabold tracking-tight text-foreground">Pilih Layanan Pian</h2>
+                        <p className="text-muted-foreground mt-2 text-lg">Apa jenis produk yang pian tambahkan?</p>
                     </div>
 
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6">
@@ -387,6 +411,9 @@ export const ProductsManager = ({ outletId, initialProducts }: ProductsManagerPr
                                     <ImageIcon className="h-4 w-4 text-muted-foreground" />
                                     Product Image
                                 </label>
+                                <span className="text-xs text-muted-foreground">
+                                    Ukuran File Maksimal 1 MB
+                                </span>
                                 {imageUrl ? (
                                     console.log(imageUrl),
                                     <div className="relative w-full h-48 rounded-xl overflow-hidden border">
@@ -396,7 +423,7 @@ export const ProductsManager = ({ outletId, initialProducts }: ProductsManagerPr
                                             variant="destructive"
                                             size="sm"
                                             className="absolute top-2 right-2 rounded-xl shadow-md"
-                                            onClick={() => setImageUrl("")}
+                                            onClick={handleRemoveImage}
                                         >
                                             Remove
                                         </Button>
