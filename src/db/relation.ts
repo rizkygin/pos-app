@@ -7,7 +7,10 @@ export const usersRelations = relations(schema.usersTable, ({ one, many }) => ({
         references: [schema.customersTable.user_id]
     }),
     hasOutlets: many(schema.outletsTable),
-    hasRoleCourier: many(schema.couriersTable),
+    hasRoleCourier: one(schema.couriersTable, {
+        fields: [schema.usersTable.id],
+        references: [schema.couriersTable.user_id]
+    }),
     sessions: many(schema.session),
     accounts: many(schema.account),
     hasGivenRatings: many(schema.ratingsTable, { relationName: "reviewer" }),
@@ -20,6 +23,7 @@ export const outletsRelations = relations(schema.outletsTable, ({ one, many }) =
         references: [schema.usersTable.id]
     }),
     products: many(schema.productsTable),
+    cashFlows: many(schema.cashFlows),
 }));
 
 export const customersRelations = relations(schema.customersTable, ({ one, many }) => ({
@@ -84,6 +88,29 @@ export const ordersRelations = relations(schema.ordersTable, ({ one, many }) => 
         references: [schema.couriersTable.id]
     }),
     hasOrderDetails: many(schema.orderDetailsTable)
+}));
+
+export const cashInCategoryRelation = relations(schema.cashInCategoryTable, ({ many }) => ({
+    hasCashInDetails: many(schema.cashInDetailTable),
+}));
+
+export const cashOutCategoryRelation = relations(schema.cashOutCategoryTable, ({ many }) => ({
+    hasCashOutDetails: many(schema.cashOutDetailTable),
+}));
+
+export const cashFlowsRelation = relations(schema.cashFlows, ({ one }) => ({
+    hasOutlet: one(schema.outletsTable, {
+        fields: [schema.cashFlows.outlet_id],
+        references: [schema.outletsTable.id]
+    }),
+    hasCashInCategory: one(schema.cashInCategoryTable, {
+        fields: [schema.cashFlows.cash_in_category_id],
+        references: [schema.cashInCategoryTable.id]
+    }),
+    hasCashOutCategory: one(schema.cashOutCategoryTable, {
+        fields: [schema.cashFlows.cash_out_category_id],
+        references: [schema.cashOutCategoryTable.id]
+    }),
 }));
 
 export const sessionRelations = relations(schema.session, ({ one }) => ({

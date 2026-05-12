@@ -1,7 +1,7 @@
 "use client"
 
 import { ColumnDef } from "@tanstack/react-table"
-import Badge from "@/components/ui/badge"
+import { Badge } from "@/components/ui/badge"
 
 import { z } from "zod"
 
@@ -17,7 +17,7 @@ export const orderDetailSchema = z.object({
     status: z.enum(["addToChart", "checkout"]).nullable().optional(),
 })
 import { Button } from "@/components/ui/button"
-import { ArrowUpDown, ArrowUp } from "lucide-react"
+import { ArrowUpDown, ArrowUp, BadgeDollarSign, CircleEllipsis } from "lucide-react"
 
 
 
@@ -109,7 +109,12 @@ export const columns: ColumnDef<OrderDetail>[] = [
         header: "Status",
         cell: ({ row }) => {
             const status = row.getValue('status') as string
-            return <Badge icon={status} />
+            if (status === 'checkout') {
+                return <div className='w-fit p-1 px-2 bg-green-50 text-green-700 rounded-md flex items-center gap-1 text-xs font-medium border border-green-200'><BadgeDollarSign className='w-3.5 h-3.5 text-green-500' />Terbayar</div>
+            } else if (status === 'addToChart') {
+                return <div className='w-fit p-1 px-2 bg-yellow-50 text-yellow-700 rounded-md flex items-center gap-1 text-xs font-medium border border-yellow-200'><CircleEllipsis className='w-3.5 h-3.5 text-yellow-500' />Pending</div>
+            }
+            return <Badge variant="outline">{status}</Badge>
         }
     }
 ]

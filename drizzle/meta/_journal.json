@@ -5,8 +5,15 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1777429004642,
-      "tag": "0000_yellow_talisman",
+      "when": 1778210581285,
+      "tag": "0000_typical_spectrum",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1778470969967,
+      "tag": "0001_handy_pandemic",
       "breakpoints": true
     }
   ]

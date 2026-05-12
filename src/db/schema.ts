@@ -5,6 +5,7 @@ import { timestamps } from "./columns.helper";
 export const VEHICLE_TYPE = pgEnum('vechile_type', ['car', 'motorcycle']);
 export const STATUS = pgEnum('state', ['addToChart', 'checkout']);
 export const RECIEPENT = pgEnum('receipt', ['customer', 'courier', 'outlet']);
+export const CASHFLOWS_TRANSACTION_TYPE = pgEnum('cashflows_transaction_type', ['transfer', 'cash']);
 
 export const usersTable = pgTable("users", {
     id: text('id').primaryKey(),
@@ -78,7 +79,7 @@ export const orderDetailsTable = pgTable('orderDetails', {
     note_product: varchar("note_product", { length: 255 }).notNull(),
     extra: json("extra"),
     summary_price: varchar("summary_price", { length: 10 }).notNull(),
-    created_at: timestamp("created_at").defaultNow().notNull(),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     status: STATUS("status"),
 })
 
@@ -93,14 +94,48 @@ export const ratingsTable = pgTable('ratings', {
 })
 
 
+export const cashInCategoryTable = pgTable('cashInCategory', {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    category: varchar("category", { length: 50 }),
+})
+
+export const cashOutCategoryTable = pgTable('cashOutCategory', {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    category: varchar("category", { length: 50 }),
+})
+
+export const cashInDetailTable = pgTable('cashInDetailTable', {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    category_id: integer('category_id').notNull().references(() => cashInCategoryTable.id),
+    money_amount: varchar("money_amount", { length: 15 }).notNull(),
+    type: CASHFLOWS_TRANSACTION_TYPE("type").$default(() => 'cash').notNull(),
+    created_at: timestamp('created_at').defaultNow().notNull(),
+
+})
+export const cashOutDetailTable = pgTable('cashOutDetailTable', {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    category_id: integer('category_id').notNull().references(() => cashOutCategoryTable.id),
+    money_amount: varchar("money_amount", { length: 15 }).notNull(),
+    type: CASHFLOWS_TRANSACTION_TYPE("type").$default(() => 'cash').notNull(),
+    created_at: timestamp('created_at').defaultNow().notNull()
+})
+
+export const cashFlows = pgTable('cashFlows', {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    outlet_id: integer('outlet_id').notNull().references(() => outletsTable.id),
+    cash_opname: varchar("cash_opname", { length: 15 }).notNull().$default(() => 'cash'),
+    cash_in_category_id: integer('cash_in_category_id').references(() => cashInDetailTable.id),
+    cash_out_category_id: integer('cash_out_category_id').references(() => cashOutDetailTable.id),
+})
+
 export const session = pgTable(
     "session",
     {
         id: text("id").primaryKey(),
-        expiresAt: timestamp("expires_at").notNull(),
+        expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
         token: text("token").notNull().unique(),
-        createdAt: timestamp("created_at").defaultNow().notNull(),
-        updatedAt: timestamp("updated_at")
+        createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp("updated_at", { withTimezone: true })
             .$onUpdate(() => new Date())
             .notNull(),
         ipAddress: text("ip_address"),
@@ -123,12 +158,12 @@ export const account = pgTable(
         accessToken: text("access_token"),
         refreshToken: text("refresh_token"),
         idToken: text("id_token"),
-        accessTokenExpiresAt: timestamp("access_token_expires_at"),
-        refreshTokenExpiresAt: timestamp("refresh_token_expires_at"),
+        accessTokenExpiresAt: timestamp("access_token_expires_at", { withTimezone: true }),
+        refreshTokenExpiresAt: timestamp("refresh_token_expires_at", { withTimezone: true }),
         scope: text("scope"),
         password: text("password"),
-        createdAt: timestamp("created_at").defaultNow().notNull(),
-        updatedAt: timestamp("updated_at")
+        createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp("updated_at", { withTimezone: true })
             .$onUpdate(() => new Date())
             .notNull(),
     },
@@ -140,9 +175,9 @@ export const verification = pgTable(
         id: text("id").primaryKey(),
         identifier: text("identifier").notNull(),
         value: text("value").notNull(),
-        expiresAt: timestamp("expires_at").notNull(),
-        createdAt: timestamp("created_at").defaultNow().notNull(),
-        updatedAt: timestamp("updated_at")
+        expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+        createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp("updated_at", { withTimezone: true })
             .defaultNow()
             .$onUpdate(() => new Date())
             .notNull(),

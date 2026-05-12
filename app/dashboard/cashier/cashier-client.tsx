@@ -40,7 +40,7 @@ type CashierClientProps = {
 };
 
 const INITIAL_CATEGORIES = [
-    { id: "All", label: "All Items", icon: LayoutGrid, color: "text-blue-500", bg: "bg-blue-50", border: "border-blue-200" },
+    { id: "All", label: "All Items", icon: LayoutGrid, color: "text-blue-500 m-2", bg: "bg-blue-50", border: "border-blue-200" },
 ];
 
 export const CashierClient = ({ outletId, initialProducts }: CashierClientProps) => {
@@ -60,13 +60,14 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
             const { data } = await res.json();
 
             const waitAllCategories = data?.map((category: any) => {
+
                 return {
                     id: category.category,
                     label: category.category,
                     icon: LayoutGrid,
-                    color: "text-red-500",
-                    bg: "bg-red-50",
-                    border: "border-red-200",
+                    color: "text-black-500 m-2",
+                    bg: "bg-green-50",
+                    border: "border-green-200",
                 }
 
             })

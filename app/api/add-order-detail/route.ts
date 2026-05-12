@@ -26,7 +26,7 @@ export async function POST(req: Request) {
                 hasRoleCustomer: true
             }
         });
-        const courier_offline = await db.query.usersTable.findMany({
+        const courier_offline = await db.query.usersTable.findFirst({
             where: eq(usersTable.email, EMAIL_COURIER),
             with: {
                 hasRoleCourier: true
@@ -34,7 +34,7 @@ export async function POST(req: Request) {
         })
 
         const customer = customer_offline?.hasRoleCustomer?.id;
-        const courier = courier_offline?.[0].hasRoleCourier?.[0].id;
+        const courier = courier_offline?.hasRoleCourier?.id;
 
         if (body.cart.length > 0) {
             const new_order_id = crypto.randomUUID();

@@ -13,7 +13,7 @@ import {
     SidebarMenuAction,
 } from "@/components/ui/sidebar"
 import { Fan } from "lucide-react"
-import { IdCard, Building2, LayoutGrid, SunDim, LetterText, LayoutDashboard } from 'lucide-react';
+import { IdCard, Building2, LayoutGrid, SunDim, LetterText, LayoutDashboard, Book } from 'lucide-react';
 import { useRouter } from "next/navigation";
 
 
@@ -37,6 +37,7 @@ const projects = [
     { name: "Product", url: "/dashboard/addproducts", icon: LayoutGrid, color: "red" },
     { name: "Laporan", url: "/dashboard/reports", icon: LetterText, color: "yellow" },
     { name: "Cashier", url: "/dashboard/cashier", icon: Building2, color: "green" },
+    { name: "Buku Kas", url: "/dashboard/cashflow", icon: Book, color: "purple" },
     { name: "User", url: "/dashboard/user", icon: IdCard, color: "green" },
     { name: "Setting", url: "/dashboard/setting", icon: SunDim, color: "purple" },
 ]

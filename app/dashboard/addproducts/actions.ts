@@ -57,7 +57,7 @@ export async function uploadImage(formData: FormData) {
 
         // Generate a unique filename
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        const filename = `product-${uniqueSuffix}.webp`;
+        const filename = `product-{uniqueSuffix}.webp`;
         const uploadDir = path.join(process.cwd(), "public", "products");
 
         // Resize and save image
