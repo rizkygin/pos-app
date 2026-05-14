@@ -69,45 +69,13 @@ export default function CashflowPage() {
     };
 
     const [selectedDate, setSelectedDate] = useState<Date>(new Date());
-    const [posTransaction, setPosTransaction] = useState<Transaction | null>(null);
-    const [monthlyPosSum, setMonthlyPosSum] = useState<number>(0);
 
-    useEffect(() => {
-        const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-        const dateParam = formatDateInput(selectedDate);
-        fetch(`/api/get-pos-summary?date=${dateParam}&timezone=${encodeURIComponent(timezone)}`)
-            .then(res => res.json())
-            .then(json => {
-                const sum = Number(json?.data?.sum ?? 0);
-                if (sum > 0) {
-                    setPosTransaction({
-                        id: `pos-sales-${dateParam}`,
-                        type: "IN",
-                        category: CATEGORY_IN[0],
-                        amount: sum,
-                        date: dateParam,
-                        note: "Daily POS Sales"
-                    });
-                } else {
-                    setPosTransaction(null);
-                }
-            })
-            .catch(() => setPosTransaction(null));
-    }, [selectedDate]);
+
 
     useEffect(() => {
         const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
         const month = formatDateInput(selectedDate).slice(0, 7);
-        fetch(`/api/get-pos-summary?month=${month}&timezone=${encodeURIComponent(timezone)}`)
-            .then(res => res.json())
-            .then(json => setMonthlyPosSum(Number(json?.data?.sum ?? 0)))
-            .catch(() => setMonthlyPosSum(0));
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [selectedDate.getFullYear(), selectedDate.getMonth()]);
 
-    useEffect(() => {
-        const month = formatDateInput(selectedDate).slice(0, 7);
-        const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
         setIsLoading(true);
         fetch(`/api/cashflow?month=${month}&timezone=${encodeURIComponent(timezone)}`)
             .then(r => r.json())
@@ -136,7 +104,7 @@ export default function CashflowPage() {
         return transactions.filter(t => isSameDay(new Date(t.date), selectedDate));
     }, [transactions, selectedDate]);
 
-    const dailyIn = dailyTransactions.filter(t => t.type === "IN").reduce((acc, t) => acc + t.amount, 0) + (posTransaction ? posTransaction.amount : 0);
+    const dailyIn = dailyTransactions.filter(t => t.type === "IN" && t.category).reduce((acc, t) => acc + t.amount, 0);
     const dailyOut = dailyTransactions.filter(t => t.type === "OUT").reduce((acc, t) => acc + t.amount, 0);
     const dailyNet = dailyIn - dailyOut;
 
@@ -145,17 +113,24 @@ export default function CashflowPage() {
         return transactions.filter(t => isSameMonth(new Date(t.date), selectedDate));
     }, [transactions, selectedDate]);
 
-    const monthlyIn = monthlyTransactions.filter(t => t.type === "IN").reduce((acc, t) => acc + t.amount, 0) + monthlyPosSum;
+    const monthlyIn = monthlyTransactions.filter(t => t.type === "IN").reduce((acc, t) => acc + t.amount, 0);
     const monthlyOut = monthlyTransactions.filter(t => t.type === "OUT").reduce((acc, t) => acc + t.amount, 0);
     const monthlyNet = monthlyIn - monthlyOut;
 
     const displayList = useMemo(() => {
-        if (!posTransaction) return dailyTransactions;
-        const merged = dailyTransactions.filter(t => t.type === "IN" && t.category === posTransaction.category);
-        const rest = dailyTransactions.filter(t => !(t.type === "IN" && t.category === posTransaction.category));
-        const mergedAmount = merged.reduce((acc, t) => acc + t.amount, posTransaction.amount);
-        return [{ ...posTransaction, amount: mergedAmount }, ...rest];
-    }, [posTransaction, dailyTransactions]);
+        const posCashIn = dailyTransactions.find(t => t.category === CATEGORY_IN[0]);
+        const rest = dailyTransactions
+            .filter(t => t.category !== CATEGORY_IN[0])
+            .sort((a, b) => {
+                const aKey = `${a.date} ${a.time ?? ""}`;
+                const bKey = `${b.date} ${b.time ?? ""}`;
+                return aKey.localeCompare(bKey);
+            });
+        if (posCashIn) {
+            return [{ ...posCashIn, note: "Dari Sistem Cashier" }, ...rest];
+        }
+        return rest;
+    }, [transactions, dailyTransactions])
 
 
     return (
@@ -271,13 +246,16 @@ export default function CashflowPage() {
                                 <div className="relative">
                                     <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm font-medium text-muted-foreground">Rp</span>
                                     <Input
-                                        type="number"
+                                        type="text"
+                                        inputMode="numeric"
                                         placeholder="0"
                                         className="pl-9"
-                                        value={amount}
-                                        onChange={(e) => setAmount(e.target.value)}
+                                        value={amount ? new Intl.NumberFormat("id-ID").format(Number(amount)) : ""}
+                                        onChange={(e) => {
+                                            const raw = e.target.value.replace(/\D/g, "");
+                                            setAmount(raw);
+                                        }}
                                         required
-                                        min="1"
                                     />
                                 </div>
                             </div>
@@ -342,6 +320,8 @@ export default function CashflowPage() {
                                         <TableRow>
                                             <TableHead>Type</TableHead>
                                             <TableHead>Category</TableHead>
+                                            <TableHead>Date</TableHead>
+                                            <TableHead>Time</TableHead>
                                             <TableHead className="text-right">Amount</TableHead>
                                             <TableHead className="text-right">Balance</TableHead>
                                             <TableHead />
@@ -349,7 +329,6 @@ export default function CashflowPage() {
                                     </TableHeader>
                                     <TableBody>
                                         {displayList
-                                            .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
                                             .reduce<{ t: Transaction; balance: number }[]>((acc, t) => {
                                                 const prev = acc.length > 0 ? acc[acc.length - 1].balance : 0;
                                                 const amt = isFinite(Number(t.amount)) ? Number(t.amount) : 0;
@@ -365,6 +344,12 @@ export default function CashflowPage() {
                                                     <TableCell>
                                                         <div className="font-medium text-sm">{t.category}</div>
                                                         {t.note && <div className="text-xs text-muted-foreground">{t.note}</div>}
+                                                    </TableCell>
+                                                    <TableCell className="text-sm text-muted-foreground">
+                                                        {t.date.split("-").reverse().join("/").replace(/(\d+)\/(\d+)\/(\d{4})/, (_, d, m, y) => `${d}/${m}/${y.slice(2)}`)}
+                                                    </TableCell>
+                                                    <TableCell className="text-sm text-muted-foreground">
+                                                        {t.time ?? "—"}
                                                     </TableCell>
                                                     <TableCell className={`text-right font-bold ${t.type === "IN" ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>
                                                         {t.type === "IN" ? "+" : "-"}{formatCurrency(t.amount)}

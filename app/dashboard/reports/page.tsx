@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input"
 import { columns } from "./columns"
 import { DataTable } from "./data-table"
 import GraphicOrder from "./graphic-order"
+import HourlyOrderChart from "./hourly-order-chart"
 import { useEffect, useState } from "react"
 export const description = "A simple area chart"
 
@@ -52,27 +53,24 @@ export function Reports() {
 
 
     return (
-        <div className="w-full h-full p-5">
-            <div className="flex w-full h-full">
+        <div className="w-full h-full p-5 space-y-5">
+            <HourlyOrderChart />
+            <div className="flex flex-col lg:flex-row gap-6 w-full">
                 <GraphicOrder />
-                <div className="mx-5 w-full h-full">
-                    <label className="text-xl font-semibold">Produk Terjual</label>
-                    {/* //search products */}
+                <div className="flex-1 min-w-0">
+                    <h2 className="text-xl font-semibold">Produk Terjual</h2>
                     <div className="flex items-center py-4">
                         <Input
                             placeholder="Cari produk..."
                             value={search}
-                            onChange={(e) =>
-                                setSearch(e.target.value)
-                            }
+                            onChange={(e) => setSearch(e.target.value)}
                             className="max-w-sm"
                         />
                     </div>
                     <DataTable columns={columns} data={data} page={page} limit={limit} count={count} setPage={setPage} setLimit={setLimit} />
-                    {/* //last order table using shadCN table */}
-
                 </div>
             </div>
+
 
         </div>
 

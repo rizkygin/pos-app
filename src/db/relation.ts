@@ -103,13 +103,13 @@ export const cashFlowsRelation = relations(schema.cashFlows, ({ one }) => ({
         fields: [schema.cashFlows.outlet_id],
         references: [schema.outletsTable.id]
     }),
-    hasCashInCategory: one(schema.cashInCategoryTable, {
-        fields: [schema.cashFlows.cash_in_category_id],
-        references: [schema.cashInCategoryTable.id]
+    hasCashInDetail: one(schema.cashInDetailTable, {
+        fields: [schema.cashFlows.cash_in_detail_id],
+        references: [schema.cashInDetailTable.id]
     }),
-    hasCashOutCategory: one(schema.cashOutCategoryTable, {
-        fields: [schema.cashFlows.cash_out_category_id],
-        references: [schema.cashOutCategoryTable.id]
+    hasCashOutDetail: one(schema.cashOutDetailTable, {
+        fields: [schema.cashFlows.cash_out_detail_id],
+        references: [schema.cashOutDetailTable.id]
     }),
 }));
 

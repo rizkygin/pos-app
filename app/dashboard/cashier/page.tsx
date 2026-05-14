@@ -32,7 +32,14 @@ export default async function CashierPage() {
 
     return (
         <main className="flex flex-col min-h-[calc(100vh-4rem)] bg-muted/30">
-            <CashierClient outletId={outlet.id} initialProducts={products} />
+            <CashierClient
+                outletId={outlet.id}
+                outletName={outlet.name}
+                outletAddress={outlet.address}
+                outletPhone={outlet.phone}
+                cashierName={session.user.name ?? "Cashier"}
+                initialProducts={products}
+            />
         </main>
     );
 }

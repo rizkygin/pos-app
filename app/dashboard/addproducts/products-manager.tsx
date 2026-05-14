@@ -185,10 +185,10 @@ export const ProductsManager = ({ outletId, initialProducts }: ProductsManagerPr
         <div className="space-y-6 mt-4">
             {view === "list" && (
                 <>
-                    <div className="flex items-center justify-between mb-8">
+                    <div className="flex items-center justify-between mb-4 md:mb-8">
                         <div>
-                            <h2 className="text-3xl font-extrabold tracking-tight text-foreground">Your Products</h2>
-                            <p className="text-muted-foreground mt-1">Manage inventory across your outlet.</p>
+                            <h2 className="text-xl md:text-3xl font-extrabold tracking-tight text-foreground">Your Products</h2>
+                            <p className="text-muted-foreground mt-1 text-sm md:text-base">Manage inventory across your outlet.</p>
                         </div>
                         <Button
                             onClick={() => {
@@ -224,50 +224,50 @@ export const ProductsManager = ({ outletId, initialProducts }: ProductsManagerPr
                             </Button>
                         </div>
                     ) : (
-                        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                        <div className="grid grid-cols-3 gap-3 lg:grid-cols-4 xl:grid-cols-5 md:gap-6">
                             {initialProducts.map((product) => (
-                                <div key={product.id} className="group relative overflow-hidden rounded-2xl border bg-background p-5 transition-all hover:shadow-xl hover:border-blue-600/30 flex flex-col h-full">
-                                    <div className="absolute top-4 right-4 z-10 flex gap-2">
-                                        <button
-                                            onClick={() => handleEdit(product)}
-                                            className="p-1.5 rounded-lg bg-background/80 backdrop-blur shadow-sm border text-muted-foreground hover:text-blue-600 hover:border-blue-200 transition-colors opacity-0 group-hover:opacity-100"
-                                        >
-                                            <Edit className="h-4 w-4" />
-                                        </button>
-                                        <button
-                                            onClick={() => handleDelete(product.id)}
-                                            disabled={isSubmitting}
-                                            className="p-1.5 rounded-lg bg-background/80 backdrop-blur shadow-sm border text-muted-foreground hover:text-rose-600 hover:border-rose-200 transition-colors opacity-0 group-hover:opacity-100 disabled:opacity-50"
-                                        >
-                                            <Trash2 className="h-4 w-4" />
-                                        </button>
-                                    </div>
-                                    <div className="absolute top-4 left-4 z-10">
-                                        <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider shadow-sm backdrop-blur bg-background/80 ${product.isAvailable ? 'text-emerald-700' : 'text-rose-700'}`}>
-                                            {product.isAvailable ? 'In Stock' : 'Out of Stock'}
+                                <div key={product.id} className="group relative overflow-hidden rounded-xl md:rounded-2xl border bg-background p-2 md:p-5 transition-all hover:shadow-xl hover:border-blue-600/30 flex flex-col h-full">
+                                    <div className="flex items-center justify-between mb-1.5 md:mb-2">
+                                        <span className={`px-1.5 py-0.5 rounded-full text-[8px] md:text-[10px] font-bold uppercase tracking-wider ${product.isAvailable ? 'text-emerald-700 bg-emerald-50' : 'text-rose-700 bg-rose-50'}`}>
+                                            {product.isAvailable ? 'In Stock' : 'Out'}
                                         </span>
+                                        <div className="flex gap-1">
+                                            <button
+                                                onClick={() => handleEdit(product)}
+                                                className="p-1 md:p-1.5 rounded-lg bg-muted/60 text-muted-foreground hover:text-blue-600 hover:bg-blue-50 transition-colors md:opacity-0 md:group-hover:opacity-100"
+                                            >
+                                                <Edit className="h-3 w-3 md:h-4 md:w-4" />
+                                            </button>
+                                            <button
+                                                onClick={() => handleDelete(product.id)}
+                                                disabled={isSubmitting}
+                                                className="p-1 md:p-1.5 rounded-lg bg-muted/60 text-muted-foreground hover:text-rose-600 hover:bg-rose-50 transition-colors md:opacity-0 md:group-hover:opacity-100 disabled:opacity-50"
+                                            >
+                                                <Trash2 className="h-3 w-3 md:h-4 md:w-4" />
+                                            </button>
+                                        </div>
                                     </div>
-                                    <div className="relative aspect-square rounded-xl bg-muted/30 mb-4 flex items-center justify-center overflow-hidden border">
+                                    <div className="relative aspect-[4/3] md:aspect-square rounded-lg md:rounded-xl bg-muted/30 mb-2 md:mb-4 flex items-center justify-center overflow-hidden border">
                                         {product.image && product.image !== "avatar.png" ? (
                                             <Image src={product.image} fill className="object-cover group-hover:scale-110 transition-transform duration-500" alt={product.product_name} />
                                         ) : (
-                                            <Package className="h-12 w-12 text-muted-foreground/50 group-hover:scale-110 transition-transform duration-500" />
+                                            <Package className="h-6 w-6 md:h-12 md:w-12 text-muted-foreground/50 group-hover:scale-110 transition-transform duration-500" />
                                         )}
                                     </div>
                                     <div className="flex-1 flex flex-col">
-                                        <div className="flex items-center gap-2 mb-1">
-                                            <span className="text-[10px] font-bold uppercase tracking-wider text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">
-                                                {product.category}
-                                            </span>
-                                        </div>
-                                        <h3 className="font-bold text-lg leading-tight line-clamp-2 mb-2 group-hover:text-blue-600 transition-colors">
+                                        <span className="text-[8px] md:text-[10px] font-bold uppercase tracking-wider text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-full w-fit mb-1">
+                                            {product.category}
+                                        </span>
+                                        <h3 className="font-bold text-[11px] md:text-lg leading-tight line-clamp-2 mb-1 md:mb-2 group-hover:text-blue-600 transition-colors">
                                             {product.product_name}
                                         </h3>
-                                        <div className="mt-auto pt-4 flex items-end gap-2 border-t border-muted/50">
-                                            <span className="text-xl font-extrabold tracking-tight">Rp {product.price}</span>
+                                        <div className="mt-auto pt-2 md:pt-4 flex flex-col gap-0.5 border-t border-muted/50 overflow-hidden">
+                                            <span className="text-xs md:text-xl font-extrabold tracking-tight truncate">
+                                                {new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(Number(product.price_mark_down && product.price_mark_down !== "0" ? product.price_mark_down : product.price))}
+                                            </span>
                                             {product.price_mark_down && product.price_mark_down !== "0" && (
-                                                <span className="text-sm font-medium text-muted-foreground line-through mb-0.5">
-                                                    Rp {product.price_mark_down}
+                                                <span className="text-[10px] md:text-sm font-medium text-muted-foreground line-through truncate">
+                                                    {new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(Number(product.price))}
                                                 </span>
                                             )}
                                         </div>
@@ -290,22 +290,22 @@ export const ProductsManager = ({ outletId, initialProducts }: ProductsManagerPr
                         Kembali Ke Etalase
                     </Button>
 
-                    <div className="mb-8 text-center">
-                        <h2 className="text-3xl font-extrabold tracking-tight text-foreground">Pilih Layanan Pian</h2>
-                        <p className="text-muted-foreground mt-2 text-lg">Apa jenis produk yang pian tambahkan?</p>
+                    <div className="mb-4 md:mb-8 text-center">
+                        <h2 className="text-xl md:text-3xl font-extrabold tracking-tight text-foreground">Pilih Layanan Pian</h2>
+                        <p className="text-muted-foreground mt-2 text-sm md:text-lg">Apa jenis produk yang pian tambahkan?</p>
                     </div>
 
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6">
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-6">
                         {CATEGORIES.map((cat) => (
                             <button
                                 key={cat.id}
                                 onClick={() => handleCategorySelect(cat.id)}
-                                className={`flex flex-col items-center justify-center p-8 rounded-3xl border-2 transition-all hover:-translate-y-1 hover:shadow-xl bg-background ${cat.border} hover:border-blue-500 group relative overflow-hidden`}
+                                className={`flex flex-col items-center justify-center p-4 md:p-8 rounded-2xl md:rounded-3xl border-2 transition-all hover:-translate-y-1 hover:shadow-xl bg-background ${cat.border} hover:border-blue-500 group relative overflow-hidden`}
                             >
-                                <div className={`p-4 rounded-2xl ${cat.bg} ${cat.color} mb-4 group-hover:scale-110 transition-transform duration-300 relative z-10 shadow-sm`}>
-                                    <cat.icon className="h-10 w-10" />
+                                <div className={`p-3 md:p-4 rounded-xl md:rounded-2xl ${cat.bg} ${cat.color} mb-2 md:mb-4 group-hover:scale-110 transition-transform duration-300 relative z-10 shadow-sm`}>
+                                    <cat.icon className="h-6 w-6 md:h-10 md:w-10" />
                                 </div>
-                                <span className="font-bold text-lg text-foreground relative z-10 group-hover:text-blue-600 transition-colors">{cat.label}</span>
+                                <span className="font-bold text-sm md:text-lg text-foreground relative z-10 group-hover:text-blue-600 transition-colors text-center">{cat.label}</span>
                                 <div className="absolute inset-0 bg-gradient-to-b from-transparent to-muted/10 opacity-0 group-hover:opacity-100 transition-opacity" />
                             </button>
                         ))}
@@ -324,7 +324,7 @@ export const ProductsManager = ({ outletId, initialProducts }: ProductsManagerPr
                         Back to Categories
                     </Button>
 
-                    <div className="bg-background border rounded-3xl p-8 shadow-sm relative overflow-hidden">
+                    <div className="bg-background border rounded-2xl md:rounded-3xl p-4 md:p-8 shadow-sm relative overflow-hidden">
                         <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-blue-500 to-purple-500" />
 
                         <div className="flex items-center gap-4 mb-8">
@@ -353,7 +353,7 @@ export const ProductsManager = ({ outletId, initialProducts }: ProductsManagerPr
                                 />
                             </div>
 
-                            <div className="grid grid-cols-2 gap-6">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:gap-6">
                                 <div className="space-y-2">
                                     <label className="text-sm font-bold flex items-center gap-2">
                                         <DollarSign className="h-4 w-4 text-muted-foreground" />

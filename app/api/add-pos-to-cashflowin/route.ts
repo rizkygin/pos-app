@@ -1,29 +1,26 @@
-import getOutletID from "@/lib/outlet-id";
-import { NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
-import { headers } from "next/headers";
-import { db } from "@/src/db";
-import { cashInDetailTable } from "@/src/db/schema";
+import { NextResponse } from 'next/server';
+import { auth } from '@/lib/auth';
+import { headers } from 'next/headers';
+import { addPosToCashflowin } from '@/lib/cashflow';
 
-export const POST = (req: Request) =>
-    Promise.all([
-        headers().then(h => auth.api.getSession({ headers: h })),
-        getOutletID(),
-        req.json(),
-    ])
-        .then(([session, outlet, body]) => {
-            if (!session || !outlet) {
-                return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-            }
+export const POST = async (req: Request) => {
+  try {
+    const [session, body] = await Promise.all([
+      headers().then((h) => auth.api.getSession({ headers: h })),
+      req.json(),
+    ]);
 
-            db.insert(cashInDetailTable).values({
-                money_amount: String(body.total),
-                category_id: 1,
-                type: "cash",
-            })
-                .then(r => console.log("[cashIn]", r))
-                .catch(e => console.error("[cashIn error]", e));
+    if (!session) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
 
-            return NextResponse.json({ success: true });
-        })
-        .catch((e: any) => NextResponse.json({ message: e.message, error: "Internal Server Error" }, { status: 500 }));
+    await addPosToCashflowin(body.total);
+
+    return NextResponse.json({ success: true });
+  } catch (e: any) {
+    return NextResponse.json(
+      { message: e.message, error: 'Internal Server Error' },
+      { status: 500 },
+    );
+  }
+};

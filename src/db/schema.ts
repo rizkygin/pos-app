@@ -1,4 +1,4 @@
-import { text, boolean, integer, pgTable, varchar, pgEnum, json, timestamp } from "drizzle-orm/pg-core";
+import { text, boolean, integer, pgTable, varchar, pgEnum, json, timestamp, index } from "drizzle-orm/pg-core";
 import { timestamps } from "./columns.helper";
 
 
@@ -81,7 +81,9 @@ export const orderDetailsTable = pgTable('orderDetails', {
     summary_price: varchar("summary_price", { length: 10 }).notNull(),
     created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     status: STATUS("status"),
-})
+}, (table) => [
+    index("order_details_created_at_idx").on(table.created_at),
+])
 
 export const ratingsTable = pgTable('ratings', {
     id: text('id').primaryKey(),
@@ -124,8 +126,8 @@ export const cashFlows = pgTable('cashFlows', {
     id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
     outlet_id: integer('outlet_id').notNull().references(() => outletsTable.id),
     cash_opname: varchar("cash_opname", { length: 15 }).notNull().$default(() => 'cash'),
-    cash_in_category_id: integer('cash_in_category_id').references(() => cashInDetailTable.id),
-    cash_out_category_id: integer('cash_out_category_id').references(() => cashOutDetailTable.id),
+    cash_in_detail_id: integer('cash_in_detail_id').references(() => cashInDetailTable.id),
+    cash_out_detail_id: integer('cash_out_detail_id').references(() => cashOutDetailTable.id),
 })
 
 export const session = pgTable(

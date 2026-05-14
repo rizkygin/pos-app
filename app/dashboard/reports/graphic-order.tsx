@@ -53,7 +53,7 @@ export default function GraphicOrder() {
     const isTrendingUp = trendPercentage >= 0;
 
     return (
-        <Card className="mx-5 w-full ">
+        <Card className="w-full lg:w-[380px] lg:shrink-0">
             {/* chart penjualan */}
             <div>
                 <CardHeader>

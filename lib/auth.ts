@@ -28,7 +28,7 @@ export const auth = betterAuth({
         name: "auth_session",
         attributes: {
           sameSite: "lax",
-          secure: true,
+          secure: process.env.NODE_ENV === "production",
           path: "/"
         }
       }

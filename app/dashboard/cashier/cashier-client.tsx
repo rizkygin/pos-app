@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useMemo, useEffect, useCallback } from "react";
+import { ReceiptModal, type ReceiptData } from "./receipt-modal";
 import Image from "next/image";
 import {
     Search,
@@ -13,7 +14,8 @@ import {
     Pizza,
     Cookie,
     Package,
-    LayoutGrid
+    LayoutGrid,
+    X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -36,6 +38,10 @@ type CartItem = {
 
 type CashierClientProps = {
     outletId: number;
+    outletName: string;
+    outletAddress: string;
+    outletPhone: string;
+    cashierName: string;
     initialProducts: Product[];
 };
 
@@ -43,10 +49,12 @@ const INITIAL_CATEGORIES = [
     { id: "All", label: "All Items", icon: LayoutGrid, color: "text-blue-500 m-2", bg: "bg-blue-50", border: "border-blue-200" },
 ];
 
-export const CashierClient = ({ outletId, initialProducts }: CashierClientProps) => {
+export const CashierClient = ({ outletId, outletName, outletAddress, outletPhone, cashierName, initialProducts }: CashierClientProps) => {
     const [selectedCategory, setSelectedCategory] = useState<string>("All");
     const [searchQuery, setSearchQuery] = useState("");
     const [cart, setCart] = useState<CartItem[]>([]);
+    const [cartOpen, setCartOpen] = useState(false);
+    const [receipt, setReceipt] = useState<ReceiptData | null>(null);
 
     const [categories, setCatagories] = useState(INITIAL_CATEGORIES);
 
@@ -71,9 +79,7 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
                 }
 
             })
-            setCatagories((prev) => {
-                return [...prev, ...waitAllCategories];
-            });
+            setCatagories([...INITIAL_CATEGORIES, ...waitAllCategories]);
         } catch (err) {
             console.error(err);
         }
@@ -134,34 +140,41 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
 
     const handleCheckout = useCallback(async () => {
         if (cart.length === 0) return;
+        // Capture snapshot before any async work so state changes mid-flight don't corrupt it
+        const snapshot = [...cart];
+        const snapshotTotal = cartTotal;
         try {
             const response = await fetch('/api/add-order-detail', {
                 method: 'POST',
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                    outletId,
-                    cart,
-                    total: cartTotal,
-                }),
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ outletId, cart: snapshot, total: snapshotTotal }),
             });
-            let errorMsg = "Failed to add order detail";
+            // Parse the body exactly once regardless of success/failure
+            const data = await response.json().catch(() => ({}));
             if (!response.ok) {
-                try {
-                    const data = await response.json();
-                    errorMsg = data?.error?.message || data?.error || errorMsg;
-                } catch {
-                    errorMsg = `Server error: ${response.status} ${response.statusText}`;
-                }
-                throw new Error(errorMsg);
+                throw new Error(data?.error?.message || data?.error || `Server error: ${response.status}`);
             }
             clearCart();
-            alert("Order detail added successfully");
+            setCartOpen(false);
+            setReceipt({
+                orderId: data.orderId ?? crypto.randomUUID(),
+                items: snapshot.map(i => ({
+                    product_name: i.product.product_name,
+                    quantity: i.quantity,
+                    price: i.product.price,
+                    price_mark_down: i.product.price_mark_down,
+                })),
+                total: snapshotTotal,
+                date: new Date(),
+                outletName,
+                outletAddress,
+                outletPhone,
+                cashierName,
+            });
         } catch (error: any) {
             alert(error.message);
         }
-    }, [cart, cartTotal, outletId]);
+    }, [cart, cartTotal, outletId, outletName, outletAddress, outletPhone, cashierName]);
 
     // Adds a keyboard shortcut (CMD/Ctrl + Enter) for Checkout
     useEffect(() => {
@@ -182,13 +195,28 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
             <div className="flex-1 flex flex-col min-w-0 bg-background/50 backdrop-blur-sm border-r">
 
                 {/* Header & Search */}
-                <div className="p-4 md:p-6 pb-0">
-                    <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between mb-6">
+                <div className="p-3 pb-0">
+                    {/* Mobile: search only */}
+                    <div className="flex items-center gap-2 mb-2 md:hidden">
+                        <div className="relative flex-1">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                            <input
+                                type="text"
+                                placeholder="Search products..."
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                className="w-full h-9 pl-10 pr-4 rounded-xl border bg-background/80 shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none text-sm"
+                            />
+                        </div>
+                    </div>
+
+                    {/* Desktop: full header */}
+                    <div className="hidden md:flex flex-row gap-4 items-center justify-between">
                         <div>
                             <h1 className="text-3xl font-extrabold tracking-tight">Point of Sale</h1>
                             <p className="text-muted-foreground text-sm mt-1">Select items to add to cart</p>
                         </div>
-                        <div className="relative w-full md:w-72">
+                        <div className="relative w-72">
                             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                             <input
                                 type="text"
@@ -201,17 +229,17 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
                     </div>
 
                     {/* Categories */}
-                    <div className="flex gap-3 overflow-x-auto pb-4 scrollbar-hide">
+                    <div className="flex gap-2 md:gap-3 overflow-x-auto scrollbar-hide">
                         {categories.map(cat => (
                             <button
                                 key={cat.id}
                                 onClick={() => setSelectedCategory(cat.id)}
-                                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 whitespace-nowrap transition-all duration-300 font-semibold ${selectedCategory === cat.id
+                                className={`flex items-center gap-1.5 md:gap-2 px-3 py-1.5 md:px-4 md:py-2.5 rounded-xl border-2 whitespace-nowrap transition-all duration-300 font-semibold text-xs md:text-sm ${selectedCategory === cat.id
                                     ? `${cat.border} ${cat.bg} ${cat.color} shadow-sm ring-1 ring-current`
                                     : 'border-transparent bg-background/60 hover:bg-muted text-muted-foreground hover:text-foreground hover:border-border'
                                     }`}
                             >
-                                <cat.icon className="h-4 w-4" />
+                                <cat.icon className="h-3.5 w-3.5 md:h-4 md:w-4" />
                                 {cat.label}
                             </button>
                         ))}
@@ -219,7 +247,7 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
                 </div>
 
                 {/* Products Grid */}
-                <div className="flex-1 overflow-y-auto p-4 md:p-6 pt-2">
+                <div className="flex-1 overflow-y-auto p-4 md:p-6 pt-2 pb-24 md:pb-6">
                     {filteredProducts.length === 0 ? (
                         <div className="h-full flex flex-col items-center justify-center text-center opacity-50">
                             <Package className="h-16 w-16 mb-4" />
@@ -227,7 +255,7 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
                             <p className="max-w-[250px]">Try adjusting your search or category filter.</p>
                         </div>
                     ) : (
-                        <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 md:gap-6 pb-20">
+                        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 md:gap-6 pb-20">
                             {filteredProducts.map(product => {
                                 const isDiscounted = product.price_mark_down && product.price_mark_down !== "0";
                                 const displayPrice = isDiscounted ? product.price_mark_down : product.price;
@@ -243,7 +271,7 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
                                             }`}
                                     >
                                         {/* Image Container */}
-                                        <div className="relative aspect-square w-full bg-muted/20 overflow-hidden">
+                                        <div className="relative aspect-[4/3] md:aspect-square w-full bg-muted/20 overflow-hidden">
                                             {product.image && product.image !== "avatar.png" ? (
                                                 <Image
                                                     src={product.image}
@@ -280,22 +308,22 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
                                         </div>
 
                                         {/* Content */}
-                                        <div className="p-4 flex flex-col flex-1">
-                                            <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">
+                                        <div className="p-2 md:p-4 flex flex-col flex-1">
+                                            <span className="text-[9px] md:text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-0.5">
                                                 {product.category}
                                             </span>
-                                            <h3 className="font-bold text-sm md:text-base leading-tight line-clamp-2 mb-2 group-hover:text-blue-600 transition-colors">
+                                            <h3 className="font-bold text-xs md:text-base leading-tight line-clamp-2 mb-1 md:mb-2 group-hover:text-blue-600 transition-colors">
                                                 {product.product_name}
                                             </h3>
 
                                             <div className="mt-auto flex items-end justify-between">
                                                 <div className="flex flex-col">
                                                     {isDiscounted && (
-                                                        <span className="text-xs text-muted-foreground line-through decoration-rose-500/50">
+                                                        <span className="text-[10px] md:text-xs text-muted-foreground line-through decoration-rose-500/50">
                                                             {new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(Number(product.price))}
                                                         </span>
                                                     )}
-                                                    <span className="font-extrabold text-blue-600 text-lg">
+                                                    <span className="font-extrabold text-blue-600 text-sm md:text-lg">
                                                         {new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(Number(displayPrice))}
                                                     </span>
                                                 </div>
@@ -310,7 +338,18 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
             </div>
 
             {/* Sidebar: Shopping Cart */}
-            <div className="w-[350px] lg:w-[400px] flex-shrink-0 bg-background flex flex-col shadow-2xl relative z-10 border-l">
+            <div className={`fixed bottom-0 left-0 right-0 z-40 flex flex-col bg-background max-h-[90vh] sm:max-h-[95vh] rounded-t-3xl border-t shadow-2xl transition-transform duration-300 ease-in-out ${cartOpen ? 'translate-y-0' : 'translate-y-full'} md:static md:translate-y-0 md:z-10 md:rounded-none md:border-t-0 md:border-l md:max-h-full md:w-[350px] lg:w-[400px] md:flex-shrink-0`}>
+                {/* Mobile drag handle */}
+                <div className="relative flex justify-center items-center px-5 pt-3 pb-1 md:hidden">
+                    <div className="w-10 h-1 rounded-full bg-muted-foreground/20" />
+                    <button
+                        onClick={() => setCartOpen(false)}
+                        className="absolute right-5 text-muted-foreground hover:text-foreground p-1"
+                    >
+                        <X className="h-5 w-5" />
+                    </button>
+                </div>
+
                 {/* Cart Header */}
                 <div className="p-6 border-b bg-background/80 backdrop-blur-md sticky top-0 z-20">
                     <div className="flex items-center justify-between">
@@ -431,6 +470,35 @@ export const CashierClient = ({ outletId, initialProducts }: CashierClientProps)
                         </span>
                     </Button>
                 </div>
+            </div>
+
+            {/* Receipt modal */}
+            {receipt && (
+                <ReceiptModal data={receipt} onClose={() => setReceipt(null)} />
+            )}
+
+            {/* Mobile backdrop */}
+            {cartOpen && (
+                <div
+                    className="fixed inset-0 bg-black/50 z-30 md:hidden"
+                    onClick={() => setCartOpen(false)}
+                />
+            )}
+
+            {/* Mobile bottom bar */}
+            <div className="fixed bottom-0 left-0 right-0 z-20 p-3 bg-background/95 backdrop-blur-sm border-t md:hidden">
+                <button
+                    onClick={() => setCartOpen(true)}
+                    className="w-full h-14 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-bold flex items-center justify-between px-5 shadow-lg transition-colors"
+                >
+                    <div className="flex items-center gap-2">
+                        <ShoppingCart className="h-5 w-5" />
+                        <span className="text-sm">{cart.reduce((acc, item) => acc + item.quantity, 0)} items</span>
+                    </div>
+                    <span className="font-black">
+                        {new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(cartTotal)}
+                    </span>
+                </button>
             </div>
         </div>
     );

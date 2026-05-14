@@ -25,7 +25,10 @@ const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
                 <AppSidebar />
 
                 <AppContent variant="sidebar" className="overflow-x-hidden">
-                    <AppSidebarHeader breadcrumbs={[]} />
+                    <header className="sticky top-0 z-10 flex h-10 shrink-0 items-center border-b bg-background px-3">
+                        <SidebarTrigger />
+                    </header>
+
                     {children}
                     <MessageChatComponent />
                 </AppContent>

@@ -15,6 +15,20 @@
       "when": 1778470969967,
       "tag": "0001_handy_pandemic",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1778630989815,
+      "tag": "0002_mighty_oracle",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1778731804758,
+      "tag": "0003_lush_wallow",
+      "breakpoints": true
     }
   ]
 }

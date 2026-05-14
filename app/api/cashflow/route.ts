@@ -34,8 +34,8 @@ export const GET = async (req: Request) => {
         const rows = await db
             .select({
                 id: cashFlows.id,
-                cash_in_category_id: cashFlows.cash_in_category_id,
-                cash_out_category_id: cashFlows.cash_out_category_id,
+                cash_in_detail_id: cashFlows.cash_in_detail_id,
+                cash_out_detail_id: cashFlows.cash_out_detail_id,
                 in_category: cashInCategoryTable.category,
                 in_amount: cashInDetailTable.money_amount,
                 in_date: cashInDetailTable.created_at,
@@ -44,9 +44,9 @@ export const GET = async (req: Request) => {
                 out_date: cashOutDetailTable.created_at,
             })
             .from(cashFlows)
-            .leftJoin(cashInDetailTable, eq(cashFlows.cash_in_category_id, cashInDetailTable.id))
+            .leftJoin(cashInDetailTable, eq(cashFlows.cash_in_detail_id, cashInDetailTable.id))
             .leftJoin(cashInCategoryTable, eq(cashInDetailTable.category_id, cashInCategoryTable.id))
-            .leftJoin(cashOutDetailTable, eq(cashFlows.cash_out_category_id, cashOutDetailTable.id))
+            .leftJoin(cashOutDetailTable, eq(cashFlows.cash_out_detail_id, cashOutDetailTable.id))
             .leftJoin(cashOutCategoryTable, eq(cashOutDetailTable.category_id, cashOutCategoryTable.id))
             .where(
                 and(
@@ -65,14 +65,25 @@ export const GET = async (req: Request) => {
             day: "2-digit",
         });
 
-        const data = rows.map((row) => ({
-            id: String(row.id),
-            type: (row.cash_in_category_id !== null ? "IN" : "OUT") as "IN" | "OUT",
-            category: (row.in_category ?? row.out_category) ?? "",
-            amount: Number(row.in_amount ?? row.out_amount ?? "0"),
-            date: dateFormatter.format((row.in_date ?? row.out_date)!),
-            note: "",
-        }));
+        const timeFormatter = new Intl.DateTimeFormat("en-GB", {
+            timeZone: timezone,
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: false,
+        });
+
+        const data = rows.map((row) => {
+            const rawDate = (row.in_date ?? row.out_date)!;
+            return {
+                id: String(row.id),
+                type: (row.cash_in_detail_id !== null ? "IN" : "OUT") as "IN" | "OUT",
+                category: (row.in_category ?? row.out_category) ?? "",
+                amount: Number(row.in_amount ?? row.out_amount ?? "0"),
+                date: dateFormatter.format(rawDate),
+                time: timeFormatter.format(rawDate),
+                note: "",
+            };
+        });
 
         return NextResponse.json({ data });
     } catch (error: any) {
@@ -97,7 +108,16 @@ export const POST = async (req: Request) => {
         return NextResponse.json({ error: "Invalid amount" }, { status: 400 });
     }
 
-    const { startUTC } = getUTCRangeFromLocalDate(date, timezone);
+    const { startUTC, endUTC } = getUTCRangeFromLocalDate(date, timezone);
+    const now = new Date();
+    const created_at = now >= startUTC && now <= endUTC ? now : startUTC;
+
+    const timeFormatter = new Intl.DateTimeFormat("en-GB", {
+        timeZone: timezone,
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+    });
 
     try {
         if (type === "IN") {
@@ -111,16 +131,16 @@ export const POST = async (req: Request) => {
 
             const [detail] = await db
                 .insert(cashInDetailTable)
-                .values({ category_id: cat.id, money_amount: String(amount), type: "cash", created_at: startUTC })
+                .values({ category_id: cat.id, money_amount: String(amount), type: "cash", created_at: created_at })
                 .returning();
 
             const [cf] = await db
                 .insert(cashFlows)
-                .values({ outlet_id: outlet.id, cash_in_category_id: detail.id })
+                .values({ outlet_id: outlet.id, cash_in_detail_id: detail.id })
                 .returning();
 
             return NextResponse.json({
-                data: { id: String(cf.id), type: "IN", category, amount: Number(amount), date, note: "" },
+                data: { id: String(cf.id), type: "IN", category, amount: Number(amount), date, time: timeFormatter.format(detail.created_at), note: "" },
             });
         }
 
@@ -135,16 +155,16 @@ export const POST = async (req: Request) => {
 
             const [detail] = await db
                 .insert(cashOutDetailTable)
-                .values({ category_id: cat.id, money_amount: String(amount), type: "cash", created_at: startUTC })
+                .values({ category_id: cat.id, money_amount: String(amount), type: "cash", created_at: created_at })
                 .returning();
 
             const [cf] = await db
                 .insert(cashFlows)
-                .values({ outlet_id: outlet.id, cash_out_category_id: detail.id })
+                .values({ outlet_id: outlet.id, cash_out_detail_id: detail.id })
                 .returning();
 
             return NextResponse.json({
-                data: { id: String(cf.id), type: "OUT", category, amount: Number(amount), date, note: "" },
+                data: { id: String(cf.id), type: "OUT", category, amount: Number(amount), date, time: timeFormatter.format(detail.created_at), note: "" },
             });
         }
 
@@ -177,8 +197,8 @@ export const DELETE = async (req: Request) => {
 
         if (!cf) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-        const inDetailId = cf.cash_in_category_id;
-        const outDetailId = cf.cash_out_category_id;
+        const inDetailId = cf.cash_in_detail_id;
+        const outDetailId = cf.cash_out_detail_id;
 
         await db.delete(cashFlows).where(eq(cashFlows.id, Number(id)));
 

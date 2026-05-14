@@ -8,6 +8,7 @@ export interface Transaction {
     category: string;
     amount: number;
     date: string;
+    time?: string;
     note: string;
 }
 
@@ -45,13 +46,12 @@ export function exportMonthlyPDF({ monthlyTransactions, monthlyIn, monthlyOut, m
 
     autoTable(doc, {
         startY: yPos,
-        head: [["#", "Date", "Type", "Category", "Note", "Amount"]],
+        head: [["#", "Date", "Type", "Category", "Amount"]],
         body: sortedTx.map((t, i) => [
             String(i + 1),
             formatShortDate(new Date(t.date)),
             t.type === "IN" ? "Cash In" : "Cash Out",
             t.category,
-            t.note || "-",
             (t.type === "OUT" ? "- " : "+ ") + currFmt(t.amount)
         ]),
         theme: "striped",
