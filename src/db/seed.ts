@@ -45,10 +45,13 @@ const main = async () => {
             } else if (user.name === "owner_test") {
                 await db.insert(outletsTable).values({
                     name: `${user.name}'s Resto`,
+                    avatar: 'https://images.unsplash.com/photo-1504674900247-0877df9cc836?w=600&auto=format&fit=crop&q=60',
                     phone: "08123456789",
                     email: res.user.email,
                     address: "Jakarta, Indonesia",
                     user_id: res.user.id,
+                    lat: "-3.3199",
+                    lon: "114.5907"
                 });
                 await addProductstoOutlets(res.user.id);
             } else if (user.name === "courier_test") {

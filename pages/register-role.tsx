@@ -1,5 +1,6 @@
 'use client'
 import { useState } from "react";
+import { MapPin, Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
@@ -31,7 +32,27 @@ const roles = [
 const RegistrationForm = ({ role, onCancel }: { role: string, onCancel: () => void }) => {
     const router = useRouter();
     const [loading, setLoading] = useState(false);
+    const [locating, setLocating] = useState(false);
     const [formData, setFormData] = useState<any>({});
+
+    const handleGetLocation = () => {
+        if (!navigator.geolocation) return alert("Geolocation tidak didukung browser ini");
+        setLocating(true);
+        navigator.geolocation.getCurrentPosition(
+            (pos) => {
+                setFormData((prev: any) => ({
+                    ...prev,
+                    lat: String(pos.coords.latitude),
+                    lon: String(pos.coords.longitude),
+                }));
+                setLocating(false);
+            },
+            () => {
+                alert("Gagal mendapatkan lokasi. Pastikan izin lokasi diaktifkan.");
+                setLocating(false);
+            }
+        );
+    };
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -107,6 +128,16 @@ const RegistrationForm = ({ role, onCancel }: { role: string, onCancel: () => vo
                                 <Input name="email" type="email" onChange={handleChange} required placeholder="store@example.com" className="rounded-xl" />
                             </div>
                         </div>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            onClick={handleGetLocation}
+                            disabled={locating}
+                            className="w-full rounded-xl flex items-center gap-2"
+                        >
+                            {locating ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPin className="h-4 w-4" />}
+                            {locating ? "Mendapatkan lokasi..." : formData.lat ? `Lokasi: ${Number(formData.lat).toFixed(5)}, ${Number(formData.lon).toFixed(5)}` : "Gunakan Lokasi Saya"}
+                        </Button>
                     </>
                 )}
 

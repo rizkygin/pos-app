@@ -12,11 +12,13 @@ export type AddProductInput = {
     product_name: string;
     price: string;
     price_mark_down: string;
+    buying_price: string;
     outlet_id: number;
     category: string;
     description?: string;
     unit?: string;
     image?: string;
+    features?: string[];
 };
 
 export async function addProductAction(data: AddProductInput) {
@@ -29,11 +31,13 @@ export async function addProductAction(data: AddProductInput) {
             product_name: data.product_name,
             price: data.price,
             price_mark_down: data.price_mark_down,
+            buying_price: data.buying_price,
             outlet_id: data.outlet_id,
             category: data.category,
             description: data.description || "",
             unit: data.unit || "pcs",
             image: data.image || "avatar.png",
+            features: data.features ?? [],
         });
 
         revalidatePath("/dashboard/addproducts");
@@ -125,10 +129,12 @@ export async function updateProductAction(productId: string, data: Partial<AddPr
                 product_name: data.product_name,
                 price: data.price,
                 price_mark_down: data.price_mark_down,
+                buying_price: data.buying_price,
                 category: data.category,
                 description: data.description,
                 unit: data.unit,
-                ...(data.image && { image: data.image })
+                ...(data.image && { image: data.image }),
+                ...(data.features !== undefined && { features: data.features }),
             })
             .where(eq(productsTable.id, productId));
 

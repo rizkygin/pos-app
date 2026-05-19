@@ -24,6 +24,7 @@ export const outletsRelations = relations(schema.outletsTable, ({ one, many }) =
     }),
     products: many(schema.productsTable),
     cashFlows: many(schema.cashFlows),
+    orders: many(schema.ordersTable),
 }));
 
 export const customersRelations = relations(schema.customersTable, ({ one, many }) => ({
@@ -87,6 +88,14 @@ export const ordersRelations = relations(schema.ordersTable, ({ one, many }) => 
         fields: [schema.ordersTable.courier_id],
         references: [schema.couriersTable.id]
     }),
+    hasOutlet: one(schema.outletsTable, {
+        fields: [schema.ordersTable.outlet_id],
+        references: [schema.outletsTable.id]
+    }),
+    hasPromo: one(schema.promosTable, {
+        fields: [schema.ordersTable.promo_id],
+        references: [schema.promosTable.id]
+    }),
     hasOrderDetails: many(schema.orderDetailsTable)
 }));
 
@@ -126,3 +135,5 @@ export const accountRelations = relations(schema.account, ({ one }) => ({
         references: [schema.usersTable.id]
     })
 }));
+
+// promosTable has no FK relations — platform admin creates promos independently

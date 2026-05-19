@@ -4,6 +4,7 @@ import { timestamps } from "./columns.helper";
 
 export const VEHICLE_TYPE = pgEnum('vechile_type', ['car', 'motorcycle']);
 export const STATUS = pgEnum('state', ['addToChart', 'checkout']);
+export const ORDER_STATUS = pgEnum('order_status', ['pending', 'confirmed', 'preparing', 'on_delivery', 'delivered', 'cancelled']);
 export const RECIEPENT = pgEnum('receipt', ['customer', 'courier', 'outlet']);
 export const CASHFLOWS_TRANSACTION_TYPE = pgEnum('cashflows_transaction_type', ['transfer', 'cash']);
 
@@ -22,11 +23,17 @@ export const outletsTable = pgTable("outlets", {
     id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
     name: varchar("name", { length: 255 }).notNull(),
     address: varchar("address", { length: 255 }).notNull(),
+    lat: varchar("lat", { length: 255 }).notNull(),
+    lon: varchar("lon", { length: 255 }).notNull(),
     phone: varchar("phone", { length: 255 }).notNull(),
     email: varchar("email", { length: 255 }).notNull().unique(),
     user_id: text('user_id').notNull().references(() => usersTable.id),
     avatar: varchar("avatar", { length: 255 }).notNull().default('avatar.png'),
     ratings: varchar("ratings").default('5'),
+    review_count: integer("review_count").default(0).notNull(),
+    tags: text("tags").array().default([]).notNull(),
+    features: text("features").array().default([]).notNull(),
+    is_open: boolean("is_open").default(true).notNull(),
     ...timestamps,
 });
 
@@ -52,6 +59,7 @@ export const productsTable = pgTable('products', {
     product_name: varchar("product_name", { length: 255 }).notNull(),
     price: varchar("price", { length: 10 }).notNull(),
     price_mark_down: varchar("price_mark_down", { length: 10 }).notNull(),
+    buying_price: varchar("buying_price", { length: 15 }).notNull().default('0'),
     outlet_id: integer("outlet_id").notNull().references(() => outletsTable.id),
     ratings: varchar("ratings").default('5'),
     image: varchar("image", { length: 255 }).notNull().default('avatar.png'),
@@ -59,24 +67,40 @@ export const productsTable = pgTable('products', {
     isAvailable: boolean("is_available").default(true).notNull(),
     description: varchar("description", { length: 255 }).default(''),
     unit: varchar("unit", { length: 10 }).notNull().default('pcs'),
+    features: text("features").array().default([]).notNull(),
+    is_recommended: boolean("is_recommended").default(false).notNull(),
+    discount_percent: integer("discount_percent"),
+    review_count: integer("review_count").default(0).notNull(),
     ...timestamps,
-});
+}, (table) => [
+    index("products_available_deleted_idx").on(table.isAvailable, table.deletedAt),
+]);
 
 export const ordersTable = pgTable('orders', {
     id: text('id').primaryKey(),
     costomer_id: integer("costomer_id").notNull().references(() => customersTable.id),
-    courier_id: integer("courier_id").notNull().references(() => couriersTable.id),
-
-})
-//you can place discount on this coloumn later 
-//discount : varchar(lenght: 5) ex: OUPIS , AUGUS, RIZKY 
+    courier_id: integer("courier_id").references(() => couriersTable.id),
+    outlet_id: integer("outlet_id").notNull().references(() => outletsTable.id),
+    status: ORDER_STATUS("status").default('pending').notNull(),
+    promo_id: integer("promo_id").references(() => promosTable.id),
+    discount_amount: varchar("discount_amount", { length: 15 }),
+    delivery_fee: varchar("delivery_fee", { length: 15 }),
+    scheduled_at: timestamp("scheduled_at", { withTimezone: true }),
+    note: json("note"),
+    ...timestamps,
+}, (table) => [
+    index("id_idx").on(table.id),
+    index("costomer_id_idx").on(table.costomer_id),
+    index("courier_id_idx").on(table.courier_id),
+    index("outlet_id_idx").on(table.outlet_id),
+])
 
 export const orderDetailsTable = pgTable('orderDetails', {
     id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
     order_id: text('order_id').notNull().references(() => ordersTable.id),
     product_id: text('product_id').notNull().references(() => productsTable.id),
     quantity: integer("quantity").notNull(),
-    note_product: varchar("note_product", { length: 255 }).notNull(),
+    note_product: text('note_product'),
     extra: json("extra"),
     summary_price: varchar("summary_price", { length: 10 }).notNull(),
     created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
@@ -129,6 +153,22 @@ export const cashFlows = pgTable('cashFlows', {
     cash_in_detail_id: integer('cash_in_detail_id').references(() => cashInDetailTable.id),
     cash_out_detail_id: integer('cash_out_detail_id').references(() => cashOutDetailTable.id),
 })
+
+export const promosTable = pgTable('promos', {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    code: varchar('code', { length: 20 }).notNull().unique(),
+    title: varchar('title', { length: 255 }).notNull(),
+    description: varchar('description', { length: 500 }).notNull(),
+    discount_percent: integer('discount_percent').notNull(),
+    min_order: integer('min_order').notNull().default(0),
+    max_discount: integer('max_discount'),
+    valid_until: timestamp('valid_until', { withTimezone: true }).notNull(),
+    gradient: varchar('gradient', { length: 255 }).notNull().default('from-rose-500 to-pink-600'),
+    features: text('features').array().default([]).notNull(),
+    is_active: boolean('is_active').default(true).notNull(),
+    image: varchar("image", { length: 255 }).notNull().default('/promos/default-promo.png'),
+    ...timestamps,
+});
 
 export const session = pgTable(
     "session",

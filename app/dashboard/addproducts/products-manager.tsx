@@ -6,45 +6,49 @@ import { Button } from "@/components/ui/button";
 import { addProductAction, AddProductInput, uploadImage, deleteProductAction, updateProductAction, removeImage } from "./actions";
 import Image from "next/image";
 import { DashboardHeader } from "@/components/dashboard-header";
+import { ORDER_FEATURES } from "@/lib/order-features";
 
 type Product = {
     id: string;
     product_name: string;
     price: string;
     price_mark_down: string;
+    buying_price: string;
     category: string;
     image: string;
     isAvailable: boolean;
     description: string | null;
     unit: string;
+    features: string[];
 };
+
 
 type ProductsManagerProps = {
     outletId: number;
     initialProducts: Product[];
 };
 
-const CATEGORIES = [
-    { id: "Makan", label: "Ulun Makan", icon: Pizza, color: "text-orange-500", bg: "bg-orange-50", border: "border-orange-100" },
-    { id: "Minum", label: "Ulun Minum", icon: Coffee, color: "text-amber-600", bg: "bg-amber-50", border: "border-amber-100" },
-    { id: "Nyemil", label: "Ulun Nyemil", icon: Cookie, color: "text-amber-500", bg: "bg-amber-50", border: "border-amber-100" },
-    { id: "Jasa", label: "Ulun Pesan Jasa", icon: User2, color: "text-amber-500", bg: "bg-amber-50", border: "border-amber-100" },
-    { id: "Barang", label: "Ulun Jual Barang", icon: Handbag, color: "text-amber-500", bg: "bg-amber-50", border: "border-amber-100" },
-    { id: "Other", label: "Other", icon: Package, color: "text-blue-500", bg: "bg-blue-50", border: "border-blue-100" },
-];
+const CATEGORIES = ORDER_FEATURES.map((feature) => ({
+    id: feature.slug,
+    label: feature.label,
+    icon: feature.icon,
+}));
 
 export const ProductsManager = ({ outletId, initialProducts }: ProductsManagerProps) => {
     const [view, setView] = useState<"list" | "category" | "form">("list");
     const [selectedCategory, setSelectedCategory] = useState<string>("");
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [hasDiscount, setHasDiscount] = useState(false);
     const [imageUrl, setImageUrl] = useState<string>("");
     const [editingProductId, setEditingProductId] = useState<string | null>(null);
+    const [selectedFeatures, setSelectedFeatures] = useState<string[]>([]);
 
     // Form State
     const [formData, setFormData] = useState({
         product_name: "",
         price: "",
         price_mark_down: "",
+        buying_price: "",
         description: "",
         unit: "pcs",
     });
@@ -75,6 +79,7 @@ export const ProductsManager = ({ outletId, initialProducts }: ProductsManagerPr
                 ...formData,
                 category: selectedCategory,
                 image: imageUrl,
+                features: selectedFeatures,
             });
         } else {
             result = await addProductAction({
@@ -82,6 +87,7 @@ export const ProductsManager = ({ outletId, initialProducts }: ProductsManagerPr
                 category: selectedCategory,
                 outlet_id: outletId,
                 image: imageUrl,
+                features: selectedFeatures,
             });
         }
 
@@ -93,15 +99,22 @@ export const ProductsManager = ({ outletId, initialProducts }: ProductsManagerPr
                 product_name: "",
                 price: "",
                 price_mark_down: "",
+                buying_price: "",
                 description: "",
                 unit: "pcs",
             });
             setImageUrl("");
             setEditingProductId(null);
+            setSelectedFeatures([]);
             setView("list");
         } else {
             alert(result.message);
         }
+    };
+
+    const handleToggleDiscount = (checked: boolean) => {
+        setHasDiscount(checked);
+        if (!checked) setFormData(prev => ({ ...prev, price_mark_down: "" }));
     };
 
     const handleEdit = (product: Product) => {
@@ -111,12 +124,15 @@ export const ProductsManager = ({ outletId, initialProducts }: ProductsManagerPr
         } else {
             setImageUrl(product.image)
         }
+        setHasDiscount(!!product.price_mark_down && product.price_mark_down !== "0");
+        setSelectedFeatures(product.features ?? []);
         setEditingProductId(product.id);
         setSelectedCategory(product.category);
         setFormData({
             product_name: product.product_name,
             price: product.price,
             price_mark_down: product.price_mark_down,
+            buying_price: product.buying_price,
             description: product.description || "",
             unit: product.unit,
         });
@@ -197,10 +213,12 @@ export const ProductsManager = ({ outletId, initialProducts }: ProductsManagerPr
                                     product_name: "",
                                     price: "",
                                     price_mark_down: "",
+                                    buying_price: "",
                                     description: "",
                                     unit: "pcs",
                                 });
                                 setImageUrl("");
+                                setSelectedFeatures([]);
                                 setView("category");
                             }}
                             className="bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-lg shadow-blue-600/20 transition-all hover:scale-105"
@@ -247,6 +265,7 @@ export const ProductsManager = ({ outletId, initialProducts }: ProductsManagerPr
                                             </button>
                                         </div>
                                     </div>
+
                                     <div className="relative aspect-[4/3] md:aspect-square rounded-lg md:rounded-xl bg-muted/30 mb-2 md:mb-4 flex items-center justify-center overflow-hidden border">
                                         {product.image && product.image !== "avatar.png" ? (
                                             <Image src={product.image} fill className="object-cover group-hover:scale-110 transition-transform duration-500" alt={product.product_name} />
@@ -300,9 +319,9 @@ export const ProductsManager = ({ outletId, initialProducts }: ProductsManagerPr
                             <button
                                 key={cat.id}
                                 onClick={() => handleCategorySelect(cat.id)}
-                                className={`flex flex-col items-center justify-center p-4 md:p-8 rounded-2xl md:rounded-3xl border-2 transition-all hover:-translate-y-1 hover:shadow-xl bg-background ${cat.border} hover:border-blue-500 group relative overflow-hidden`}
+                                className={`flex flex-col items-center justify-center p-4 md:p-8 rounded-2xl md:rounded-3xl border-2 transition-all hover:-translate-y-1 hover:shadow-xl bg-background hover:border-blue-500 group relative overflow-hidden`}
                             >
-                                <div className={`p-3 md:p-4 rounded-xl md:rounded-2xl ${cat.bg} ${cat.color} mb-2 md:mb-4 group-hover:scale-110 transition-transform duration-300 relative z-10 shadow-sm`}>
+                                <div className={`p-3 md:p-4 rounded-xl md:rounded-2xl text-amber-500 bg-amber-50 mb-2 md:mb-4 group-hover:scale-110 transition-transform duration-300 relative z-10 shadow-sm`}>
                                     <cat.icon className="h-6 w-6 md:h-10 md:w-10" />
                                 </div>
                                 <span className="font-bold text-sm md:text-lg text-foreground relative z-10 group-hover:text-blue-600 transition-colors text-center">{cat.label}</span>
@@ -353,14 +372,14 @@ export const ProductsManager = ({ outletId, initialProducts }: ProductsManagerPr
                                 />
                             </div>
 
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:gap-6">
+                            <div className="grid grid-cols-2 gap-4 md:gap-6">
                                 <div className="space-y-2">
                                     <label className="text-sm font-bold flex items-center gap-2">
                                         <DollarSign className="h-4 w-4 text-muted-foreground" />
-                                        Normal Price
+                                        Harga Jual
                                     </label>
                                     <div className="relative">
-                                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground font-medium">Rp</span>
+                                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground font-medium text-sm">Rp</span>
                                         <input
                                             required
                                             name="price"
@@ -373,22 +392,49 @@ export const ProductsManager = ({ outletId, initialProducts }: ProductsManagerPr
                                     </div>
                                 </div>
                                 <div className="space-y-2">
-                                    <label className="text-sm font-bold flex items-center gap-2 text-emerald-600">
+                                    <label className="text-sm font-bold flex items-center gap-2 text-amber-600">
                                         <DollarSign className="h-4 w-4" />
-                                        Discount Price
+                                        Harga Beli (Modal)
                                     </label>
                                     <div className="relative">
-                                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-emerald-600/70 font-medium">Rp</span>
+                                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-amber-600/70 font-medium text-sm">Rp</span>
                                         <input
-                                            required
-                                            name="price_mark_down"
+                                            name="buying_price"
                                             type="number"
-                                            value={formData.price_mark_down}
+                                            value={formData.buying_price}
                                             onChange={handleInputChange}
-                                            className="flex h-12 w-full rounded-xl border border-emerald-200 bg-emerald-50/30 pl-12 pr-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                                            placeholder="20000"
+                                            className="flex h-12 w-full rounded-xl border border-amber-200 bg-amber-50/30 pl-12 pr-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+                                            placeholder="15000"
                                         />
                                     </div>
+                                </div>
+                                <div className="col-span-2 space-y-3">
+                                    <label className="flex items-center justify-between cursor-pointer">
+                                        <span className="text-sm font-bold text-muted-foreground">Ada Diskon?</span>
+                                        <button
+                                            type="button"
+                                            role="switch"
+                                            aria-checked={hasDiscount}
+                                            onClick={() => handleToggleDiscount(!hasDiscount)}
+                                            className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${hasDiscount ? "bg-emerald-500" : "bg-muted"}`}
+                                        >
+                                            <span className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow-md ring-0 transition-transform duration-200 ${hasDiscount ? "translate-x-5" : "translate-x-0"}`} />
+                                        </button>
+                                    </label>
+                                    {hasDiscount && (
+                                        <div className="relative">
+                                            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-emerald-600/70 font-medium text-sm">Rp</span>
+                                            <input
+                                                required
+                                                name="price_mark_down"
+                                                type="number"
+                                                value={formData.price_mark_down}
+                                                onChange={handleInputChange}
+                                                className="flex h-12 w-full rounded-xl border border-emerald-300 bg-emerald-50/40 pl-12 pr-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                                                placeholder="Harga setelah diskon"
+                                            />
+                                        </div>
+                                    )}
                                 </div>
                             </div>
 
@@ -404,6 +450,37 @@ export const ProductsManager = ({ outletId, initialProducts }: ProductsManagerPr
                                     className="flex min-h-[100px] w-full rounded-xl border border-input bg-transparent px-4 py-3 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 resize-none"
                                     placeholder="Describe your product..."
                                 />
+                            </div>
+
+                            <div className="space-y-3">
+                                <label className="text-sm font-bold flex items-center gap-2">
+                                    <Tag className="h-4 w-4 text-muted-foreground" />
+                                    Fitur Produk
+                                    <span className="text-xs font-light text-muted-foreground ml-2">Pilih fitur produk untuk memudahkan pelanggan menemukan produk Anda.</span>
+                                </label>
+                                <div className="flex flex-wrap gap-2">
+                                    {CATEGORIES.map((f) => {
+                                        const active = selectedFeatures.includes(f.id);
+                                        return (
+                                            <button
+                                                key={f.id}
+                                                type="button"
+                                                onClick={() => setSelectedFeatures((prev) =>
+                                                    prev.includes(f.id) ? prev.filter((x) => x !== f.id) : [...prev, f.id]
+                                                )}
+                                                className={`px-3 py-1.5 rounded-full text-xs font-bold border-2 transition-all duration-150 ${active
+                                                    ? "border-blue-500 bg-blue-500 text-white shadow-sm"
+                                                    : "border-border bg-background text-muted-foreground hover:border-blue-300 hover:text-blue-600"
+                                                    }`}
+                                            >
+                                                {f.label}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                                {selectedFeatures.length > 0 && (
+                                    <p className="text-xs text-muted-foreground">{selectedFeatures.length} fitur dipilih</p>
+                                )}
                             </div>
 
                             <div className="space-y-2">
@@ -439,6 +516,7 @@ export const ProductsManager = ({ outletId, initialProducts }: ProductsManagerPr
                                     />
                                 )}
                             </div>
+
                             <div className="pt-4 flex justify-end">
                                 <Button
                                     type="submit"
