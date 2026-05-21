@@ -14,12 +14,13 @@ export function RecommendedProductCard({ product, feature }: { product: Product;
         : product.price;
 
     return (
-        <Link href={`/dashboard/order/${feature}/${product.outletId}`}>
+        <Link href={`/dashboard/order/${feature}/${product.id}`}>
             <motion.div
                 whileHover={{ y: -4, scale: 1.02 }}
                 className="group flex-shrink-0 w-44 bg-card border border-border/60 rounded-[1.5rem] overflow-hidden shadow-sm hover:shadow-lg transition-all cursor-pointer"
             >
                 <div className="relative h-28 overflow-hidden">
+
                     <Image src={product.image} alt={product.product_name} fill className="object-cover group-hover:scale-110 transition-transform duration-500" />
                     {product.discount_percent && (
                         <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-rose-500/90 backdrop-blur-sm text-[9px] font-black text-white">
