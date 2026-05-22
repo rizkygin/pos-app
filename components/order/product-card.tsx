@@ -7,20 +7,9 @@ import { Button } from "@/components/ui/button";
 import { StarRating } from "@/components/star-rating";
 import { fmtIDR, discountedPrice } from "@/lib/utils/format";
 
-export type OrderProduct = {
-    id: string;
-    product_name: string;
-    price: number;
-    price_mark_down: number;
-    category: string;
-    image: string;
-    ratings: number;
-    isAvailable: boolean;
-    description: string;
-    unit: string;
-    isRecommended?: boolean;
-    discountPercent?: number;
-};
+import type { Product } from "@/lib/types";
+
+export type OrderProduct = Product;
 
 export function ProductCard({
     product,

@@ -28,6 +28,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import type { Outlet, Product, Promo } from "@/lib/types";
+import { OutletSchema, ProductSchema } from "@/lib/types";
 
 // ─── Feature metadata ────────────────────────────────────────────────────────
 
@@ -106,17 +107,6 @@ const DEFAULT_META = {
     gradient: "from-rose-500 to-pink-500",
 };
 
-const MOCK_OUTLETS: Outlet[] = [
-    { id: "o1", name: "Warung Makan Bu Tini", image: "https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=600&auto=format&fit=crop&q=60", tags: ["Indonesian", "Homestyle", "Halal"], rating: 4.8, reviewCount: 2410, distance: "0.8 km", estimatedTime: "20 min", isOpen: true, feature: ["food"], promoActive: true },
-    { id: "o2", name: "Kopi Nusantara", image: "https://images.unsplash.com/photo-1445116572660-236099ec97a0?w=600&auto=format&fit=crop&q=60", tags: ["Coffee", "Cozy", "Wifi"], rating: 4.9, reviewCount: 1823, distance: "1.2 km", estimatedTime: "15 min", isOpen: true, feature: ["drink", "food"], promoActive: true },
-    { id: "o3", name: "Resto Padang Sederhana", image: "https://images.unsplash.com/photo-1504674900247-0877df9cc836?w=600&auto=format&fit=crop&q=60", tags: ["Padang", "Spicy", "Halal"], rating: 4.7, reviewCount: 3201, distance: "2.1 km", estimatedTime: "25 min", isOpen: true, feature: ["food"], promoActive: false },
-    { id: "o4", name: "Bubble Tea & Juice Bar", image: "https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=600&auto=format&fit=crop&q=60", tags: ["Bubble Tea", "Fresh Juice"], rating: 4.6, reviewCount: 980, distance: "0.5 km", estimatedTime: "10 min", isOpen: true, feature: ["drink"], promoActive: true },
-    { id: "o5", name: "Bengkel Pak Darto", image: "https://images.unsplash.com/photo-1486262715619-67b85e0b08d3?w=600&auto=format&fit=crop&q=60", tags: ["Otomotif", "Servis AC", "Listrik"], rating: 4.5, reviewCount: 412, distance: "3.0 km", estimatedTime: "Same day", isOpen: true, feature: ["service"], promoActive: false },
-    { id: "o6", name: "Salon Cantik Salon", image: "https://images.unsplash.com/photo-1560066984-138dadb4c035?w=600&auto=format&fit=crop&q=60", tags: ["Salon", "Spa", "Manicure"], rating: 4.8, reviewCount: 765, distance: "1.7 km", estimatedTime: "Book now", isOpen: true, feature: ["beauty"], promoActive: true },
-    { id: "o7", name: "Minimart Segar", image: "https://images.unsplash.com/photo-1604719312566-8912e9227c6a?w=600&auto=format&fit=crop&q=60", tags: ["Sembako", "Buah", "Frozen"], rating: 4.4, reviewCount: 528, distance: "0.3 km", estimatedTime: "5 min", isOpen: true, feature: ["mart"], promoActive: false },
-    { id: "o8", name: "Pizza House", image: "https://images.unsplash.com/photo-1513104890138-7c749659a591?w=600&auto=format&fit=crop&q=60", tags: ["Pizza", "Italian", "Dine-in"], rating: 4.6, reviewCount: 1540, distance: "1.5 km", estimatedTime: "30 min", isOpen: false, feature: ["food"], promoActive: false },
-];
-
 
 
 const MOCK_PROMOS: Promo[] = [
@@ -137,39 +127,48 @@ export function CategoryClient({ feature }: { feature: string }) {
     const [outletSearch, setOutletSearch] = useState("");
     const [productSearch, setProductSearch] = useState("");
 
+
     const { data: all_products, isLoading, error } = useQuery<Product[]>({
         queryKey: ["products", feature, productSearch],
         queryFn: async () => {
             const res = await fetch(`/api/get-all-product?name=${productSearch}`);
-            const data = await res.json();
-            return data.data;
+            if (!res.ok) {
+                throw new Error('Produk gagal didapatkan')
+            }
+            const { data } = await res.json();
+            return ProductSchema.array().parse(data);
         },
     });
 
 
 
+    const { data: all_outlets, isLoading: outletsLoading, isError: outletsError, error: outletsQueryError } = useQuery<Outlet[]>({
+        queryKey: ["outlets", feature, outletSearch],
+        queryFn: async () => {
+            const res = await fetch(`/api/get-all-outlet?search=${outletSearch}`);
+            if (!res.ok) throw new Error("Gagal memuat outlet");
+            const { data } = await res.json();
+            return OutletSchema.array().parse(data);
+        },
+    })
+    const handleProductSearch = (e: any) => {
+        setProductSearch(e.target.value)
+    }
     const filteredOutlets = useMemo(() => {
-        const base = MOCK_OUTLETS.filter((o) => o.feature.includes(feature));
-        if (!outletSearch) return base;
-        return base.filter((o) =>
-            o.name.toLowerCase().includes(outletSearch.toLowerCase()) ||
-            o.tags.some((t) => t.toLowerCase().includes(outletSearch.toLowerCase()))
-        );
-    }, [feature, outletSearch]);
+        return all_outlets?.filter((o) => o.features.includes(feature));
+    }, [all_outlets, outletSearch, feature]);
+    console.log("[outlets] data:", all_outlets, "filtered:", filteredOutlets)
 
     const recommendedProducts = useMemo(() => {
         if (!all_products) return [];
-        return all_products?.filter((p) => p.features.includes(feature) && p.is_recommended)
+        return all_products?.filter((p) => p.features?.includes(feature) && p.isRecommended)
     }, [all_products, feature])
 
     const filteredProducts = useMemo(() => {
-        const base = all_products?.filter((p) => p.features.includes(feature));
+        const base = all_products?.filter((p) => p.features?.includes(feature));
         if (!productSearch) return [];
-        return base?.filter((p) =>
-            p.product_name.toLowerCase().includes(productSearch.toLowerCase()) ||
-            p.outlet.toLowerCase().includes(productSearch.toLowerCase())
-        );
-    }, [feature, productSearch]);
+        return base;
+    }, [all_products, feature, productSearch]);
 
     const relevantPromos = useMemo(
         () => MOCK_PROMOS.filter((p) => p.feature.includes(feature) || p.feature.includes("food")),
@@ -196,7 +195,7 @@ export function CategoryClient({ feature }: { feature: string }) {
                         <h1 className="text-2xl md:text-4xl font-black text-white leading-tight">{meta.label}</h1>
                         <p className="text-white/75 text-sm mt-1">{meta.description}</p>
                         <div className="flex items-center gap-3 mt-2 text-white/60 text-xs">
-                            <span>{filteredOutlets.length} outlet tersedia</span>
+                            <span>{filteredOutlets?.length} outlet tersedia</span>
                             <span>·</span>
                             <span>{recommendedProducts?.length} produk rekomendasi</span>
                         </div>
@@ -254,7 +253,19 @@ export function CategoryClient({ feature }: { feature: string }) {
                         )}
                     </div>
 
-                    {filteredOutlets.length === 0 ? (
+                    {outletsError ? (
+                        <div className="flex flex-col items-center gap-3 py-12 text-muted-foreground">
+                            <Store className="h-12 w-12 opacity-20" />
+                            <p className="font-bold">Gagal memuat outlet</p>
+                            <p className="text-sm">Coba refresh halaman</p>
+                        </div>
+                    ) : outletsLoading ? (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                            {Array.from({ length: 3 }).map((_, i) => (
+                                <div key={i} className="h-64 rounded-[1.75rem] bg-muted animate-pulse" />
+                            ))}
+                        </div>
+                    ) : filteredOutlets?.length === 0 ? (
                         <div className="flex flex-col items-center gap-3 py-12 text-muted-foreground">
                             <Store className="h-12 w-12 opacity-20" />
                             <p className="font-bold">Outlet tidak ditemukan</p>
@@ -263,7 +274,7 @@ export function CategoryClient({ feature }: { feature: string }) {
                     ) : (
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
                             <AnimatePresence>
-                                {filteredOutlets.map((outlet) => (
+                                {filteredOutlets?.map((outlet) => (
                                     <OutletCard key={outlet.id} outlet={outlet} feature={feature} />
                                 ))}
                             </AnimatePresence>
@@ -284,7 +295,7 @@ export function CategoryClient({ feature }: { feature: string }) {
                         <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
                         <Input
                             value={productSearch}
-                            onChange={(e) => setProductSearch(e.target.value)}
+                            onChange={handleProductSearch}
                             placeholder="Nama produk atau layanan..."
                             className="pl-12 pr-10 py-6 rounded-2xl text-base shadow-sm border-border/60 bg-card"
                         />
@@ -313,7 +324,7 @@ export function CategoryClient({ feature }: { feature: string }) {
                                 ) : (
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                         {filteredProducts?.map((product) => (
-                                            <ProductSearchCard key={product.id} product={product} feature={feature} />
+                                            <ProductSearchCard key={product?.id} product={product} feature={feature} />
                                         ))}
                                     </div>
                                 )}

@@ -10,6 +10,7 @@ export type OrderFeature = {
     iconColor: string;
     badge?: string;
     count: string;
+    color: string;
 };
 
 
@@ -24,6 +25,7 @@ export const ORDER_FEATURES: OrderFeature[] = [
         iconColor: "text-rose-600",
         badge: "Terpopuler",
         count: "240+ menu",
+        color: "text-rose-600"
     },
     {
         slug: "drink",
@@ -34,6 +36,7 @@ export const ORDER_FEATURES: OrderFeature[] = [
         iconBg: "bg-amber-100",
         iconColor: "text-amber-700",
         count: "120+ menu",
+        color: 'text-amber-700'
     },
     {
         slug: "service",
@@ -44,6 +47,7 @@ export const ORDER_FEATURES: OrderFeature[] = [
         iconBg: "bg-blue-100",
         iconColor: "text-blue-600",
         count: "80+ layanan",
+        color: "text-orange-600"
     },
     {
         slug: "mart",
@@ -55,6 +59,7 @@ export const ORDER_FEATURES: OrderFeature[] = [
         iconColor: "text-emerald-600",
         badge: "Baru",
         count: "500+ produk",
+        color: "text-emerald-600"
     },
     {
         slug: "delivery",
@@ -65,6 +70,7 @@ export const ORDER_FEATURES: OrderFeature[] = [
         iconBg: "bg-violet-100",
         iconColor: "text-violet-600",
         count: "SamDay & express",
+        color: "text-violet-600"
     },
     {
         slug: "beauty",
@@ -75,6 +81,7 @@ export const ORDER_FEATURES: OrderFeature[] = [
         iconBg: "bg-pink-100",
         iconColor: "text-pink-600",
         count: "60+ tempat",
+        color: 'text-violet-600'
     },
     {
         slug: "ride",
@@ -85,6 +92,7 @@ export const ORDER_FEATURES: OrderFeature[] = [
         iconBg: "bg-cyan-100",
         iconColor: "text-cyan-600",
         count: "30+ armada",
+        color: 'text-cyan-600'
     },
     {
         slug: "entertainment",
@@ -96,5 +104,6 @@ export const ORDER_FEATURES: OrderFeature[] = [
         iconColor: "text-indigo-600",
         badge: "Segera",
         count: "Coming soon",
+        color: 'text-indigo-600'
     },
 ];

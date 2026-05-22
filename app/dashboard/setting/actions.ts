@@ -17,6 +17,7 @@ export type OutletFormData = {
     lon: string;
     is_open: boolean;
     features: string[];
+    tags: string[];
     avatar?: string;
 };
 
@@ -33,6 +34,7 @@ export async function getOutletAction() {
             avatar: outletsTable.avatar,
             is_open: outletsTable.is_open,
             features: outletsTable.features,
+            tags: outletsTable.tags,
         })
         .from(outletsTable)
         .where(eq(outletsTable.user_id, session.user.id))
@@ -54,6 +56,7 @@ export async function updateOutletAction(data: OutletFormData) {
                 lon: data.lon,
                 is_open: data.is_open,
                 features: data.features,
+                tags: data.tags,
                 ...(data.avatar && { avatar: data.avatar }),
             })
             .where(eq(outletsTable.user_id, session.user.id));

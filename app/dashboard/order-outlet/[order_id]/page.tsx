@@ -21,7 +21,7 @@ import {
 
 const STATUS_MAP = {
     addToChart: { label: "Diproses", icon: ShoppingCart, className: "bg-blue-100 text-blue-700" },
-    checkout:   { label: "Selesai",  icon: CheckCircle2, className: "bg-emerald-100 text-emerald-700" },
+    checkout: { label: "Selesai", icon: CheckCircle2, className: "bg-emerald-100 text-emerald-700" },
 } as const;
 
 function fmtIDR(n: number) {
@@ -62,7 +62,8 @@ export default function OrderDetailPage() {
     const order_id = params?.order_id ?? "";
     const router = useRouter();
 
-    const [data, setData]       = useState<ApiResponse | null>(null);
+
+    const [data, setData] = useState<ApiResponse | null>(null);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
@@ -88,10 +89,10 @@ export default function OrderDetailPage() {
 
     const { outlet, items, customer } = data;
 
-    const totalAmount  = items.reduce((sum, i) => sum + Number(i.summaryPrice), 0);
-    const firstItem    = items[0];
-    const orderStatus  = firstItem.status;
-    const orderDate    = firstItem.createdAt
+    const totalAmount = items.reduce((sum, i) => sum + Number(i.summaryPrice), 0);
+    const firstItem = items[0];
+    const orderStatus = firstItem.status;
+    const orderDate = firstItem.createdAt
         ? format(new Date(firstItem.createdAt), "d MMMM yyyy, HH:mm", { locale: idLocale })
         : "-";
 

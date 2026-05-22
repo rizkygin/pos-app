@@ -3,21 +3,9 @@
 import Link from "next/link";
 import Image from "next/image";
 import { motion } from "motion/react";
-import { Star, MapPin, Clock, ArrowRight } from "lucide-react";
+import { Star, MapPin, Clock, ArrowRight, Phone } from "lucide-react";
 import { Button } from "@/components/ui/button";
-
-type Outlet = {
-    id: string;
-    name: string;
-    image: string;
-    tags: string[];
-    rating: number;
-    reviewCount: number;
-    distance: string;
-    estimatedTime: string;
-    isOpen: boolean;
-    promoActive: boolean;
-};
+import type { Outlet } from "@/lib/types";
 
 export function OutletCard({ outlet, feature }: { outlet: Outlet; feature: string }) {
     return (
@@ -28,16 +16,18 @@ export function OutletCard({ outlet, feature }: { outlet: Outlet; feature: strin
             className="group bg-card border border-border/60 rounded-[1.75rem] overflow-hidden shadow-sm hover:shadow-xl transition-all duration-300"
         >
             <div className="relative h-44 overflow-hidden">
-                <Image src={outlet.image} alt={outlet.name} fill className="object-cover group-hover:scale-110 transition-transform duration-500" />
+                <Image src={outlet.image.startsWith('http') || outlet.image.startsWith('/') ? outlet.image : `/${outlet.image}`} alt={outlet.name} fill className="object-cover group-hover:scale-110 transition-transform duration-500" />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
                 <div className="absolute top-3 left-3 flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/95 backdrop-blur-sm shadow-sm">
                     <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
-                    <span className="text-xs font-black text-black">{outlet.rating.toFixed(1)}</span>
+                    <span className="text-xs font-black text-black">{outlet.ratings}</span>
                     <span className="text-[10px] text-muted-foreground">
                         ({outlet.reviewCount >= 1000 ? (outlet.reviewCount / 1000).toFixed(1) + "k" : outlet.reviewCount})
                     </span>
                 </div>
-                {outlet.promoActive && (
+
+                {/* //if they have promo on the products */}
+                {true && (
                     <div className="absolute top-3 right-3 px-2.5 py-1 rounded-full bg-rose-500/90 backdrop-blur-sm">
                         <span className="text-[10px] font-black text-white">Promo</span>
                     </div>
@@ -63,12 +53,12 @@ export function OutletCard({ outlet, feature }: { outlet: Outlet; feature: strin
                 <div className="flex items-center gap-3 text-xs text-muted-foreground">
                     <div className="flex items-center gap-1">
                         <MapPin className="h-3 w-3" />
-                        <span>{outlet.distance}</span>
+                        <span>{outlet.address}</span>
                     </div>
                     <div className="h-1 w-1 rounded-full bg-muted-foreground/30" />
                     <div className="flex items-center gap-1">
-                        <Clock className="h-3 w-3" />
-                        <span>{outlet.estimatedTime}</span>
+                        <Phone className="h-3 w-3" />
+                        <span>{outlet.phone}</span>
                     </div>
                 </div>
 

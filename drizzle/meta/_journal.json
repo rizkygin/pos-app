@@ -50,6 +50,13 @@
       "when": 1779162420359,
       "tag": "0006_mature_sumo",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1779354291432,
+      "tag": "0007_lying_vivisector",
+      "breakpoints": true
     }
   ]
 }

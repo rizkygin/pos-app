@@ -1,33 +1,44 @@
-export type Outlet = {
-    id: string;
-    name: string;
-    image: string;
-    tags: string[];
-    rating: number;
-    reviewCount: number;
-    distance: string;
-    estimatedTime: string;
-    isOpen: boolean;
-    feature: string[];
-    promoActive: boolean;
-};
+import { z } from "zod";
 
-export type Product = {
-    id: string;
-    product_name: string;
-    image: string;
-    price: number;
-    price_mark_down?: number;
-    buying_price: number;
-    ratings: number;
-    review_count: number;
-    outlet: string;
-    outletId: string;
-    features: string[];
-    is_recommended: boolean;
-    discount_percent?: number;
-    unit: string;
-};
+
+export const OutletSchema = z.object({
+    id: z.number(),
+    name: z.string(),
+    image: z.string(),
+    tags: z.array(z.string().optional()),
+    ratings: z.coerce.number(),
+    reviewCount: z.number(),
+    estimatedTime: z.string(),
+    isOpen: z.boolean(),
+    features: z.array(z.string().optional()),
+    coverImage: z.string(),
+    address: z.string(),
+    phone: z.string(),
+})
+
+export type Outlet = z.infer<typeof OutletSchema>;
+
+
+export const ProductSchema = z.object({
+    id: z.string(),
+    product_name: z.string(),
+    price: z.number(),
+    price_mark_down: z.number(),
+    category: z.string(),
+    image: z.string(),
+    ratings: z.number(),
+    isAvailable: z.boolean(),
+    description: z.string(),
+    unit: z.string(),
+    outlet: z.string(),
+    outleid: z.number(),
+    reviewCount: z.string(),
+    isRecommended: z.boolean().optional(),
+    discountPercent: z.number().optional(),
+    features: z.array(z.string()).optional(),
+});
+
+export type Product = z.infer<typeof ProductSchema>;
 
 export type Promo = {
     id: string;

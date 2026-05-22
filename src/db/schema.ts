@@ -19,6 +19,18 @@ export const usersTable = pgTable("users", {
     ...timestamps
 });
 
+export const locationsTable = pgTable("locations", {
+    id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+    user_id: text('user_id').notNull().references(() => usersTable.id),
+    label: varchar("label", { length: 100 }).notNull().default('Rumah'),
+    address: varchar("address", { length: 255 }).notNull(),
+    lat: varchar("lat", { length: 255 }).notNull(),
+    lon: varchar("lon", { length: 255 }).notNull(),
+    note: varchar("note", { length: 255 }).default(''),
+    is_default: boolean("is_default").default(false).notNull(),
+    ...timestamps,
+});
+
 export const outletsTable = pgTable("outlets", {
     id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
     name: varchar("name", { length: 255 }).notNull(),
@@ -78,7 +90,7 @@ export const productsTable = pgTable('products', {
 
 export const ordersTable = pgTable('orders', {
     id: text('id').primaryKey(),
-    costomer_id: integer("costomer_id").notNull().references(() => customersTable.id),
+    customer_id: integer("customer_id").notNull().references(() => customersTable.id),
     courier_id: integer("courier_id").references(() => couriersTable.id),
     outlet_id: integer("outlet_id").notNull().references(() => outletsTable.id),
     status: ORDER_STATUS("status").default('pending').notNull(),
@@ -90,7 +102,7 @@ export const ordersTable = pgTable('orders', {
     ...timestamps,
 }, (table) => [
     index("id_idx").on(table.id),
-    index("costomer_id_idx").on(table.costomer_id),
+    index("costomer_id_idx").on(table.customer_id),
     index("courier_id_idx").on(table.courier_id),
     index("outlet_id_idx").on(table.outlet_id),
 ])

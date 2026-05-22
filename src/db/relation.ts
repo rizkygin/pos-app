@@ -81,7 +81,7 @@ export const ratingsRelations = relations(schema.ratingsTable, ({ one }) => ({
 
 export const ordersRelations = relations(schema.ordersTable, ({ one, many }) => ({
     hasCustomer: one(schema.customersTable, {
-        fields: [schema.ordersTable.costomer_id],
+        fields: [schema.ordersTable.customer_id],
         references: [schema.customersTable.id]
     }),
     hasCourier: one(schema.couriersTable, {

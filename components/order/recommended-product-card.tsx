@@ -9,22 +9,22 @@ import { fmtIDR } from "@/lib/utils/format";
 import { type Product } from "@/lib/types";
 
 export function RecommendedProductCard({ product, feature }: { product: Product; feature: string }) {
-    const finalPrice = product.discount_percent
-        ? product.price - Math.floor(product.price * (product.discount_percent / 100))
+    const finalPrice = product.discountPercent
+        ? product.price - Math.floor(product.price * (product.discountPercent / 100))
         : product.price;
 
     return (
-        <Link href={`/dashboard/order/${feature}/${product.id}`}>
+        <Link href={`/dashboard/order/${feature}/${product.outleid}`}>
             <motion.div
                 whileHover={{ y: -4, scale: 1.02 }}
                 className="group flex-shrink-0 w-44 bg-card border border-border/60 rounded-[1.5rem] overflow-hidden shadow-sm hover:shadow-lg transition-all cursor-pointer"
             >
                 <div className="relative h-28 overflow-hidden">
 
-                    <Image src={product.image} alt={product.product_name} fill className="object-cover group-hover:scale-110 transition-transform duration-500" />
-                    {product.discount_percent && (
+                    <Image src={product.image.startsWith('http') || product.image.startsWith('/') ? product.image : `/${product.image}`} alt={product.product_name} fill className="object-cover group-hover:scale-110 transition-transform duration-500" />
+                    {product.discountPercent && (
                         <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-rose-500/90 backdrop-blur-sm text-[9px] font-black text-white">
-                            -{product.discount_percent}%
+                            -{product.discountPercent}%
                         </span>
                     )}
                     <span className="absolute top-2 right-2 flex items-center gap-0.5 px-2 py-0.5 rounded-full bg-amber-400/90 backdrop-blur-sm text-[9px] font-black text-amber-900">
@@ -37,10 +37,10 @@ export function RecommendedProductCard({ product, feature }: { product: Product;
                     <div className="flex items-center gap-1">
                         <StarRating rating={product.ratings} size="sm" />
                         <span className="text-[10px] font-bold text-amber-600">{product.ratings}</span>
-                        <span className="text-[10px] text-muted-foreground">({product.review_count})</span>
+                        <span className="text-[10px] text-muted-foreground">({product.reviewCount})</span>
                     </div>
                     <div>
-                        {product.discount_percent && (
+                        {product.discountPercent && (
                             <p className="text-[10px] line-through text-muted-foreground">{fmtIDR(product.price)}</p>
                         )}
                         <p className="text-xs font-black text-rose-600">{fmtIDR(finalPrice)}</p>

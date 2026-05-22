@@ -9,8 +9,8 @@ export type WishlistItem = {
     price: number;
     discountPercent?: number;
     rating: number;
-    outletName: string;
-    outletId: string;
+    outletName?: string;
+    outletId?: string;
     feature: string;
     unit: string;
 };
