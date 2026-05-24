@@ -14,29 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 
 import Link from "next/link";
-type RecentOrder = {
-    orderId: string;
-    itemCount: number;
-    totalAmount: number;
-    status: "addToChart" | "checkout" | null;
-};
-
-function fmtIDR(amount: number) {
-    return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(amount);
-}
-
-const STATUS_MAP = {
-    addToChart: { label: "Diproses", color: "bg-blue-100 text-blue-600" },
-    checkout:   { label: "Selesai",  color: "bg-emerald-100 text-emerald-600" },
-} as const;
-
-export const OwnerDashboard = ({
-    activeOrdersCount,
-    recentOrders,
-}: {
-    activeOrdersCount: number;
-    recentOrders: RecentOrder[];
-}) => {
+export const OwnerDashboard = () => {
     return (
         <main className="px-4 mx-2 md:mx-6 pb-12">
             <DashboardHeader
@@ -75,7 +53,7 @@ export const OwnerDashboard = ({
                     </div>
                     <div className="mt-4 flex flex-col gap-1">
                         <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Active Orders</p>
-                        <h2 className="text-3xl font-extrabold tracking-tight">{activeOrdersCount}</h2>
+                        <h2 className="text-3xl font-extrabold tracking-tight">142</h2>
                     </div>
                     <div className="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-purple-600/5 blur-2xl transition-opacity group-hover:opacity-100 opacity-50" />
                 </div>
@@ -124,41 +102,32 @@ export const OwnerDashboard = ({
                             <h3 className="text-lg font-bold tracking-tight text-foreground">Recent Orders</h3>
                             <p className="text-xs text-muted-foreground uppercase tracking-widest font-bold">Live Updates</p>
                         </div>
-                        <Link href="/dashboard/order-outlet">
-                            <Button variant="outline" size="sm" className="text-xs font-bold border-muted hover:bg-muted/50 transition-colors">View All</Button>
-                        </Link>
+                        <Button variant="outline" size="sm" className="text-xs font-bold border-muted hover:bg-muted/50 transition-colors">View All</Button>
                     </div>
                     <div className="space-y-3">
-                        {recentOrders.length === 0 ? (
-                            <div className="flex flex-col items-center gap-2 py-8 text-muted-foreground">
-                                <History className="h-8 w-8 opacity-20" />
-                                <p className="text-sm font-semibold">Belum ada pesanan</p>
+                        {[
+                            { id: "#ORD-7721", items: "3 Items", amount: "$124.00", status: "Processing", color: "bg-blue-100 text-blue-600", icon: ShoppingCart },
+                            { id: "#ORD-7720", items: "1 Items", amount: "$45.50", status: "Completed", color: "bg-emerald-100 text-emerald-600", icon: ShoppingBag },
+                            { id: "#ORD-7719", items: "5 Items", amount: "$310.00", status: "Pending", color: "bg-amber-100 text-amber-600", icon: History },
+                        ].map((order, i) => (
+                            <div key={i} className="group flex items-center justify-between p-4 rounded-xl border border-transparent hover:border-muted hover:bg-muted/10 transition-all cursor-pointer">
+                                <div className="flex items-center gap-4">
+                                    <div className={`p-2 rounded-lg ${order.color} opacity-80 group-hover:opacity-100 transition-opacity`}>
+                                        <order.icon className="h-4 w-4" />
+                                    </div>
+                                    <div>
+                                        <p className="text-sm font-bold group-hover:text-blue-600 transition-colors">{order.id}</p>
+                                        <p className="text-xs text-muted-foreground">{order.items}</p>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-6 text-right">
+                                    <span className="text-sm font-bold tabular-nums">{order.amount}</span>
+                                    <span className={`hidden sm:inline-block px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider ${order.color}`}>
+                                        {order.status}
+                                    </span>
+                                </div>
                             </div>
-                        ) : recentOrders.map((order) => {
-                            const s = order.status ? STATUS_MAP[order.status] : { label: "Pending", color: "bg-amber-100 text-amber-600" };
-                            const Icon = order.status === "checkout" ? ShoppingBag : order.status === "addToChart" ? ShoppingCart : History;
-                            return (
-                                <Link key={order.orderId} href={`/dashboard/order-outlet/${order.orderId}`} className="group flex items-center justify-between p-4 rounded-xl border border-transparent hover:border-muted hover:bg-muted/10 transition-all cursor-pointer">
-                                    <div className="flex items-center gap-4">
-                                        <div className={`p-2 rounded-lg ${s.color} opacity-80 group-hover:opacity-100 transition-opacity`}>
-                                            <Icon className="h-4 w-4" />
-                                        </div>
-                                        <div>
-                                            <p className="text-sm font-bold group-hover:text-blue-600 transition-colors">
-                                                #{order.orderId.slice(-8).toUpperCase()}
-                                            </p>
-                                            <p className="text-xs text-muted-foreground">{order.itemCount} item</p>
-                                        </div>
-                                    </div>
-                                    <div className="flex items-center gap-6 text-right">
-                                        <span className="text-sm font-bold tabular-nums">{fmtIDR(order.totalAmount)}</span>
-                                        <span className={`hidden sm:inline-block px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider ${s.color}`}>
-                                            {s.label}
-                                        </span>
-                                    </div>
-                                </Link>
-                            );
-                        })}
+                        ))}
                     </div>
                 </div>
 
