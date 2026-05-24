@@ -52,3 +52,14 @@ export const getRole = async () => {
 
     return false;
 }
+
+export const getOutlet = async () => {
+    const session = await getSession();
+    const result = await db.select()
+    .from(outletsTable)
+    .where(eq(outletsTable.user_id, session.user.id))
+
+    return {
+        result
+    }
+}

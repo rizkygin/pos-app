@@ -35,6 +35,7 @@ import {
     MapPin,
     UserCog,
     Bike,
+    ClipboardList,
 } from 'lucide-react';
 import { useRouter } from "next/navigation";
 import Link from 'next/link';
@@ -103,6 +104,10 @@ const courierNavItems: NavItem[] = [
     { name: "Lobby Order", url: "/dashboard/lobby", icon: Bike, iconBg: "bg-blue-100 dark:bg-blue-950", iconColor: "text-blue-600 dark:text-blue-400" },
 ];
 
+const ownerNavItems: NavItem[] = [
+    { name: "Active Order", url: "/dashboard/activeorder", icon: ClipboardList, iconBg: "bg-emerald-100 dark:bg-emerald-950", iconColor: "text-emerald-600 dark:text-emerald-400" },
+];
+
 export function AppSidebar({ isOwner = false, isCourier = false }: { isOwner?: boolean; isCourier?: boolean }) {
     const router = useRouter();
     const currentUrl = useCurrentUrl();
@@ -160,6 +165,9 @@ export function AppSidebar({ isOwner = false, isCourier = false }: { isOwner?: b
                     </SidebarGroupLabel>
                     <SidebarMenu className="gap-0.5">
                         {visibleNavMain.map((item) => (
+                            <NavRow key={item.name} item={item} isActive={item.url === currentUrl} />
+                        ))}
+                        {isOwner && ownerNavItems.map((item) => (
                             <NavRow key={item.name} item={item} isActive={item.url === currentUrl} />
                         ))}
                         {isCourier && courierNavItems.map((item) => (

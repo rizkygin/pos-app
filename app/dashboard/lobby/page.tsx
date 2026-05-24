@@ -3,7 +3,7 @@ import { db } from "@/src/db";
 import { couriersTable } from "@/src/db/schema";
 import { eq } from "drizzle-orm";
 import { getSession } from "@/lib/auth";
-import { CourierDashboard } from "@/components/dashboard/courier-dashboard";
+import { CourierLobby } from "@/components/dashboard/courier-lobby";
 
 export default async function LobbyPage() {
     const session = await getSession();
@@ -16,5 +16,9 @@ export default async function LobbyPage() {
 
     if (!courier) redirect("/dashboard");
 
-    return <CourierDashboard />;
+    return (
+        <main className="px-4 mx-2 md:mx-6 pb-12">
+            <CourierLobby courierId={courier.id} />
+        </main>
+    );
 }
