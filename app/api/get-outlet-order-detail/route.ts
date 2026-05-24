@@ -70,7 +70,7 @@ export const GET = async (req: Request) => {
                     address: usersTable.address,
                 })
                 .from(ordersTable)
-                .innerJoin(customersTable, eq(ordersTable.costomer_id, customersTable.id))
+                .innerJoin(customersTable, eq(ordersTable.customer_id, customersTable.id))
                 .innerJoin(usersTable, eq(customersTable.user_id, usersTable.id))
                 .where(eq(ordersTable.id, order_id))
                 .limit(1),

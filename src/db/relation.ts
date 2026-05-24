@@ -64,7 +64,7 @@ export const orderDetailsRelations = relations(schema.orderDetailsTable, ({ one 
 
 export const ratingsRelations = relations(schema.ratingsTable, ({ one }) => ({
     hasOrderDetails: one(schema.orderDetailsTable, {
-        fields: [schema.ratingsTable.orderDetailsTable],
+        fields: [schema.ratingsTable.order_details_id],
         references: [schema.orderDetailsTable.id]
     }),
     hasReviewer: one(schema.usersTable, {
@@ -76,7 +76,15 @@ export const ratingsRelations = relations(schema.ratingsTable, ({ one }) => ({
         fields: [schema.ratingsTable.reciepent],
         references: [schema.usersTable.id],
         relationName: "reciepent"
-    })
+    }),
+    hasOutlet: one(schema.outletsTable, {
+        fields: [schema.ratingsTable.outlet_id],
+        references: [schema.outletsTable.id]
+    }),
+    hasProduct: one(schema.productsTable, {
+        fields: [schema.ratingsTable.product_id],
+        references: [schema.productsTable.id]
+    }),
 }));
 
 export const ordersRelations = relations(schema.ordersTable, ({ one, many }) => ({

@@ -7,7 +7,7 @@ import { Pool } from 'pg';
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const db = drizzle({ client: pool });
 
-migrate(db, { migrationsFolder: './drizzle' })
+migrate(db, { migrationsFolder: './drizzle', migrationsTable: '__drizzle_migrations', migrationsSchema: 'public' })
     .then(() => console.log('Migration success'))
     .catch((err) => console.error('Migration failed:', err))
     .finally(() => pool.end());

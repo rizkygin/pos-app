@@ -8,9 +8,9 @@ import { Separator } from "@/components/ui/separator";
 import { fmtIDR, discountedPrice } from "@/lib/utils/format";
 import type { OrderProduct } from "@/components/order/product-card";
 import type { OutletPromo } from "@/components/order/outlet-promo-card";
-import { useTransition } from "react";
+import { useTransition, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { customerMakingOrder } from "@/app/dashboard/order/[feature]/[outletId]/action";
+import { getDeliveryFee } from "@/app/dashboard/order/[feature]/[outletId]/action";
 import { checkUserHasLocations } from "@/app/dashboard/users/locations/setting/actions";
 
 type Product = OrderProduct;
@@ -40,7 +40,18 @@ export function BasketSheetContent({
     outlet_id: number
 }) {
     const [isPending, setTransition] = useTransition();
+    const [deliveryFee, setDeliveryFee] = useState<number | null>(null);
+    const [feeError, setFeeError] = useState<string | null>(null);
     const router = useRouter();
+
+    useEffect(() => {
+        setDeliveryFee(null);
+        setFeeError(null);
+        getDeliveryFee(outlet_id).then((result) => {
+            if ("error" in result) setFeeError(result.error);
+            else setDeliveryFee(result.fee);
+        });
+    }, [outlet_id]);
 
     const subtotal = cart.reduce((acc, item) => {
         const price = discountedPrice(item.product.price, item.product.discountPercent);
@@ -52,7 +63,7 @@ export function BasketSheetContent({
             ? Math.floor(subtotal * (appliedPromo.discountPercent / 100))
             : 0;
 
-    const total = subtotal - promoDiscount;
+    const total = subtotal - promoDiscount + (deliveryFee ?? 0);
 
     const handleCheckout = () => {
         setTransition(async () => {
@@ -61,20 +72,11 @@ export function BasketSheetContent({
                 router.push("/dashboard/users/locations/setting");
                 return;
             }
-            await customerMakingOrder({
-                outlet_id: outlet_id,
-                delivery_fee: "10000",
-                promo_id: appliedPromo ? Number(appliedPromo.id) : undefined,
-                discount_amount: promoDiscount > 0 ? promoDiscount : undefined,
-                items: cart.map((item) => ({
-                    product_id: item.product.id,
-                    quantity: item.quantity,
-                    note_product: item.note || undefined,
-                    summary_price: String(
-                        discountedPrice(item.product.price, item.product.discountPercent) * item.quantity
-                    ),
-                })),
-            });
+            sessionStorage.setItem(
+                "pos_invoice_draft",
+                JSON.stringify({ outlet_id, cart, appliedPromo, deliveryFee, subtotal, promoDiscount, total })
+            );
+            router.push("/dashboard/order/invoice");
         });
     }
 
@@ -172,6 +174,16 @@ export function BasketSheetContent({
                             <span className="font-semibold">-{fmtIDR(promoDiscount)}</span>
                         </div>
                     )}
+                    <div className="flex justify-between text-muted-foreground">
+                        <span>Ongkos kirim</span>
+                        <span className={`font-semibold ${feeError ? "text-destructive" : ""}`}>
+                            {feeError
+                                ? feeError
+                                : deliveryFee === null
+                                ? "Menghitung..."
+                                : fmtIDR(deliveryFee)}
+                        </span>
+                    </div>
                     <Separator />
                     <div className="flex justify-between font-black text-base">
                         <span>Total</span>
@@ -181,6 +193,7 @@ export function BasketSheetContent({
 
                 <Button
                     onClick={handleCheckout}
+                    disabled={isPending || !!feeError || deliveryFee === null}
                     className="w-full rounded-2xl bg-rose-500 hover:bg-rose-600 text-white font-black py-6 shadow-lg shadow-rose-200">
                     Checkout <ArrowRight className="ml-2 h-4 w-4" />
                 </Button>

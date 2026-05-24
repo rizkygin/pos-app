@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import { MapPin, Navigation, Loader2, Plus, Star, Pencil, Trash2, X, Check } from "lucide-react";
@@ -30,8 +30,8 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     );
 }
 
-const DEFAULT_LAT = -6.2088;
-const DEFAULT_LON = 106.8456;
+const DEFAULT_LAT = -6.208800;
+const DEFAULT_LON = 106.845600;
 
 function resetForm() {
     return { label: "Rumah", address: "", lat: DEFAULT_LAT, lon: DEFAULT_LON, note: "" };
@@ -47,8 +47,50 @@ export function CustomerLocationSetting({ locations }: { locations: UserLocation
     const [lon, setLon] = useState(DEFAULT_LON);
     const [note, setNote] = useState("");
     const [locating, setLocating] = useState(false);
+    const [statusIdx, setStatusIdx] = useState(0);
     const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
     const [isPending, startTransition] = useTransition();
+
+    const locatingMessages = [
+        "Mencari lokasi akurat...",
+        "Sebentar lagi...",
+        "Yang ganteng sabar...",
+        "Yang cantik sabar...",
+        "GPS lagi pemanasan dulu...",
+        "Bentar, lagi nanya satelit...",
+        "Satelitnya lagi makan siang...",
+        "Udah deket kok...",
+        "Jangan kemana-mana ya...",
+        "Lagi ngitung koordinat nih...",
+        "Dikit lagi, beneran...",
+        "Masih proses, tenang aja...",
+        "Makasih udah nunggu 🙏",
+        "Sinyal GPSnya lagi males...",
+        "Hampir ketemu lokasinya!",
+    ];
+
+    const cycleRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const lastIdxRef = useRef<number>(-1);
+
+    function randomIdx() {
+        let next: number;
+        do { next = Math.floor(Math.random() * locatingMessages.length); }
+        while (next === lastIdxRef.current);
+        lastIdxRef.current = next;
+        return next;
+    }
+
+    useEffect(() => {
+        if (locating) {
+            setStatusIdx(randomIdx());
+            cycleRef.current = setInterval(() => {
+                setStatusIdx(randomIdx());
+            }, 3000);
+        } else {
+            if (cycleRef.current) clearInterval(cycleRef.current);
+        }
+        return () => { if (cycleRef.current) clearInterval(cycleRef.current); };
+    }, [locating]);
 
     function openAddForm() {
         const f = resetForm();
@@ -110,7 +152,7 @@ export function CustomerLocationSetting({ locations }: { locations: UserLocation
                             : "Permintaan lokasi timeout. Coba lagi.";
                 alert(msg);
                 setLocating(false);
-            }
+            },
         );
     }
 
@@ -218,7 +260,7 @@ export function CustomerLocationSetting({ locations }: { locations: UserLocation
                                         </span>
                                     )}
                                 </div>
-                                <div className="flex items-center gap-1 flex-shrink-0">
+                                <div className="flex items-center gap-1 shrink-0">
                                     {!loc.is_default && (
                                         <button
                                             onClick={() => handleSetDefault(loc.id)}
@@ -308,13 +350,36 @@ export function CustomerLocationSetting({ locations }: { locations: UserLocation
                                     size="sm"
                                     onClick={handleGetLocation}
                                     disabled={locating}
-                                    className="rounded-xl flex-shrink-0"
+                                    className="rounded-xl shrink-0 min-w-44 overflow-hidden"
                                 >
                                     {locating
-                                        ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                                        : <Navigation className="h-3.5 w-3.5 mr-1.5" />
+                                        ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin shrink-0" />
+                                        : <Navigation className="h-3.5 w-3.5 mr-1.5 shrink-0" />
                                     }
-                                    {locating ? "Mendeteksi..." : "Lokasi Saya"}
+                                    <AnimatePresence mode="wait" initial={false}>
+                                        {locating ? (
+                                            <motion.span
+                                                key={statusIdx}
+                                                initial={{ opacity: 0, y: 6 }}
+                                                animate={{ opacity: 1, y: 0 }}
+                                                exit={{ opacity: 0, y: -6 }}
+                                                transition={{ duration: 0.25 }}
+                                                className="truncate"
+                                            >
+                                                {locatingMessages[statusIdx]}
+                                            </motion.span>
+                                        ) : (
+                                            <motion.span
+                                                key="idle"
+                                                initial={{ opacity: 0, y: 6 }}
+                                                animate={{ opacity: 1, y: 0 }}
+                                                exit={{ opacity: 0, y: -6 }}
+                                                transition={{ duration: 0.2 }}
+                                            >
+                                                Lokasi Saya
+                                            </motion.span>
+                                        )}
+                                    </AnimatePresence>
                                 </Button>
                             </div>
                             <LocationPicker

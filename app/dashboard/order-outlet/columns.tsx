@@ -1,18 +1,21 @@
 "use client"
 
+import React from "react"
 import { ColumnDef } from "@tanstack/react-table"
 import { Button } from "@/components/ui/button"
-import { ArrowUpDown, BadgeDollarSign, CircleEllipsis, Clock, ArrowRight } from "lucide-react"
+import { ArrowUpDown, ArrowRight, Clock, CheckCircle2, ChefHat, Package, Bike, XCircle, ShoppingBag } from "lucide-react"
 import Link from "next/link"
 import { format } from "date-fns"
 import { id as idLocale } from "date-fns/locale"
+
+export type OrderStatus = "pending" | "confirmed" | "preparing" | "ready" | "on_delivery" | "delivered" | "cancelled"
 
 export type Order = {
     orderId: string
     customerName: string
     itemCount: number
     totalAmount: number
-    status: "addToChart" | "checkout" | null
+    status: OrderStatus
     createdAt: string | null
 }
 
@@ -61,24 +64,20 @@ export const columns: ColumnDef<Order>[] = [
         accessorKey: "status",
         header: "Status",
         cell: ({ row }) => {
-            const status = row.getValue("status") as string | null
-            if (status === "checkout") {
-                return (
-                    <div className="w-fit p-1 px-2.5 bg-emerald-50 text-emerald-700 rounded-full flex items-center gap-1 text-xs font-black border border-emerald-200">
-                        <BadgeDollarSign className="w-3.5 h-3.5 text-emerald-500" /> Selesai
-                    </div>
-                )
+            const status = row.getValue("status") as OrderStatus
+            const map: Record<OrderStatus, { label: string; icon: React.ReactNode; cls: string }> = {
+                pending:     { label: "Pending",      icon: <Clock className="w-3.5 h-3.5" />,        cls: "bg-amber-50 text-amber-700 border-amber-200" },
+                confirmed:   { label: "Dikonfirmasi", icon: <CheckCircle2 className="w-3.5 h-3.5" />, cls: "bg-blue-50 text-blue-700 border-blue-200" },
+                preparing:   { label: "Disiapkan",    icon: <ChefHat className="w-3.5 h-3.5" />,      cls: "bg-violet-50 text-violet-700 border-violet-200" },
+                ready:       { label: "Siap",         icon: <Package className="w-3.5 h-3.5" />,      cls: "bg-cyan-50 text-cyan-700 border-cyan-200" },
+                on_delivery: { label: "Diantar",      icon: <Bike className="w-3.5 h-3.5" />,         cls: "bg-orange-50 text-orange-700 border-orange-200" },
+                delivered:   { label: "Selesai",      icon: <ShoppingBag className="w-3.5 h-3.5" />,  cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+                cancelled:   { label: "Dibatalkan",   icon: <XCircle className="w-3.5 h-3.5" />,      cls: "bg-red-50 text-red-700 border-red-200" },
             }
-            if (status === "addToChart") {
-                return (
-                    <div className="w-fit p-1 px-2.5 bg-blue-50 text-blue-700 rounded-full flex items-center gap-1 text-xs font-black border border-blue-200">
-                        <CircleEllipsis className="w-3.5 h-3.5 text-blue-500" /> Diproses
-                    </div>
-                )
-            }
+            const cfg = map[status] ?? map.pending
             return (
-                <div className="w-fit p-1 px-2.5 bg-amber-50 text-amber-700 rounded-full flex items-center gap-1 text-xs font-black border border-amber-200">
-                    <Clock className="w-3.5 h-3.5 text-amber-500" /> Pending
+                <div className={`w-fit p-1 px-2.5 rounded-full flex items-center gap-1 text-xs font-black border ${cfg.cls}`}>
+                    {cfg.icon} {cfg.label}
                 </div>
             )
         },

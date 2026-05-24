@@ -3,7 +3,7 @@
 import { NextResponse } from "next/server";
 import { auth } from '@/lib/auth'
 import { ordersTable, productsTable, orderDetailsTable, outletsTable } from "@/src/db/schema"
-import { eq, desc, count, and, like } from 'drizzle-orm'
+import { eq, desc, count, and, like, notInArray } from 'drizzle-orm'
 import { db } from '@/src/db'
 import { headers } from "next/headers";
 
@@ -50,6 +50,8 @@ export const GET = async (req: Request) => {
         if (search !== '') {
 
         }
+        const statusFilter = notInArray(ordersTable.status, ['cancelled', 'pending']);
+
         const getOrderDetails2 = await db.select({
             product_name: productsTable.product_name,
             order_id: orderDetailsTable.order_id,
@@ -58,10 +60,17 @@ export const GET = async (req: Request) => {
             note_product: orderDetailsTable.note_product,
             status: orderDetailsTable.status,
             created_at: orderDetailsTable.created_at,
-        }).from(orderDetailsTable).innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id)).where(and(eq(productsTable.outlet_id, outlet.id), like(productsTable.product_name, `%${search}%`))).limit(limit).offset(offset).orderBy(desc(orderDetailsTable.created_at));
+        }).from(orderDetailsTable)
+            .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
+            .innerJoin(ordersTable, eq(orderDetailsTable.order_id, ordersTable.id))
+            .where(and(eq(productsTable.outlet_id, outlet.id), like(productsTable.product_name, `%${search}%`), statusFilter))
+            .limit(limit).offset(offset).orderBy(desc(orderDetailsTable.created_at));
         const countData = await db.select({
             count: count(orderDetailsTable.id),
-        }).from(orderDetailsTable).innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id)).where(and(eq(productsTable.outlet_id, outlet.id), like(productsTable.product_name, `%${search}%`)));
+        }).from(orderDetailsTable)
+            .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
+            .innerJoin(ordersTable, eq(orderDetailsTable.order_id, ordersTable.id))
+            .where(and(eq(productsTable.outlet_id, outlet.id), like(productsTable.product_name, `%${search}%`), statusFilter));
 
         const getOrderDetailsFinal = await Promise.all(getOrderDetails2);
 

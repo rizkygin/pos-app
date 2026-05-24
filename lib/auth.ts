@@ -6,7 +6,10 @@ import { cache } from "react";
 import { headers } from "next/headers";
 import { nextCookies } from "better-auth/next-js";
 import { redirect } from "next/navigation";
+import { Resend } from "resend";
 
+const resend = new Resend(process.env.RESEND_API_KEY);
+const FROM = "POS App <noreply@yourdomain.com>";
 
 export const auth = betterAuth({
   database: drizzleAdapter(db, {
@@ -18,7 +21,37 @@ export const auth = betterAuth({
       verification: verification,
     },
   }),
-  emailAndPassword: { enabled: true },
+  emailAndPassword: {
+    enabled: true,
+    sendResetPassword: async ({ user, url }) => {
+      await resend.emails.send({
+        from: FROM,
+        to: user.email,
+        subject: "Reset your password",
+        html: `
+          <p>Hi ${user.name},</p>
+          <p>Click the link below to reset your password. This link expires in 1 hour.</p>
+          <a href="${url}" style="display:inline-block;padding:12px 24px;background:#f43f5e;color:#fff;border-radius:8px;text-decoration:none;font-weight:bold;">Reset Password</a>
+          <p>If you didn't request this, ignore this email.</p>
+        `,
+      });
+    },
+  },
+  emailVerification: {
+    sendVerificationEmail: async ({ user, url }) => {
+      await resend.emails.send({
+        from: FROM,
+        to: user.email,
+        subject: "Verify your email address",
+        html: `
+          <p>Hi ${user.name},</p>
+          <p>Click the link below to verify your email address.</p>
+          <a href="${url}" style="display:inline-block;padding:12px 24px;background:#f43f5e;color:#fff;border-radius:8px;text-decoration:none;font-weight:bold;">Verify Email</a>
+          <p>If you didn't create an account, ignore this email.</p>
+        `,
+      });
+    },
+  },
   plugins: [
     nextCookies()
   ],

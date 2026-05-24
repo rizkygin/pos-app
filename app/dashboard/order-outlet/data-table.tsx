@@ -42,9 +42,11 @@ interface OrdersTableProps {
 }
 
 const STATUS_OPTIONS = [
-    { value: "all",        label: "Semua Status" },
-    { value: "addToChart", label: "Diproses" },
-    { value: "checkout",   label: "Selesai" },
+    { value: "all",       label: "Semua Status" },
+    { value: "pending",   label: "Pending" },
+    { value: "aktif",     label: "Aktif (Dikonfirmasi – Diantar)" },
+    { value: "selesai",   label: "Selesai (Delivered)" },
+    { value: "cancelled", label: "Dibatalkan" },
 ]
 
 export function OrdersTable({
@@ -95,28 +97,22 @@ export function OrdersTable({
                         />
                     </div>
                     <div className="flex items-center gap-2">
-                        <Filter className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                        <div className="flex gap-1.5 flex-wrap">
+                        <Filter className="h-4 w-4 text-muted-foreground shrink-0" />
+                        <select
+                            value={status}
+                            onChange={(e) => onStatusChange(e.target.value)}
+                            className="text-xs font-semibold border border-border/60 rounded-md px-3 py-1.5 bg-background text-foreground"
+                        >
                             {STATUS_OPTIONS.map((opt) => (
-                                <button
-                                    key={opt.value}
-                                    onClick={() => onStatusChange(opt.value)}
-                                    className={`px-3 py-1.5 rounded-full text-xs font-black border transition-all ${
-                                        status === opt.value
-                                            ? "bg-foreground text-background border-foreground"
-                                            : "border-border/60 text-muted-foreground hover:border-foreground/30 hover:text-foreground"
-                                    }`}
-                                >
-                                    {opt.label}
-                                </button>
+                                <option key={opt.value} value={opt.value}>{opt.label}</option>
                             ))}
-                        </div>
+                        </select>
                     </div>
                 </div>
 
                 {/* Date range */}
                 <div className="flex flex-wrap items-center gap-2">
-                    <CalendarDays className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                    <CalendarDays className="h-4 w-4 text-muted-foreground shrink-0" />
                     <div className="flex items-center gap-2">
                         <input
                             type="date"

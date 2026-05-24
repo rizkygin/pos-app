@@ -1,7 +1,7 @@
 import getOutletID from "@/lib/outlet-id";
 import { db } from "@/src/db";
-import { orderDetailsTable, outletsTable, productsTable } from "@/src/db/schema";
-import { count, sum, eq, and, gte, lt, sql } from "drizzle-orm";
+import { orderDetailsTable, ordersTable, outletsTable, productsTable } from "@/src/db/schema";
+import { sum, eq, and, gte, lt, sql, notInArray } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 
@@ -42,12 +42,14 @@ export const GET = async (request: Request) => {
                 count_order: sum(orderDetailsTable.quantity),
                 total_terjual: sql<number>`sum(cast(${orderDetailsTable.summary_price} as numeric))`
             }).from(orderDetailsTable)
+                .innerJoin(ordersTable, eq(orderDetailsTable.order_id, ordersTable.id))
                 .leftJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
                 .leftJoin(outletsTable, eq(productsTable.outlet_id, outletsTable.id))
                 .where(and(
                     eq(outletsTable.id, outlet.id),
                     gte(orderDetailsTable.created_at, month.start),
-                    lt(orderDetailsTable.created_at, month.end)))
+                    lt(orderDetailsTable.created_at, month.end),
+                    notInArray(ordersTable.status, ['cancelled', 'pending'])))
 
             return {
                 month: month.label,

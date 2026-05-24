@@ -1,11 +1,11 @@
-import { text, boolean, integer, pgTable, varchar, pgEnum, json, timestamp, index } from "drizzle-orm/pg-core";
+import { text, boolean, integer, pgTable, varchar, pgEnum, json, timestamp, index, numeric } from "drizzle-orm/pg-core";
 import { timestamps } from "./columns.helper";
 
 
 export const VEHICLE_TYPE = pgEnum('vechile_type', ['car', 'motorcycle']);
 export const STATUS = pgEnum('state', ['addToChart', 'checkout']);
-export const ORDER_STATUS = pgEnum('order_status', ['pending', 'confirmed', 'preparing', 'on_delivery', 'delivered', 'cancelled']);
-export const RECIEPENT = pgEnum('receipt', ['customer', 'courier', 'outlet']);
+export const ORDER_STATUS = pgEnum('order_status', ['pending', 'confirmed', 'preparing', 'ready', 'on_delivery', 'delivered', 'cancelled']);
+export const RECIEPENT = pgEnum('receipt', ['customer', 'courier', 'outlet', 'product']);
 export const CASHFLOWS_TRANSACTION_TYPE = pgEnum('cashflows_transaction_type', ['transfer', 'cash']);
 
 export const usersTable = pgTable("users", {
@@ -41,7 +41,7 @@ export const outletsTable = pgTable("outlets", {
     email: varchar("email", { length: 255 }).notNull().unique(),
     user_id: text('user_id').notNull().references(() => usersTable.id),
     avatar: varchar("avatar", { length: 255 }).notNull().default('avatar.png'),
-    ratings: varchar("ratings").default('5'),
+    ratings: numeric("ratings", { precision: 3, scale: 2 }).default('5'),
     review_count: integer("review_count").default(0).notNull(),
     tags: text("tags").array().default([]).notNull(),
     features: text("features").array().default([]).notNull(),
@@ -52,7 +52,7 @@ export const outletsTable = pgTable("outlets", {
 export const customersTable = pgTable("customers", {
     id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
     user_id: text('user_id').notNull().references(() => usersTable.id),
-    ratings: varchar("ratings").default('5'),
+    ratings: numeric("ratings", { precision: 3, scale: 2 }).default('5'),
     ...timestamps,
 });
 
@@ -62,7 +62,7 @@ export const couriersTable = pgTable("couriers", {
     avatar: varchar("avatar", { length: 255 }).notNull().default('avatar-courier.png'),
     vehicle_plate: varchar("vehicle_plate", { length: 255 }).notNull(),
     vehicle_type: VEHICLE_TYPE("vehicle_type").notNull(),
-    ratings: varchar("ratings").default('5'),
+    ratings: numeric("ratings", { precision: 3, scale: 2 }).default('5'),
     ...timestamps,
 });
 
@@ -73,7 +73,7 @@ export const productsTable = pgTable('products', {
     price_mark_down: varchar("price_mark_down", { length: 10 }).notNull(),
     buying_price: varchar("buying_price", { length: 15 }).notNull().default('0'),
     outlet_id: integer("outlet_id").notNull().references(() => outletsTable.id),
-    ratings: varchar("ratings").default('5'),
+    ratings: numeric("ratings", { precision: 3, scale: 2 }).default('5'),
     image: varchar("image", { length: 255 }).notNull().default('avatar.png'),
     category: varchar("category", { length: 255 }).notNull().default('avatar.png'),
     isAvailable: boolean("is_available").default(true).notNull(),
@@ -123,10 +123,13 @@ export const orderDetailsTable = pgTable('orderDetails', {
 
 export const ratingsTable = pgTable('ratings', {
     id: text('id').primaryKey(),
-    orderDetailsTable: integer("order_details_id").notNull().references(() => orderDetailsTable.id),
-    ratings: varchar("ratings").default('5'),
+    order_details_id: integer("order_details_id").notNull().references(() => orderDetailsTable.id),
+    ratings: numeric("ratings", { precision: 3, scale: 2 }).default('5'),
+    comment: text('comment'),
     reviewer: text('reviewer_id').notNull().references(() => usersTable.id),
-    reciepent: text('reciepent_id').notNull().references(() => usersTable.id),
+    reciepent: text('reciepent_id').references(() => usersTable.id),
+    outlet_id: integer('outlet_id').references(() => outletsTable.id),
+    product_id: text('product_id').references(() => productsTable.id),
     reciepent_as: RECIEPENT("reciepent_as"),
     ...timestamps,
 })

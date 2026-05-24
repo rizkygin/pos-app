@@ -1,10 +1,10 @@
 import { getSession } from "@/lib/auth";
 import { db } from "@/src/db";
-import { orderDetailsTable, productsTable } from "@/src/db/schema";
+import { orderDetailsTable, ordersTable, productsTable } from "@/src/db/schema";
 import { getUTCRangeFromLocalDate } from "@/lib/timezone";
 import getOutletID from "@/lib/outlet-id";
 import { NextResponse } from "next/server";
-import { sql, countDistinct, and, gte, lt, eq } from "drizzle-orm";
+import { sql, countDistinct, and, gte, lt, eq, notInArray } from "drizzle-orm";
 import { redirect } from "next/navigation";
 
 export const GET = async (req: Request) => {
@@ -36,11 +36,13 @@ export const GET = async (req: Request) => {
             })
             .from(orderDetailsTable)
             .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
+            .innerJoin(ordersTable, eq(orderDetailsTable.order_id, ordersTable.id))
             .where(
                 and(
                     eq(productsTable.outlet_id, outlet.id),
                     gte(orderDetailsTable.created_at, startUTC),
                     lt(orderDetailsTable.created_at, endUTC),
+                    notInArray(ordersTable.status, ['cancelled', 'pending']),
                 )
             )
             .groupBy(sql`EXTRACT(HOUR FROM (${orderDetailsTable.created_at} AT TIME ZONE ${tzLiteral}))`);

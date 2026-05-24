@@ -10,7 +10,7 @@ import {
     customersTable,
     usersTable,
 } from "@/src/db/schema";
-import { eq, sql, desc, and, or, like, gte, lte } from "drizzle-orm";
+import { eq, sql, desc, and, or, like, gte, lte, inArray } from "drizzle-orm";
 import { db } from "@/src/db";
 import { headers } from "next/headers";
 
@@ -44,9 +44,18 @@ export const GET = async (req: Request) => {
         // dateTo is a date like "2024-05-15" — treat it as end of that day
         const dateEnd   = dateTo   ? new Date(`${dateTo}T23:59:59.999Z`)         : undefined;
 
+        type OrderStatus = "pending" | "confirmed" | "preparing" | "ready" | "on_delivery" | "delivered" | "cancelled";
+        const ACTIVE_STATUSES: OrderStatus[] = ["confirmed", "preparing", "ready", "on_delivery"];
+
+        const statusFilter =
+            status === "all"      ? undefined :
+            status === "aktif"    ? inArray(ordersTable.status, ACTIVE_STATUSES) :
+            status === "selesai"  ? eq(ordersTable.status, "delivered") :
+                                    eq(ordersTable.status, status as OrderStatus);
+
         const baseFilter = and(
             eq(productsTable.outlet_id, outlet.id),
-            status !== "all" ? eq(orderDetailsTable.status, status as "addToChart" | "checkout") : undefined,
+            statusFilter,
             search ? or(
                 like(usersTable.name, `%${search}%`),
                 like(orderDetailsTable.order_id, `%${search}%`),
@@ -61,7 +70,7 @@ export const GET = async (req: Request) => {
                     orderId:      orderDetailsTable.order_id,
                     itemCount:    sql<number>`cast(count(*) as int)`,
                     totalAmount:  sql<number>`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric)), 0)`,
-                    status:       sql<"addToChart" | "checkout" | null>`min(${orderDetailsTable.status}::text)`,
+                    status:       ordersTable.status,
                     createdAt:    sql<string>`max(${orderDetailsTable.created_at})::text`,
                     customerName: usersTable.name,
                 })
@@ -71,7 +80,7 @@ export const GET = async (req: Request) => {
                 .innerJoin(customersTable, eq(ordersTable.costomer_id,      customersTable.id))
                 .innerJoin(usersTable,     eq(customersTable.user_id,       usersTable.id))
                 .where(baseFilter)
-                .groupBy(orderDetailsTable.order_id, usersTable.name)
+                .groupBy(orderDetailsTable.order_id, usersTable.name, ordersTable.status)
                 .orderBy(desc(sql`max(${orderDetailsTable.created_at})`))
                 .limit(limit)
                 .offset(offset),
@@ -89,24 +98,25 @@ export const GET = async (req: Request) => {
             // status summary chips (always unfiltered by status/search)
             db
                 .select({
-                    status: sql<"addToChart" | "checkout" | null>`min(${orderDetailsTable.status}::text)`,
+                    status: ordersTable.status,
                 })
-                .from(orderDetailsTable)
-                .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
-                .where(eq(productsTable.outlet_id, outlet.id))
-                .groupBy(orderDetailsTable.order_id),
+                .from(ordersTable)
+                .where(eq(ordersTable.outlet_id, outlet.id))
+                .groupBy(ordersTable.id, ordersTable.status),
         ]);
 
         const totalCount      = Number(countRows[0]?.count ?? 0);
-        const processingCount = statsRows.filter(r => r.status === "addToChart").length;
-        const completedCount  = statsRows.filter(r => r.status === "checkout").length;
+        const pendingCount    = statsRows.filter(r => r.status === "pending").length;
+        const processingCount = statsRows.filter(r => ["confirmed", "preparing", "ready", "on_delivery"].includes(r.status)).length;
+        const completedCount  = statsRows.filter(r => r.status === "delivered").length;
+        const cancelledCount  = statsRows.filter(r => r.status === "cancelled").length;
         const allCount        = statsRows.length;
 
         return NextResponse.json({
             success: true,
             data:   rows,
             count:  totalCount,
-            stats:  { allCount, processingCount, completedCount },
+            stats:  { allCount, pendingCount, processingCount, completedCount, cancelledCount },
         });
     } catch (error) {
         return NextResponse.json({ success: false, error: String(error) }, { status: 500 });

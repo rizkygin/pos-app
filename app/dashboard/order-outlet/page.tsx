@@ -9,15 +9,17 @@ import {
     ShoppingBag,
     CheckCircle2,
     Package,
+    Clock,
+    XCircle,
 } from "lucide-react";
 import { columns, Order } from "./columns";
 import { OrdersTable } from "./data-table";
 
-type Stats = { allCount: number; processingCount: number; completedCount: number };
+type Stats = { allCount: number; pendingCount: number; processingCount: number; completedCount: number; cancelledCount: number };
 
 export default function OrderOutletPage() {
     const [data, setData] = useState<Order[]>([]);
-    const [stats, setStats] = useState<Stats>({ allCount: 0, processingCount: 0, completedCount: 0 });
+    const [stats, setStats] = useState<Stats>({ allCount: 0, pendingCount: 0, processingCount: 0, completedCount: 0, cancelledCount: 0 });
     const [count, setCount] = useState(0);
     const [page, setPage] = useState(1);
     const [limit, setLimit] = useState(10);
@@ -81,20 +83,24 @@ export default function OrderOutletPage() {
                 description={`${stats.allCount} pesanan ditemukan`}
             />
 
-            {/* Summary chips */}
+            {/* Summary chips — clickable filters */}
             <div className="flex flex-wrap gap-3">
-                <div className="flex items-center gap-2 px-4 py-2 rounded-full border border-border/60 bg-card text-sm font-bold">
-                    <Package className="h-4 w-4 text-muted-foreground" />
-                    <span>Total: {stats.allCount}</span>
-                </div>
-                <div className="flex items-center gap-2 px-4 py-2 rounded-full border border-blue-200 bg-blue-50 text-blue-700 text-sm font-bold">
-                    <ShoppingCart className="h-4 w-4" />
-                    <span>Diproses: {stats.processingCount}</span>
-                </div>
-                <div className="flex items-center gap-2 px-4 py-2 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700 text-sm font-bold">
-                    <CheckCircle2 className="h-4 w-4" />
-                    <span>Selesai: {stats.completedCount}</span>
-                </div>
+                {([
+                    { value: "all",       label: "Total",      count: stats.allCount,        icon: <Package className="h-4 w-4" />,      base: "border-border/60 bg-card text-foreground",                     active: "ring-2 ring-offset-1 ring-foreground" },
+                    { value: "pending",   label: "Pending",    count: stats.pendingCount,    icon: <Clock className="h-4 w-4" />,        base: "border-amber-200 bg-amber-50 text-amber-700",                  active: "ring-2 ring-offset-1 ring-amber-500" },
+                    { value: "aktif",     label: "Aktif",      count: stats.processingCount, icon: <ShoppingCart className="h-4 w-4" />, base: "border-blue-200 bg-blue-50 text-blue-700",                     active: "ring-2 ring-offset-1 ring-blue-500" },
+                    { value: "selesai",   label: "Selesai",    count: stats.completedCount,  icon: <CheckCircle2 className="h-4 w-4" />, base: "border-emerald-200 bg-emerald-50 text-emerald-700",            active: "ring-2 ring-offset-1 ring-emerald-500" },
+                    { value: "cancelled", label: "Dibatalkan", count: stats.cancelledCount,  icon: <XCircle className="h-4 w-4" />,      base: "border-red-200 bg-red-50 text-red-700",                        active: "ring-2 ring-offset-1 ring-red-500" },
+                ] as const).map((chip) => (
+                    <button
+                        key={chip.value}
+                        onClick={() => { setStatus(chip.value); setPage(1); }}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-full border text-sm font-bold transition-all ${chip.base} ${status === chip.value ? chip.active : "hover:opacity-80"}`}
+                    >
+                        {chip.icon}
+                        <span>{chip.label}: {chip.count}</span>
+                    </button>
+                ))}
             </div>
 
             {/* Table */}

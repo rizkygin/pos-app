@@ -88,7 +88,15 @@ export function OrderClient({ feature, outletId: _outletId }: { feature?: string
     const backHref = feature ? `/dashboard/order/${feature}` : "/dashboard/order";
     const [selectedCategory, setSelectedCategory] = useState("Semua");
     const [searchQuery, setSearchQuery] = useState("");
-    const [cart, setCart] = useState<CartItem[]>([]);
+    const [cart, setCart] = useState<CartItem[]>(() => {
+        if (typeof window === "undefined") return [];
+        try {
+            const saved = localStorage.getItem("pos_cart");
+            return saved ? JSON.parse(saved) : [];
+        } catch {
+            return [];
+        }
+    });
     const wishlistStore = useWishlist();
     const [appliedPromo, setAppliedPromo] = useState<Promo | null>(null);
     const [basketOpen, setBasketOpen] = useState(false);
@@ -129,6 +137,14 @@ export function OrderClient({ feature, outletId: _outletId }: { feature?: string
         console.error("[OrderClient] Failed to fetch outlet:", errorFetchOutlet.message)
     }
 
+
+    useEffect(() => {
+        localStorage.setItem("pos_cart", JSON.stringify(cart));
+    }, [cart]);
+
+    useEffect(() => {
+        return () => { localStorage.removeItem("pos_cart"); };
+    }, []);
 
     const categories = useMemo(() => {
         const initialCategories = ["Semua"]
