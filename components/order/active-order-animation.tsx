@@ -1,8 +1,11 @@
 "use client";
 
-import { motion } from "motion/react";
+import { motion, AnimatePresence } from "motion/react";
 import { cancelOrder } from "@/app/dashboard/activeorder/actions";
-import { useTransition } from "react";
+import { useTransition, useState, useEffect, useCallback } from "react";
+import QRCode from "react-qr-code";
+import { QrCode, X } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 type OrderStatus = "pending" | "confirmed" | "preparing" | "ready" | "on_delivery" | "delivered";
 
@@ -234,6 +237,46 @@ function ProgressStepper({ current }: { current: OrderStatus }) {
     );
 }
 
+
+//SEARCH:: customer qr code
+function CustomerQrModal({ orderId, onClose }: { orderId: string; onClose: () => void }) {
+    return (
+        <AnimatePresence>
+            <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+                onClick={onClose}
+            >
+                <motion.div
+                    initial={{ scale: 0.85, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    exit={{ scale: 0.85, opacity: 0 }}
+                    transition={{ type: "spring", stiffness: 300, damping: 25 }}
+                    className="relative bg-white rounded-3xl p-8 shadow-2xl flex flex-col items-center gap-5 mx-4"
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <button
+                        onClick={onClose}
+                        className="absolute top-4 right-4 p-1.5 rounded-full hover:bg-gray-100 transition-colors"
+                    >
+                        <X className="h-4 w-4 text-gray-500" />
+                    </button>
+                    <div className="text-center">
+                        <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">Tunjukkan ke Kurir</p>
+                        <p className="text-lg font-black text-gray-900">QR Konfirmasi Pengiriman</p>
+                    </div>
+                    <div className="p-4 rounded-2xl bg-white border-2 border-gray-100 shadow-inner">
+                        <QRCode value={orderId} size={200} />
+                    </div>
+                    <p className="text-[10px] text-gray-400 font-mono break-all text-center max-w-[240px]">{orderId}</p>
+                </motion.div>
+            </motion.div>
+        </AnimatePresence>
+    );
+}
+
 export function ActiveOrderAnimation({
     orderId,
     status,
@@ -245,8 +288,27 @@ export function ActiveOrderAnimation({
     orderRef: string;
     outletName: string;
 }) {
-    const cfg = STATUS_CONFIG[status];
+    const router = useRouter();
+    const [liveStatus, setLiveStatus] = useState<OrderStatus>(status);
+    const cfg = STATUS_CONFIG[liveStatus];
     const [pending, startTransition] = useTransition();
+    const [qrOpen, setQrOpen] = useState(false);
+
+    const poll = useCallback(async () => {
+        try {
+            const res = await fetch("/api/get-active-order", { cache: "no-store" });
+            const data = await res.json();
+            if (!data.success) return;
+            const next = data.order.status as OrderStatus;
+            if (next !== liveStatus) setLiveStatus(next);
+            if (next === "delivered") router.push(`/dashboard/ratings/submit/customer/${data.order.id}`);
+        } catch { /* silently retry */ }
+    }, [liveStatus, router]);
+
+    useEffect(() => {
+        const id = setInterval(poll, 2000);
+        return () => clearInterval(id);
+    }, [poll]);
 
     return (
         <div className="min-h-[60vh] flex flex-col items-center justify-center px-4 py-12 gap-8">
@@ -260,13 +322,13 @@ export function ActiveOrderAnimation({
             >
                 {/* Animation */}
                 <div className="flex items-center justify-center h-36">
-                    {ANIMATION_MAP[status]}
+                    {ANIMATION_MAP[liveStatus]}
                 </div>
 
                 {/* Labels */}
                 <div className="text-center space-y-1.5">
                     <motion.p
-                        key={status}
+                        key={liveStatus}
                         initial={{ opacity: 0, scale: 0.9 }}
                         animate={{ opacity: 1, scale: 1 }}
                         className={`text-xl font-black ${cfg.color}`}
@@ -288,8 +350,8 @@ export function ActiveOrderAnimation({
                     </div>
                 </div>
 
-                {/* Cancel button — only on pending */}
-                {status === "pending" && (
+                {/* Cancel button — only on pending/confirmed */}
+                {(liveStatus === "pending" || liveStatus === "confirmed") && (
                     <motion.form
                         action={() => startTransition(() => cancelOrder(orderId))}
                         initial={{ opacity: 0 }}
@@ -306,6 +368,20 @@ export function ActiveOrderAnimation({
                         </button>
                     </motion.form>
                 )}
+
+                {/* QR button — shown when courier is on the way */}
+                {liveStatus === "on_delivery" && (
+                    <motion.button
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        transition={{ delay: 0.3 }}
+                        onClick={() => setQrOpen(true)}
+                        className="w-full py-2.5 rounded-xl bg-cyan-500 text-white text-sm font-bold hover:bg-cyan-600 transition-colors flex items-center justify-center gap-2"
+                    >
+                        <QrCode className="h-4 w-4" />
+                        Tampilkan QR Konfirmasi
+                    </motion.button>
+                )}
             </motion.div>
 
             {/* Stepper */}
@@ -315,8 +391,10 @@ export function ActiveOrderAnimation({
                 transition={{ duration: 0.5, delay: 0.2 }}
                 className="w-full max-w-sm"
             >
-                <ProgressStepper current={status} />
+                <ProgressStepper current={liveStatus} />
             </motion.div>
+
+            {qrOpen && <CustomerQrModal orderId={orderId} onClose={() => setQrOpen(false)} />}
         </div>
     );
 }

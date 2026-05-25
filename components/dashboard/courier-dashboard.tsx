@@ -22,7 +22,7 @@ import { DashboardHeader } from "@/components/dashboard-header";
 
 export const CourierDashboard = () => {
     const [isOnline, setIsOnline] = useState(true);
-
+    
     const stats = [
         { label: "Earnings Today", value: "Rp 150.000", icon: Wallet, color: "text-emerald-600", bg: "bg-emerald-100" },
         { label: "Rating", value: "4.9", icon: Star, color: "text-amber-600", bg: "bg-amber-100" },

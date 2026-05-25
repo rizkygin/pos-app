@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { db } from "@/src/db";
-import { customersTable, ordersTable, outletsTable } from "@/src/db/schema";
+import { couriersTable, customersTable, ordersTable, outletsTable } from "@/src/db/schema";
 import { and, eq, isNotNull, or } from "drizzle-orm";
 
 export async function cancelOrder(orderId: string) {
@@ -50,6 +50,52 @@ export async function confirmOrder(orderId: string) {
                 eq(ordersTable.id, orderId),
                 eq(ordersTable.outlet_id, outlet.id),
                 eq(ordersTable.status, "pending")
+            )
+        );
+}
+
+export async function confirmPickup(orderId: string) {
+    const session = await getSession();
+
+    const [outlet] = await db
+        .select({ id: outletsTable.id })
+        .from(outletsTable)
+        .where(eq(outletsTable.user_id, session.user.id))
+        .limit(1);
+
+    if (!outlet) throw new Error("Not an owner");
+
+    await db
+        .update(ordersTable)
+        .set({ status: "on_delivery" })
+        .where(
+            and(
+                eq(ordersTable.id, orderId),
+                eq(ordersTable.outlet_id, outlet.id),
+                eq(ordersTable.status, "ready")
+            )
+        );
+}
+
+export async function markOrderDelivered(orderId: string) {
+    const session = await getSession();
+
+    const [courier] = await db
+        .select({ id: couriersTable.id })
+        .from(couriersTable)
+        .where(eq(couriersTable.user_id, session.user.id))
+        .limit(1);
+
+    if (!courier) throw new Error("Not a courier");
+
+    await db
+        .update(ordersTable)
+        .set({ status: "delivered" })
+        .where(
+            and(
+                eq(ordersTable.id, orderId),
+                eq(ordersTable.courier_id, courier.id),
+                eq(ordersTable.status, "on_delivery")
             )
         );
 }

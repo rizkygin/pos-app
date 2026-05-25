@@ -1,13 +1,15 @@
 "use client";
 
-import { useEffect, useState, useCallback, useTransition } from "react";
+import { useEffect, useState, useCallback, useTransition, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "motion/react";
 import {
     ShoppingBag, Clock, User, Package, MapPin, Store,
-    ChevronRight, QrCode, X, Bike,
+    ChevronRight, QrCode, X, Bike, ScanLine, Camera, CameraOff,
 } from "lucide-react";
 import QRCode from "react-qr-code";
 import { acceptOrder } from "@/app/dashboard/lobby/actions";
+import { markOrderDelivered } from "@/app/dashboard/activeorder/actions";
 
 type OrderItem = {
     productName: string;
@@ -113,7 +115,7 @@ function QrModal({ value, onClose }: { value: string; onClose: () => void }) {
                     </button>
 
                     <div className="text-center">
-                        <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">Scan untuk Verifikasi</p>
+                        <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">Tunjukkan QR ini ke Outlet untuk Verifikasi</p>
                         <p className="text-lg font-black text-gray-900">QR Pengambilan</p>
                     </div>
 
@@ -236,6 +238,8 @@ function MyOrderCard({
     const [qrOpen, setQrOpen] = useState(false);
     const note = noteStr(order.note);
     const s = MY_STATUS_MAP[order.status ?? ""] ?? MY_STATUS_MAP.confirmed;
+
+    //SEARCH:: qr code generated value
     const qrValue = `COURIER:${courierId}|ORDER:${order.orderId}`;
 
     return (
@@ -364,6 +368,189 @@ function EmptyState({ tab }: { tab: Tab }) {
     );
 }
 
+
+//SEARCH:: courier scan qustomer qr code for the order
+function DeliveryScannerBar({ orders, onDelivered }: { orders: Order[]; onDelivered: (id: string) => void }) {
+    const router = useRouter();
+    const [input, setInput] = useState("");
+    const [scanning, setScanning] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [success, setSuccess] = useState<string | null>(null);
+    const videoRef = useRef<HTMLVideoElement>(null);
+    const streamRef = useRef<MediaStream | null>(null);
+    const rafRef = useRef<number>(0);
+
+    const resolve = (raw: string) => {
+        const trimmed = raw.trim();
+        const match = orders.find(
+            (o) => o.orderId === trimmed || o.orderId.slice(-8).toUpperCase() === trimmed.toUpperCase()
+        );
+        if (!match) {
+            setError("Order tidak ditemukan atau bukan milikmu.");
+            return false;
+        }
+        setError(null);
+        setInput("");
+        setSuccess(`#${match.orderId.slice(-8).toUpperCase()} dikonfirmasi terkirim!`);
+        onDelivered(match.orderId);
+        router.push(`/dashboard/ratings/submit/courier/${match.orderId}`);
+        return true;
+    };
+
+    const resolveRef = useRef(resolve);
+    resolveRef.current = resolve;
+
+    const releaseTracks = useCallback(() => {
+        cancelAnimationFrame(rafRef.current);
+        streamRef.current?.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+    }, []);
+
+    const stopCamera = useCallback(() => {
+        releaseTracks();
+        setScanning(false);
+    }, [releaseTracks]);
+
+    useEffect(() => {
+        if (!success) return;
+        const t = setTimeout(() => setSuccess(null), 3000);
+        return () => clearTimeout(t);
+    }, [success]);
+
+    useEffect(() => {
+        if (!scanning) return;
+        setError(null);
+        let cancelled = false;
+
+        (async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: { ideal: "environment" } },
+                });
+                if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
+                streamRef.current = stream;
+
+                const video = videoRef.current;
+                if (!video) { stream.getTracks().forEach((t) => t.stop()); return; }
+
+                video.srcObject = stream;
+                try { await video.play(); } catch { /* autoPlay handles it */ }
+
+                if (!("BarcodeDetector" in window)) {
+                    if (!cancelled) setError("Browser ini tidak mendukung kamera QR scan. Gunakan input manual.");
+                    releaseTracks();
+                    setScanning(false);
+                    return;
+                }
+
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const detector = new (window as any).BarcodeDetector({ formats: ["qr_code"] });
+
+                const tick = async () => {
+                    if (cancelled) return;
+                    try {
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        const codes: any[] = await detector.detect(video);
+                        if (codes.length > 0) {
+                            const found = resolveRef.current(codes[0].rawValue);
+                            if (found) { stopCamera(); return; }
+                        }
+                    } catch { /* ignore frame errors */ }
+                    rafRef.current = requestAnimationFrame(tick);
+                };
+                rafRef.current = requestAnimationFrame(tick);
+            } catch (err) {
+                if (!cancelled) {
+                    const name = err instanceof Error ? err.name : "";
+                    if (name === "NotAllowedError") setError("Izin kamera ditolak.");
+                    else if (name === "NotFoundError") setError("Kamera tidak ditemukan.");
+                    else setError("Tidak dapat mengakses kamera.");
+                    setScanning(false);
+                }
+            }
+        })();
+
+        return () => { cancelled = true; releaseTracks(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [scanning]);
+
+    const handleSubmit = (e: { preventDefault(): void }) => {
+        e.preventDefault();
+        if (!input.trim()) return;
+        resolve(input);
+    };
+
+    const onDeliveryOrders = orders.filter((o) => o.status === "on_delivery");
+    if (onDeliveryOrders.length === 0) return null;
+
+    return (
+        <div className="mb-6 rounded-2xl border bg-background shadow-sm overflow-hidden">
+            <div className="flex items-center gap-2 px-5 py-3 bg-cyan-50 dark:bg-cyan-950/20 border-b border-cyan-100 dark:border-cyan-900/30">
+                <ScanLine className="h-4 w-4 text-cyan-600 dark:text-cyan-400" />
+                <span className="text-sm font-bold text-cyan-700 dark:text-cyan-400">Konfirmasi Pengiriman</span>
+                <span className="text-xs text-muted-foreground ml-1">— scan QR pelanggan</span>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+                {scanning && (
+                    <div className="relative w-full h-48 rounded-xl overflow-hidden bg-black">
+                        <video ref={videoRef} className="absolute inset-0 w-full h-full object-cover" muted playsInline autoPlay />
+                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                            <motion.div
+                                animate={{ opacity: [0.4, 1, 0.4] }}
+                                transition={{ duration: 1.5, repeat: Infinity }}
+                                className="w-40 h-40 border-2 border-white/80 rounded-xl"
+                            />
+                        </div>
+                        <button
+                            onClick={stopCamera}
+                            className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/50 text-white hover:bg-black/70 transition-colors"
+                        >
+                            <CameraOff className="h-4 w-4" />
+                        </button>
+                    </div>
+                )}
+                <form onSubmit={handleSubmit} className="flex gap-2">
+                    <input
+                        type="text"
+                        value={input}
+                        onChange={(e) => { setInput(e.target.value); setError(null); }}
+                        placeholder="Ketik Order ID atau 8 karakter terakhir…"
+                        className="flex-1 px-3 py-2 text-sm rounded-lg border bg-muted/30 focus:outline-none focus:ring-2 focus:ring-cyan-400/50 focus:border-cyan-400 transition-all"
+                    />
+                    <button
+                        type="submit"
+                        disabled={!input.trim()}
+                        className="px-4 py-2 rounded-lg text-sm font-bold bg-cyan-500 text-white hover:bg-cyan-600 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                        Konfirmasi
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setScanning((v) => !v)}
+                        className={`px-3 py-2 rounded-lg border text-sm font-bold transition-colors ${
+                            scanning
+                                ? "bg-red-50 border-red-200 text-red-600 hover:bg-red-100 dark:bg-red-950/20 dark:border-red-900/30"
+                                : "bg-muted/30 border-border hover:bg-muted/60 text-foreground"
+                        }`}
+                    >
+                        {scanning ? <CameraOff className="h-4 w-4" /> : <Camera className="h-4 w-4" />}
+                    </button>
+                </form>
+                {error && (
+                    <motion.p initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} className="text-xs text-red-500 font-medium">
+                        {error}
+                    </motion.p>
+                )}
+                {success && (
+                    <motion.p initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} className="text-xs text-cyan-600 font-medium">
+                        {success}
+                    </motion.p>
+                )}
+            </div>
+        </div>
+    );
+}
+
 function useOrdersPolling(endpoint: string) {
     const [orders, setOrders] = useState<Order[]>([]);
     const [loading, setLoading] = useState(true);
@@ -403,6 +590,11 @@ export function CourierLobby({ courierId }: { courierId: number }) {
         available.setOrders((prev) => prev.filter((o) => o.orderId !== orderId));
         await acceptOrder(orderId);
     }, [available]);
+
+    const handleDelivered = useCallback(async (orderId: string) => {
+        mine.setOrders((prev) => prev.filter((o) => o.orderId !== orderId));
+        await markOrderDelivered(orderId);
+    }, [mine]);
 
     const current = activeTab === "available" ? available : mine;
 
@@ -492,26 +684,31 @@ export function CourierLobby({ courierId }: { courierId: number }) {
                     ) : current.orders.length === 0 ? (
                         <EmptyState tab={activeTab} />
                     ) : (
-                        <AnimatePresence mode="popLayout">
-                            <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
-                                {activeTab === "available" && available.orders.map((order, i) => (
-                                    <AvailableOrderCard
-                                        key={order.orderId}
-                                        order={order}
-                                        index={i}
-                                        onAccept={handleAccept}
-                                    />
-                                ))}
-                                {activeTab === "mine" && mine.orders.map((order, i) => (
-                                    <MyOrderCard
-                                        key={order.orderId}
-                                        order={order}
-                                        index={i}
-                                        courierId={courierId}
-                                    />
-                                ))}
-                            </div>
-                        </AnimatePresence>
+                        <>
+                            {activeTab === "mine" && (
+                                <DeliveryScannerBar orders={mine.orders} onDelivered={handleDelivered} />
+                            )}
+                            <AnimatePresence mode="popLayout">
+                                <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
+                                    {activeTab === "available" && available.orders.map((order, i) => (
+                                        <AvailableOrderCard
+                                            key={order.orderId}
+                                            order={order}
+                                            index={i}
+                                            onAccept={handleAccept}
+                                        />
+                                    ))}
+                                    {activeTab === "mine" && mine.orders.map((order, i) => (
+                                        <MyOrderCard
+                                            key={order.orderId}
+                                            order={order}
+                                            index={i}
+                                            courierId={courierId}
+                                        />
+                                    ))}
+                                </div>
+                            </AnimatePresence>
+                        </>
                     )}
                 </motion.div>
             </AnimatePresence>

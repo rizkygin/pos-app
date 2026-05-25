@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation';
 import { getSession } from '@/lib/auth';
 import { db } from '@/src/db';
 import { customersTable, ordersTable, outletsTable } from '@/src/db/schema';
-import { and, eq, notInArray } from 'drizzle-orm';
+import { and, asc,desc, eq, notInArray } from 'drizzle-orm';
 import { ActiveOrderAnimation } from '@/components/order/active-order-animation';
 import { PendingOrdersLobby } from '@/components/dashboard/pending-orders-lobby';
 
@@ -36,13 +36,16 @@ export default async function ActiveOrderPage() {
     .where(
       and(
         eq(customersTable.user_id, session.user.id),
-        notInArray(ordersTable.status, ['delivered', 'cancelled'])
+        notInArray(ordersTable.status, ['cancelled'])
       )
     )
-    .orderBy(ordersTable.createdAt)
+    .orderBy(desc(ordersTable.createdAt))
     .limit(1);
 
+    
+
   if (!activeOrder) redirect('/dashboard/order');
+  if (activeOrder.status === 'delivered') redirect(`/dashboard/ratings/submit/customer/${activeOrder.id}`);
 
   return (
     <main className="px-4 pb-12">

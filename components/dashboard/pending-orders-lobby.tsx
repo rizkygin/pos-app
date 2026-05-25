@@ -1,9 +1,21 @@
 "use client";
 
-import { useEffect, useState, useCallback, useTransition } from "react";
+import { useEffect, useState, useCallback, useTransition, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { ShoppingBag, Clock, User, Package, ChevronRight, X, UtensilsCrossed, CheckCheck, Bell } from "lucide-react";
-import { confirmOrder, markOrderReady } from "@/app/dashboard/activeorder/actions";
+import { ShoppingBag, Clock, User, Package, ChevronRight, X, UtensilsCrossed, CheckCheck, Bell, ScanLine, Camera, CameraOff, Truck, Printer } from "lucide-react";
+import { confirmOrder, markOrderReady, confirmPickup } from "@/app/dashboard/activeorder/actions";
+import {
+    AlertDialog,
+    AlertDialogContent,
+    AlertDialogHeader,
+    AlertDialogTitle,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogCancel,
+    AlertDialogAction,
+    AlertDialogMedia,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
 
 type OrderItem = {
     productName: string;
@@ -344,6 +356,321 @@ function ReadyOrderCard({ order, index }: { order: Order; index: number }) {
     );
 }
 
+function QRScannerBar({ orders, onPickup }: { orders: Order[]; onPickup: (id: string) => void }) {
+    const [input, setInput] = useState("");
+    const [scanning, setScanning] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [success, setSuccess] = useState<string | null>(null);
+    const [pendingPickup, setPendingPickup] = useState<Order | null>(null);
+
+    //SEARCH:: print reciept from picking courier
+    const printPickupReceipt = (order: Order) => {
+        const shortId = order.orderId.slice(-8).toUpperCase();
+        const date = new Date();
+        const deliveryFee = order.deliveryFee ? parseInt(order.deliveryFee) : 0;
+
+        const itemsHtml = order.items.map((item) => `
+            <div style="margin-bottom:6px">
+                <p class="item-name">${item.productName}</p>
+                <div class="row">
+                    <span class="item-detail">${item.quantity} × ${fmtIDR(Math.round(parseInt(item.summaryPrice || "0") / item.quantity))}</span>
+                    <span>${fmtIDR(parseInt(item.summaryPrice || "0"))}</span>
+                </div>
+                ${item.noteProduct ? `<p class="item-detail">Catatan: ${item.noteProduct}</p>` : ""}
+            </div>
+        `).join("");
+
+        const w = window.open("", "_blank", "width=420,height=700");
+        if (!w) return;
+        w.document.write(`<!DOCTYPE html><html><head><title>Receipt #${shortId}</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Courier New', monospace; font-size: 12px; width: 300px; margin: 0 auto; padding: 16px 8px; color: #111; }
+  .center { text-align: center; }
+  .bold { font-weight: bold; }
+  .large { font-size: 15px; }
+  .small { font-size: 11px; color: #555; }
+  .divider { border-top: 1px dashed #888; margin: 8px 0; }
+  .row { display: flex; justify-content: space-between; margin: 3px 0; }
+  .total-row { display: flex; justify-content: space-between; font-weight: bold; font-size: 14px; margin-top: 4px; }
+  .item-name { font-weight: bold; }
+  .item-detail { color: #555; font-size: 11px; }
+</style></head><body>
+<div class="center bold large" style="margin-bottom:4px;">BUKTI PENGIRIMAN</div>
+<div class="divider"></div>
+<div class="row"><span class="small">Order #</span><span class="bold">${shortId}</span></div>
+<div class="row"><span class="small">Pelanggan</span><span>${order.customerName}</span></div>
+${order.customerPhone ? `<div class="row"><span class="small">Telepon</span><span>${order.customerPhone}</span></div>` : ""}
+<div class="row"><span class="small">Tanggal</span><span>${date.toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" })}</span></div>
+<div class="row"><span class="small">Waktu</span><span>${date.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}</span></div>
+<div class="divider"></div>
+${itemsHtml}
+<div class="divider"></div>
+<div class="row"><span class="small">Subtotal</span><span>${fmtIDR(order.totalAmount)}</span></div>
+${deliveryFee > 0 ? `<div class="row"><span class="small">Ongkos kirim</span><span>${fmtIDR(deliveryFee)}</span></div>` : ""}
+<div class="total-row"><span>TOTAL</span><span>${fmtIDR(order.totalAmount + deliveryFee)}</span></div>
+<div class="divider"></div>
+<p class="center small" style="margin-top:12px;">Terima kasih!</p>
+</body></html>`);
+        w.document.close();
+        w.focus();
+        w.onafterprint = () => w.close();
+        w.print();
+    };
+    const videoRef = useRef<HTMLVideoElement>(null);
+    const streamRef = useRef<MediaStream | null>(null);
+    const rafRef = useRef<number>(0);
+
+    const resolve = (raw: string) => {
+        const trimmed = raw.trim();
+        const match = orders.find(
+            (o) =>
+                `COURIER:${o.courierId}|ORDER:${o.orderId}`.toUpperCase()||
+                o.orderId === trimmed ||
+                o.orderId.slice(-8).toUpperCase() === trimmed.toUpperCase()
+        );
+        if (!match) {
+            setError("Order tidak ditemukan di daftar siap.");
+            return false;
+        }
+        setError(null);
+        setInput("");
+        setPendingPickup(match);
+        return true;
+    };
+
+    // Keep a stable ref so the camera tick loop always sees fresh orders
+    // without the effect needing to restart on every poll.
+    const resolveRef = useRef(resolve);
+    resolveRef.current = resolve;
+
+    const handleSubmit = (e: { preventDefault(): void }) => {
+        e.preventDefault();
+        if (!input.trim()) return;
+        resolve(input);
+    };
+
+    const releaseTracks = useCallback(() => {
+        cancelAnimationFrame(rafRef.current);
+        streamRef.current?.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+    }, []);
+
+    const stopCamera = useCallback(() => {
+        releaseTracks();
+        setScanning(false);
+    }, [releaseTracks]);
+
+    useEffect(() => {
+        if (!scanning) return;
+        setError(null);
+        let cancelled = false;
+
+        (async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    // ideal so it doesn't hard-fail on laptops without a rear camera
+                    video: { facingMode: { ideal: "environment" } },
+                });
+                if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
+                streamRef.current = stream;
+
+                const video = videoRef.current;
+                if (!video) { stream.getTracks().forEach((t) => t.stop()); return; }
+
+                video.srcObject = stream;
+                try { await video.play(); } catch { /* autoPlay attribute handles it */ }
+
+                if (!("BarcodeDetector" in window)) {
+                    if (!cancelled) setError("Browser ini tidak mendukung kamera QR scan. Gunakan input manual.");
+                    releaseTracks();
+                    setScanning(false);
+                    return;
+                }
+
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const detector = new (window as any).BarcodeDetector({ formats: ["qr_code"] });
+
+                const tick = async () => {
+                    if (cancelled) return;
+                    try {
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        const codes: any[] = await detector.detect(video);
+                        if (codes.length > 0) {
+                            const found = resolveRef.current(codes[0].rawValue);
+                            if (found) { stopCamera(); return; }
+                        }
+                    } catch { /* ignore frame errors */ }
+                    rafRef.current = requestAnimationFrame(tick);
+                };
+                rafRef.current = requestAnimationFrame(tick);
+            } catch (err) {
+                if (!cancelled) {
+                    const name = err instanceof Error ? err.name : "";
+                    if (name === "NotAllowedError") {
+                        setError("Izin kamera ditolak. Izinkan akses kamera di browser.");
+                    } else if (name === "NotFoundError") {
+                        setError("Kamera tidak ditemukan di perangkat ini.");
+                    } else {
+                        setError("Tidak dapat mengakses kamera.");
+                    }
+                    setScanning(false);
+                }
+            }
+        })();
+
+        // only release tracks on cleanup — don't touch scanning state here
+        return () => { cancelled = true; releaseTracks(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [scanning]);
+
+    useEffect(() => {
+        if (!success) return;
+        const t = setTimeout(() => setSuccess(null), 3000);
+        return () => clearTimeout(t);
+    }, [success]);
+
+    return (
+        <>
+            <div className="mb-6 rounded-2xl border bg-background shadow-sm overflow-hidden">
+                <div className="flex items-center gap-2 px-5 py-3 bg-emerald-50 dark:bg-emerald-950/20 border-b border-emerald-100 dark:border-emerald-900/30">
+                    <ScanLine className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                    <span className="text-sm font-bold text-emerald-700 dark:text-emerald-400">Konfirmasi Pickup</span>
+                    <span className="text-xs text-muted-foreground ml-1">— scan atau ketik ID pesanan</span>
+                </div>
+
+                <div className="px-5 py-4 space-y-3">
+                    {scanning && (
+                        <div className="relative w-full h-48 rounded-xl overflow-hidden bg-black">
+                            <video ref={videoRef} className="absolute inset-0 w-full h-full object-cover" muted playsInline autoPlay />
+                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                                <motion.div
+                                    animate={{ opacity: [0.4, 1, 0.4] }}
+                                    transition={{ duration: 1.5, repeat: Infinity }}
+                                    className="w-40 h-40 border-2 border-white/80 rounded-xl"
+                                />
+                            </div>
+                            <button
+                                onClick={stopCamera}
+                                className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/50 text-white hover:bg-black/70 transition-colors"
+                            >
+                                <CameraOff className="h-4 w-4" />
+                            </button>
+                        </div>
+                    )}
+
+                    <form onSubmit={handleSubmit} className="flex gap-2">
+                        <input
+                            type="text"
+                            value={input}
+                            onChange={(e) => { setInput(e.target.value); setError(null); }}
+                            placeholder="Ketik Order ID atau 8 karakter terakhir…"
+                            className="flex-1 px-3 py-2 text-sm rounded-lg border bg-muted/30 focus:outline-none focus:ring-2 focus:ring-emerald-400/50 focus:border-emerald-400 transition-all"
+                        />
+                        <button
+                            type="submit"
+                            disabled={!input.trim()}
+                            className="px-4 py-2 rounded-lg text-sm font-bold bg-emerald-500 text-white hover:bg-emerald-600 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                            Konfirmasi
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setScanning((v) => !v)}
+                            className={`px-3 py-2 rounded-lg border text-sm font-bold transition-colors ${
+                                scanning
+                                    ? "bg-red-50 border-red-200 text-red-600 hover:bg-red-100 dark:bg-red-950/20 dark:border-red-900/30"
+                                    : "bg-muted/30 border-border hover:bg-muted/60 text-foreground"
+                            }`}
+                        >
+                            {scanning ? <CameraOff className="h-4 w-4" /> : <Camera className="h-4 w-4" />}
+                        </button>
+                    </form>
+
+                    {error && (
+                        <motion.p
+                            initial={{ opacity: 0, y: -4 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="text-xs text-red-500 font-medium"
+                        >
+                            {error}
+                        </motion.p>
+                    )}
+                    {success && (
+                        <motion.p
+                            initial={{ opacity: 0, y: -4 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="text-xs text-emerald-600 font-medium"
+                        >
+                            {success}
+                        </motion.p>
+                    )}
+                </div>
+            </div>
+
+            <AlertDialog open={pendingPickup != null} onOpenChange={(open) => { if (!open) setPendingPickup(null); }}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogMedia className="bg-emerald-50 dark:bg-emerald-950/30">
+                            <Truck className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+                        </AlertDialogMedia>
+                        <AlertDialogTitle>Konfirmasi Pickup</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Pastikan kurir sudah mengambil pesanan sebelum mengonfirmasi.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+
+                    {pendingPickup && (
+                        <div className="rounded-xl bg-muted/40 px-4 py-3 space-y-2 text-sm">
+                            <div className="flex items-center justify-between">
+                                <span className="text-muted-foreground">Order</span>
+                                <span className="font-mono font-black text-xs">
+                                    #{pendingPickup.orderId.slice(-8).toUpperCase()}
+                                </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <span className="text-muted-foreground">Pelanggan</span>
+                                <span className="font-semibold">{pendingPickup.customerName}</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <span className="text-muted-foreground">Item</span>
+                                <span className="font-semibold">{pendingPickup.items.length} item</span>
+                            </div>
+                            <div className="flex items-center justify-between border-t border-border/50 pt-2 mt-1">
+                                <span className="text-muted-foreground">Total</span>
+                                <span className="font-black">{fmtIDR(pendingPickup.totalAmount)}</span>
+                            </div>
+                        </div>
+                    )}
+
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Batal</AlertDialogCancel>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => pendingPickup && printPickupReceipt(pendingPickup)}
+                        >
+                            <Printer />
+                            Print Receipt
+                        </Button>
+                        <AlertDialogAction
+                            className="bg-emerald-500 hover:bg-emerald-600 text-white"
+                            onClick={() => {
+                                if (!pendingPickup) return;
+                                setSuccess(`#${pendingPickup.orderId.slice(-8).toUpperCase()} dikonfirmasi pickup!`);
+                                onPickup(pendingPickup.orderId);
+                                setPendingPickup(null);
+                            }}
+                        >
+                            Konfirmasi Pickup
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+        </>
+    );
+}
+
 function useOrdersPolling(endpoint: string) {
     const [orders, setOrders] = useState<Order[]>([]);
     const [loading, setLoading] = useState(true);
@@ -395,6 +722,13 @@ export function PendingOrdersLobby() {
         preparing.setOrders((prev) => prev.filter((o) => o.orderId !== orderId));
         await markOrderReady(orderId);
     }, [preparing]);
+
+    const handlePickup = useCallback(async (orderId: string) => {
+        ready.setOrders((prev) => prev.filter((o) => o.orderId !== orderId));
+        await confirmPickup(orderId);
+
+        
+    }, [ready]);
 
     const current = activeTab === "pending" ? pending : activeTab === "preparing" ? preparing : ready;
     const counts: Record<Tab, number> = {
@@ -524,14 +858,22 @@ export function PendingOrdersLobby() {
                                 </div>
                             );
                         })()
+                    ) : activeTab === "ready" ? (
+                        <>
+                            <QRScannerBar orders={ready.orders} onPickup={handlePickup} />
+                            <AnimatePresence mode="popLayout">
+                                <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
+                                    {ready.orders.map((order, i) => (
+                                        <ReadyOrderCard key={order.orderId} order={order} index={i} />
+                                    ))}
+                                </div>
+                            </AnimatePresence>
+                        </>
                     ) : (
                         <AnimatePresence mode="popLayout">
                             <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
-                                {activeTab === "pending" && pending.orders.map((order, i) => (
+                                {pending.orders.map((order, i) => (
                                     <PendingOrderCard key={order.orderId} order={order} index={i} onConfirm={handleConfirm} />
-                                ))}
-                                {activeTab === "ready" && ready.orders.map((order, i) => (
-                                    <ReadyOrderCard key={order.orderId} order={order} index={i} />
                                 ))}
                             </div>
                         </AnimatePresence>
