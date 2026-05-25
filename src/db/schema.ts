@@ -53,6 +53,7 @@ export const customersTable = pgTable("customers", {
     id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
     user_id: text('user_id').notNull().references(() => usersTable.id),
     ratings: numeric("ratings", { precision: 3, scale: 2 }).default('5'),
+    review_count: integer("review_count").default(0).notNull(),
     ...timestamps,
 });
 
@@ -63,6 +64,7 @@ export const couriersTable = pgTable("couriers", {
     vehicle_plate: varchar("vehicle_plate", { length: 255 }).notNull(),
     vehicle_type: VEHICLE_TYPE("vehicle_type").notNull(),
     ratings: numeric("ratings", { precision: 3, scale: 2 }).default('5'),
+    review_count: integer("review_count").default(0).notNull(),
     ...timestamps,
 });
 

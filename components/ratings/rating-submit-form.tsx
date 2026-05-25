@@ -225,14 +225,10 @@ function OutletCard({ name, address }: { name: string; address: string }) {
 
 type ProductRating = { rating: number; comment: string };
 
-function ProductRow({
-    product,
-    value,
-    onChange,
-}: {
-    product: ProductItem;
-    value: ProductRating;
-    onChange: (v: ProductRating) => void;
+function ProductRow({ product, value, onChange }: { 
+    product: ProductItem; 
+    value: ProductRating; 
+    onChange: (v: ProductRating) => void; 
 }) {
     const [expanded, setExpanded] = useState(false);
 

@@ -7,6 +7,7 @@ import {
     ordersTable, outletsTable, productsTable, ratingsTable, usersTable,
 } from "@/src/db/schema";
 import { and, avg, eq, inArray, sql } from "drizzle-orm";
+import { updateRatings } from "@/lib/update-ratings";
 
 type RatingInput = { rating: number; comment: string };
 type ProductRatingInput = RatingInput & { productId: string; orderDetailId: number };
@@ -30,7 +31,7 @@ export async function submitCustomerRatingAction(
     if (!customer) return { ok: false, error: "not_found" };
 
     const [order] = await db
-        .select({ courierUserId: couriersTable.user_id })
+        .select({ courierUserId: couriersTable.user_id, courierReviewCount: couriersTable.review_count, courierCurrentRating: couriersTable.ratings })
         .from(ordersTable)
         .innerJoin(couriersTable, eq(ordersTable.courier_id, couriersTable.id))
         .where(and(
@@ -76,17 +77,17 @@ export async function submitCustomerRatingAction(
                 reciepent_as: "courier",
             });
 
-            // Recalculate courier avg (sees the new row inside the same tx)
-            const [courierAvg] = await tx
-                .select({ value: sql<string>`ROUND(AVG(${ratingsTable.ratings})::numeric, 2)` })
-                .from(ratingsTable)
-                .where(and(
-                    eq(ratingsTable.reciepent, order.courierUserId),
-                    eq(ratingsTable.reciepent_as, "courier")
-                ));
+            //Update courier ratings on couriersTable
+            const courierNewRating = updateRatings({
+                oldRating: Number(order.courierCurrentRating),
+                reviewCount: order.courierReviewCount,
+                newRating: courierRating.rating,
+            });
+
             await tx.update(couriersTable)
-                .set({ ratings: courierAvg.value })
+                .set({ ratings: String(courierNewRating.newAverage), review_count: courierNewRating.newReviewCount })
                 .where(eq(couriersTable.user_id, order.courierUserId));
+
 
             // Insert product ratings (skip products left at 0 stars)
             for (const p of productRatings) {
@@ -102,15 +103,24 @@ export async function submitCustomerRatingAction(
                     reciepent_as: "product",
                 });
 
-                // Recalculate product avg
-                const [productAvg] = await tx
-                    .select({ value: avg(ratingsTable.ratings).as("avg") })
-                    .from(ratingsTable)
-                    .where(eq(ratingsTable.product_id, p.productId));
+
+                //update and calculate new Rating average
+                const [currentProductRating] = await tx
+                .select({productRating: productsTable.ratings, productReviewCount: productsTable.review_count})
+                .from(productsTable)
+                .where(eq(productsTable.id, p.productId))
+                .limit(1);
+
+                const productNewRating = updateRatings({
+                    oldRating: Number(currentProductRating.productRating),
+                    reviewCount: currentProductRating.productReviewCount,
+                    newRating: p.rating,
+                });
+
                 await tx.update(productsTable)
                     .set({
-                        ratings: sql`ROUND(${productAvg.value}::numeric, 2)`,
-                        review_count: sql`${productsTable.review_count} + 1`,
+                        ratings: String(productNewRating.newAverage),
+                        review_count: productNewRating.newReviewCount,
                     })
                     .where(eq(productsTable.id, p.productId));
             }
@@ -126,6 +136,8 @@ export async function submitCustomerRatingAction(
     }
 }
 
+
+//TODO:: baru sampai sini lanjut lagi besok tanggal 26 may
 export async function submitCourierRatingAction(
     orderId: string,
     customerRating: RatingInput,
