@@ -25,6 +25,7 @@ import { useState } from "react";
 import {
     Sheet,
     SheetContent,
+    SheetDescription,
     SheetHeader,
     SheetTitle,
     SheetTrigger,
@@ -170,6 +171,7 @@ export function FeaturePicker() {
                                     Wishlist
                                     <Badge variant="secondary" className="ml-auto">{wishlist.length} item</Badge>
                                 </SheetTitle>
+                                <SheetDescription className="sr-only">Produk yang disimpan untuk dibeli nanti</SheetDescription>
                             </SheetHeader>
                             <Separator />
                             {wishlist.length === 0 ? (

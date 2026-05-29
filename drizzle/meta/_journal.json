@@ -78,6 +78,27 @@
       "when": 1779722989013,
       "tag": "0010_mute_lyja",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1780023545493,
+      "tag": "0011_friendly_thunderbird",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1780027140174,
+      "tag": "0012_modern_gabe_jones",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1780028169523,
+      "tag": "0013_daily_thena",
+      "breakpoints": true
     }
   ]
 }

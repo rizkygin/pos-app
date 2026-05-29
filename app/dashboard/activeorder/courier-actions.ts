@@ -21,7 +21,7 @@ export async function acceptOrder(orderId: string) {
 
     await db
         .update(ordersTable)
-        .set({ courier_id: courier.id })
+        .set({ courier_id: courier.id, updatedAt: new Date() })
         .where(
             and(
                 eq(ordersTable.id, orderId),
@@ -36,7 +36,7 @@ export async function pickupOrder(orderId: string) {
 
     await db
         .update(ordersTable)
-        .set({ status: "on_delivery" })
+        .set({ status: "on_delivery", updatedAt: new Date() })
         .where(
             and(
                 eq(ordersTable.id, orderId),
@@ -51,7 +51,7 @@ export async function deliverOrder(orderId: string) {
 
     await db
         .update(ordersTable)
-        .set({ status: "delivered" })
+        .set({ status: "delivered", updatedAt: new Date() })
         .where(
             and(
                 eq(ordersTable.id, orderId),

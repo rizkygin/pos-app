@@ -18,7 +18,7 @@ export async function acceptOrder(orderId: string) {
 
     await db
         .update(ordersTable)
-        .set({ courier_id: courier.id, status: "preparing" })
+        .set({ courier_id: courier.id, status: "preparing", updatedAt: new Date() })
         .where(
             and(
                 eq(ordersTable.id, orderId),

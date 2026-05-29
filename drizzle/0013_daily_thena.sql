@@ -1,0 +1,1 @@
+ALTER TABLE "orders" ADD COLUMN "rejected_reason" varchar(255);
