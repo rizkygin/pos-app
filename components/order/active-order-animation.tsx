@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { cancelOrderbyCustomer } from '@/app/dashboard/activeorder/actions';
 import { useTransition, useState, useEffect, useCallback } from 'react';
 import QRCode from 'react-qr-code';
-import { QrCode, X } from 'lucide-react';
+import { QrCode, X, Lock, MapPin } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
 type OrderStatus =
@@ -284,7 +284,13 @@ const STEPS: { key: OrderStatus; label: string }[] = [
   { key: 'delivered', label: 'Selesai' },
 ];
 
-function ProgressStepper({ current }: { current: OrderStatus }) {
+function ProgressStepper({
+  current,
+  elapsed,
+}: {
+  current: OrderStatus;
+  elapsed: string;
+}) {
   const currentIdx = STEPS.findIndex((s) => s.key === current);
   return (
     <div className="w-full max-w-sm mx-auto">
@@ -321,6 +327,16 @@ function ProgressStepper({ current }: { current: OrderStatus }) {
               >
                 {step.label}
               </span>
+              {active && (
+                <motion.span
+                  key={elapsed}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="text-[9px] font-black tabular-nums text-emerald-600"
+                >
+                  {elapsed}
+                </motion.span>
+              )}
             </div>
           );
         })}
@@ -380,22 +396,46 @@ function CustomerQrModal({
   );
 }
 
+function useStatusTimer(statusSince: string) {
+  const [seconds, setSeconds] = useState(() =>
+    Math.floor((Date.now() - new Date(statusSince).getTime()) / 1000),
+  );
+  useEffect(() => {
+    setSeconds(
+      Math.floor((Date.now() - new Date(statusSince).getTime()) / 1000),
+    );
+    const id = setInterval(() => setSeconds((s) => s + 1), 1000);
+    return () => clearInterval(id);
+  }, [statusSince]);
+
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  if (h > 0) return `${h}j ${m}m ${s}d`;
+  if (m > 0) return `${m}m ${s}d`;
+  return `${s}d`;
+}
+
 export function ActiveOrderAnimation({
   orderId,
   status,
   orderRef,
   outletName,
+  statusSince,
 }: {
   orderId: string;
   status: OrderStatus;
   orderRef: string;
   outletName: string;
+  statusSince: string;
 }) {
   const router = useRouter();
   const [liveStatus, setLiveStatus] = useState<OrderStatus>(status);
+  const [liveStatusSince, setLiveStatusSince] = useState(statusSince);
   const cfg = STATUS_CONFIG[liveStatus];
   const [pending, startTransition] = useTransition();
   const [qrOpen, setQrOpen] = useState(false);
+  const elapsed = useStatusTimer(liveStatusSince);
 
   const poll = useCallback(async () => {
     try {
@@ -403,7 +443,11 @@ export function ActiveOrderAnimation({
       const data = await res.json();
       if (!data.success) return;
       const next = data.order.status as OrderStatus;
-      if (next !== liveStatus) setLiveStatus(next);
+      if (next !== liveStatus) {
+        setLiveStatus(next);
+        const since = data.order.updatedAt ?? data.order.createdAt;
+        if (since) setLiveStatusSince(since);
+      }
       if (next === 'delivered')
         router.push(`/dashboard/ratings/submit/customer/${data.order.id}`);
     } catch {
@@ -423,8 +467,24 @@ export function ActiveOrderAnimation({
         initial={{ opacity: 0, y: 24 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5, ease: 'easeOut' }}
-        className={`w-full max-w-sm rounded-3xl border border-border/60 shadow-lg p-8 flex flex-col items-center gap-6 ${cfg.bg}`}
+        className={`relative w-full max-w-sm rounded-3xl border border-border/60 shadow-lg p-8 flex flex-col items-center gap-6 ${cfg.bg}`}
       >
+        {/* Live location — coming soon */}
+        {liveStatus === 'on_delivery' && (
+          <div className="absolute top-4 right-4 flex flex-col items-end gap-1">
+            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-muted/60 border border-border/40 opacity-50 cursor-not-allowed select-none">
+              <Lock className="h-3 w-3 text-muted-foreground" />
+              <MapPin className="h-3 w-3 text-muted-foreground" />
+              <span className="text-[10px] font-bold text-muted-foreground">
+                Live Lokasi Kurir
+              </span>
+            </div>
+            <span className="text-[9px] text-muted-foreground/60 font-medium pr-1">
+              Fitur Sedang Dikembangkan
+            </span>
+          </div>
+        )}
+
         {/* Animation */}
         <div className="flex items-center justify-center h-36">
           {ANIMATION_MAP[liveStatus]}
@@ -458,6 +518,17 @@ export function ActiveOrderAnimation({
             <span className="font-bold text-foreground truncate max-w-[140px] text-right">
               {outletName}
             </span>
+          </div>
+          <div className="flex justify-between pt-1 border-t border-border/30">
+            <span className="font-semibold">Status sejak</span>
+            <motion.span
+              key={liveStatusSince}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className={`font-black tabular-nums ${cfg.color}`}
+            >
+              {elapsed}
+            </motion.span>
           </div>
         </div>
 
@@ -502,7 +573,7 @@ export function ActiveOrderAnimation({
         transition={{ duration: 0.5, delay: 0.2 }}
         className="w-full max-w-sm"
       >
-        <ProgressStepper current={liveStatus} />
+        <ProgressStepper current={liveStatus} elapsed={elapsed} />
       </motion.div>
 
       {qrOpen && (

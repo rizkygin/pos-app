@@ -1,7 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Polyline, useMap } from 'react-leaflet';
+import {
+  MapContainer,
+  TileLayer,
+  Marker,
+  Polyline,
+  useMap,
+} from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -13,14 +19,18 @@ const iconBase = {
 
 const pickupIcon = L.icon({
   ...iconBase,
-  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-blue.png',
-  iconRetinaUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png',
+  iconUrl:
+    'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-blue.png',
+  iconRetinaUrl:
+    'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png',
 });
 
 const dropoffIcon = L.icon({
   ...iconBase,
-  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png',
-  iconRetinaUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
+  iconUrl:
+    'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png',
+  iconRetinaUrl:
+    'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
 });
 
 function FitBounds({ positions }: { positions: [number, number][] }) {
@@ -48,14 +58,19 @@ export function RouteMap({ pickup, dropoff, className }: Props) {
     fetch(url)
       .then((r) => r.json())
       .then((data) => {
-        const coords: [number, number][] = data.routes?.[0]?.geometry?.coordinates?.map(
-          ([lon, lat]: [number, number]) => [lat, lon]
-        ) ?? [];
+        console.log(data);
+        const coords: [number, number][] =
+          data.routes?.[0]?.geometry?.coordinates?.map(
+            ([lon, lat]: [number, number]) => [lat, lon],
+          ) ?? [];
         setRoute(coords);
       })
       .catch(() => {
         // fallback: straight line if OSRM fails
-        setRoute([[pickup.lat, pickup.lon], [dropoff.lat, dropoff.lon]]);
+        setRoute([
+          [pickup.lat, pickup.lon],
+          [dropoff.lat, dropoff.lon],
+        ]);
       });
   }, [pickup.lat, pickup.lon, dropoff.lat, dropoff.lon]);
 
@@ -76,8 +91,16 @@ export function RouteMap({ pickup, dropoff, className }: Props) {
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
       />
 
-      <Marker position={[pickup.lat, pickup.lon]} icon={pickupIcon} title={pickup.label ?? 'Pickup'} />
-      <Marker position={[dropoff.lat, dropoff.lon]} icon={dropoffIcon} title={dropoff.label ?? 'Dropoff'} />
+      <Marker
+        position={[pickup.lat, pickup.lon]}
+        icon={pickupIcon}
+        title={pickup.label ?? 'Pickup'}
+      />
+      <Marker
+        position={[dropoff.lat, dropoff.lon]}
+        icon={dropoffIcon}
+        title={dropoff.label ?? 'Dropoff'}
+      />
 
       {route.length > 0 && (
         <Polyline

@@ -28,11 +28,12 @@ const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
 
     const isOwner = !!outlet;
     const isCourier = !!courier;
+    const isCustomer = !isOwner && !isCourier;
 
     return (
         <>
             <AppShell variant="sidebar">
-                <AppSidebar isOwner={isOwner} isCourier={isCourier} />
+                <AppSidebar isOwner={isOwner} isCourier={isCourier} isCustomer={isCustomer} />
 
                 <AppContent variant="sidebar" className="overflow-x-hidden">
                     <header className="sticky top-0 z-10 flex h-10 shrink-0 items-center border-b bg-background px-3">

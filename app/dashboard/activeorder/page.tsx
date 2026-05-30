@@ -29,6 +29,8 @@ export default async function ActiveOrderPage() {
       id: ordersTable.id,
       status: ordersTable.status,
       outletName: outletsTable.name,
+      updatedAt: ordersTable.updatedAt,
+      createdAt: ordersTable.createdAt,
     })
     .from(ordersTable)
     .innerJoin(customersTable, eq(ordersTable.customer_id, customersTable.id))
@@ -54,6 +56,7 @@ export default async function ActiveOrderPage() {
         status={activeOrder.status as 'pending' | 'confirmed' | 'preparing' | 'ready' | 'on_delivery' | 'delivered'}
         orderRef={activeOrder.id.slice(-8).toUpperCase()}
         outletName={activeOrder.outletName}
+        statusSince={(activeOrder.updatedAt ?? activeOrder.createdAt).toISOString()}
       />
     </main>
   );

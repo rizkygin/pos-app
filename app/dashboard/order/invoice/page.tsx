@@ -3,7 +3,7 @@
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { ArrowLeft, Tag, Truck, ShoppingBasket } from "lucide-react";
+import { ArrowLeft, Tag, Truck, ShoppingBasket, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { fmtIDR, discountedPrice } from "@/lib/utils/format";
@@ -21,10 +21,18 @@ type InvoiceDraft = {
     total: number;
 };
 
+type OrderLocations = {
+    pickup: { lat: string; lon: string; label: string };
+    dropoff: { lat: string | null; lon: string | null; label: string };
+    customer: { ratings: string; review_count: number };
+};
+
 export default function InvoicePage() {
     const router = useRouter();
     const [draft, setDraft] = useState<InvoiceDraft | null>(null);
     const [isPending, startTransition] = useTransition();
+    const [customerNote, setCustomerNote] = useState('');
+    const [locations, setLocations] = useState<OrderLocations | null>(null);
 
     useEffect(() => {
         const raw = sessionStorage.getItem("pos_invoice_draft");
@@ -32,7 +40,12 @@ export default function InvoicePage() {
             router.replace("/dashboard/order");
             return;
         }
-        setDraft(JSON.parse(raw));
+        const parsed: InvoiceDraft = JSON.parse(raw);
+        setDraft(parsed);
+
+        fetch(`/api/get-order-locations?outlet_id=${parsed.outlet_id}`)
+            .then((r) => r.json())
+            .then((data) => { if (data.success) setLocations(data); });
     }, [router]);
 
     const handleConfirm = () => {
@@ -42,6 +55,25 @@ export default function InvoicePage() {
                 outlet_id: draft.outlet_id,
                 promo_id: draft.appliedPromo ? Number(draft.appliedPromo.id) : undefined,
                 discount_amount: draft.promoDiscount > 0 ? draft.promoDiscount : undefined,
+                note: locations
+                    ? {
+                          location: {
+                              pick_up: {
+                                  lat: locations.pickup.lat,
+                                  long: locations.pickup.lon,
+                                  label: locations.pickup.label,
+                              },
+                              drop_off: {
+                                  lat: locations.dropoff.lat ?? '',
+                                  long: locations.dropoff.lon ?? '',
+                                  label: locations.dropoff.label,
+                              },
+                          },
+                          customer_ratings: `${locations.customer.ratings}`,
+                          customer_review_count: `${locations.customer.review_count}`,
+                          customer_note: customerNote.trim(),
+                      }
+                    : null,
                 items: draft.cart.map((item) => ({
                     product_id: item.product.id,
                     quantity: item.quantity,
@@ -138,6 +170,22 @@ export default function InvoicePage() {
                         <span>Total yang harus dibayar</span>
                         <span className="text-rose-600">{fmtIDR(total)}</span>
                     </div>
+                </div>
+
+                {/* Customer note */}
+                <div className="rounded-2xl border border-border bg-card p-4 space-y-2.5">
+                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                        <MessageSquare className="h-3.5 w-3.5" /> Catatan untuk Driver & Restoran
+                    </p>
+                    <textarea
+                        value={customerNote}
+                        onChange={(e) => setCustomerNote(e.target.value)}
+                        placeholder="Contoh: Tolong jangan bunyikan klakson, masuk gang kedua kiri..."
+                        rows={3}
+                        maxLength={255}
+                        className="w-full resize-none rounded-xl border border-border bg-muted/40 px-3 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-rose-400"
+                    />
+                    <p className="text-[11px] text-muted-foreground text-right">{customerNote.length}/255</p>
                 </div>
 
                 <div className="pt-2 space-y-2">

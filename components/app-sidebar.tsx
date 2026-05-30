@@ -37,6 +37,7 @@ import {
   Bike,
   ClipboardList,
   Star,
+  History,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -163,6 +164,13 @@ const courierNavItems: NavItem[] = [
     iconBg: 'bg-blue-100 dark:bg-blue-950',
     iconColor: 'text-blue-600 dark:text-blue-400',
   },
+  {
+    name: 'Ratings',
+    url: '/dashboard/courier-ratings',
+    icon: Star,
+    iconBg: 'bg-amber-100 dark:bg-amber-950',
+    iconColor: 'text-amber-600 dark:text-amber-400',
+  },
 ];
 
 const ownerNavItems: NavItem[] = [
@@ -183,12 +191,24 @@ const ratingNavItem: NavItem = {
   iconColor: 'text-amber-600 dark:text-amber-400',
 };
 
+const customerNavItems: NavItem[] = [
+  {
+    name: 'History Order',
+    url: '/dashboard/history-order',
+    icon: History,
+    iconBg: 'bg-indigo-100 dark:bg-indigo-950',
+    iconColor: 'text-indigo-600 dark:text-indigo-400',
+  },
+];
+
 export function AppSidebar({
   isOwner = false,
   isCourier = false,
+  isCustomer = false,
 }: {
   isOwner?: boolean;
   isCourier?: boolean;
+  isCustomer?: boolean;
 }) {
   const router = useRouter();
   const currentUrl = useCurrentUrl();
@@ -272,6 +292,14 @@ export function AppSidebar({
               ))}
             {isCourier &&
               courierNavItems.map((item) => (
+                <NavRow
+                  key={item.name}
+                  item={item}
+                  isActive={item.url === currentUrl}
+                />
+              ))}
+            {isCustomer &&
+              customerNavItems.map((item) => (
                 <NavRow
                   key={item.name}
                   item={item}

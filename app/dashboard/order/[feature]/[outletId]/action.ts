@@ -88,21 +88,23 @@ export async function getDeliveryFee(
   }
 }
 
+//SEARCH:: note json structure
 interface NoteJson {
   location: {
-    outlet: {
+    pick_up: {
       lat: string;
       long: string;
-      address: string;
+      label: string;
     };
-    customer: {
+    drop_off: {
       lat: string;
       long: string;
-      note_location: string;
+      label: string;
     };
   };
   customer_ratings: string;
   customer_note: string;
+  customer_review_count: string;
 }
 
 export type OrderItem = {
@@ -135,6 +137,7 @@ export async function customerMakingOrder(data: OrdersFormDataForFood) {
 
   if (!customer) throw new Error('Customer record not found for this user');
 
+  //SEARCH:: customer make an order
   await db.transaction(async (tx) => {
     await tx.insert(ordersTable).values({
       id: orderId,

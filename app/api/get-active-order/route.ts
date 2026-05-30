@@ -22,6 +22,8 @@ export const GET = async () => {
             id: ordersTable.id,
             status: ordersTable.status,
             outletName: outletsTable.name,
+            updatedAt: ordersTable.updatedAt,
+            createdAt: ordersTable.createdAt,
         })
         .from(ordersTable)
         .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))

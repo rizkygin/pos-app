@@ -8,8 +8,6 @@ import {
   Clock,
   User,
   Package,
-  MapPin,
-  Store,
   ChevronRight,
   QrCode,
   X,
@@ -17,6 +15,7 @@ import {
   ScanLine,
   Camera,
   CameraOff,
+  ExternalLink,
 } from 'lucide-react';
 import QRCode from 'react-qr-code';
 import { acceptOrder } from '@/app/dashboard/lobby/actions';
@@ -34,7 +33,15 @@ type Order = {
   customerName: string;
   customerPhone: string | null;
   deliveryFee: string | null;
-  note: unknown;
+  note: {
+    customer_note: string;
+    customer_ratings: string;
+    customer_review_count: number;
+    location?: {
+      pick_up: { lat: string; long: string; label: string };
+      drop_off: { lat: string; long: string; label: string };
+    };
+  } | null;
   createdAt: string;
   status?: string;
   outletName: string;
@@ -67,6 +74,77 @@ function noteStr(note: unknown): string | null {
   const s = typeof note === 'string' ? note : JSON.stringify(note);
   if (s === '{}' || s === 'null' || s === '') return null;
   return s;
+}
+
+function LocationSection({ order }: { order: Order }) {
+  const pickup = order.note?.location?.pick_up;
+  const dropoff = order.note?.location?.drop_off;
+
+  const pickupUrl = pickup?.lat
+    ? `https://www.google.com/maps/dir/?api=1&destination=${pickup.lat},${pickup.long}&travelmode=driving`
+    : null;
+  const dropoffUrl = dropoff?.lat
+    ? `https://www.google.com/maps/dir/?api=1&destination=${dropoff.lat},${dropoff.long}&travelmode=driving`
+    : null;
+
+  return (
+    <div className="rounded-xl border bg-muted/20 p-3">
+      <div className="flex items-start gap-3">
+        <div className="flex flex-col items-center pt-0.5">
+          <div className="h-2.5 w-2.5 rounded-full bg-blue-500 shrink-0" />
+          <div className="w-px flex-1 my-1 bg-gradient-to-b from-blue-400 to-emerald-400 min-h-[20px]" />
+          <div className="h-2.5 w-2.5 rounded-full bg-emerald-500 shrink-0" />
+        </div>
+        <div className="flex-1 flex flex-col gap-3 min-w-0">
+          <div className="flex items-start justify-between gap-2">
+            <div className="space-y-0.5 min-w-0">
+              <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest">
+                Pickup
+              </p>
+              <p className="text-xs font-semibold truncate">
+                {order.outletName}
+              </p>
+              <p className="text-[11px] text-muted-foreground truncate">
+                {order.outletAddress}
+              </p>
+            </div>
+            {pickupUrl && (
+              <a
+                href={pickupUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex shrink-0 items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold border border-blue-200 text-blue-600 hover:bg-blue-50 transition-colors"
+              >
+                <ExternalLink className="h-3 w-3" />
+                Maps
+              </a>
+            )}
+          </div>
+          <div className="flex items-start justify-between gap-2">
+            <div className="space-y-0.5 min-w-0">
+              <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">
+                Dropoff
+              </p>
+              <p className="text-[11px] text-muted-foreground truncate">
+                {dropoff?.label ?? '—'}
+              </p>
+            </div>
+            {dropoffUrl && (
+              <a
+                href={dropoffUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex shrink-0 items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold border border-emerald-200 text-emerald-600 hover:bg-emerald-50 transition-colors"
+              >
+                <ExternalLink className="h-3 w-3" />
+                Maps
+              </a>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function ItemList({ items }: { items: OrderItem[] }) {
@@ -162,7 +240,9 @@ function AvailableOrderCard({
   onAccept: (id: string) => void;
 }) {
   const [isPending, startTransition] = useTransition();
-  const note = noteStr(order.note);
+  const note = noteStr(order.note?.customer_note ?? '');
+  const rating = noteStr(order.note?.customer_ratings ?? '');
+  const review_count = noteStr(String(order.note?.customer_review_count ?? ''));
 
   return (
     <motion.div
@@ -196,20 +276,14 @@ function AvailableOrderCard({
               · {order.customerPhone}
             </span>
           )}
+          {rating && (
+            <p className="text-xs text-muted-foreground italic border-l-2 border-muted pl-3 leading-relaxed">
+              {`Rating pelanggan ${rating}⭐ dari ${review_count} ulasan`}
+            </p>
+          )}
         </div>
 
-        <div className="flex flex-col gap-1 text-sm">
-          <div className="flex items-center gap-2">
-            <Store className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-            <span className="font-medium">{order.outletName}</span>
-          </div>
-          <div className="flex items-start gap-2">
-            <MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
-            <span className="text-xs text-muted-foreground">
-              {order.outletAddress}
-            </span>
-          </div>
-        </div>
+        <LocationSection order={order} />
 
         <ItemList items={order.items} />
 
@@ -298,7 +372,9 @@ function MyOrderCard({
   courierId: number;
 }) {
   const [qrOpen, setQrOpen] = useState(false);
-  const note = noteStr(order.note);
+  const note = noteStr(order.note?.customer_note ?? '');
+  const rating = noteStr(order.note?.customer_ratings ?? '');
+  const review_count = noteStr(String(order.note?.customer_review_count ?? ''));
   const s = MY_STATUS_MAP[order.status ?? ''] ?? MY_STATUS_MAP.confirmed;
 
   //SEARCH:: qr code generated value
@@ -351,20 +427,14 @@ function MyOrderCard({
                 · {order.customerPhone}
               </span>
             )}
+            {rating && (
+              <p className="text-xs text-muted-foreground italic border-l-2 border-muted pl-3 leading-relaxed">
+                {`Rating pelanggan ${rating}⭐ dari ${review_count} ulasan`}
+              </p>
+            )}
           </div>
 
-          <div className="flex flex-col gap-1 text-sm">
-            <div className="flex items-center gap-2">
-              <Store className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-              <span className="font-medium">{order.outletName}</span>
-            </div>
-            <div className="flex items-start gap-2">
-              <MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
-              <span className="text-xs text-muted-foreground">
-                {order.outletAddress}
-              </span>
-            </div>
-          </div>
+          <LocationSection order={order} />
 
           <ItemList items={order.items} />
 
@@ -849,9 +919,9 @@ export function CourierLobby({ courierId }: { courierId: number }) {
                 />
               )}
               <AnimatePresence mode="popLayout">
-                <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
-                  {activeTab === 'available' &&
-                    available.orders.map((order, i) => (
+                {activeTab === 'available' ? (
+                  <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
+                    {available.orders.map((order, i) => (
                       <AvailableOrderCard
                         key={order.orderId}
                         order={order}
@@ -859,8 +929,10 @@ export function CourierLobby({ courierId }: { courierId: number }) {
                         onAccept={handleAccept}
                       />
                     ))}
-                  {activeTab === 'mine' &&
-                    mine.orders.map((order, i) => (
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-4">
+                    {mine.orders.map((order, i) => (
                       <MyOrderCard
                         key={order.orderId}
                         order={order}
@@ -868,7 +940,8 @@ export function CourierLobby({ courierId }: { courierId: number }) {
                         courierId={courierId}
                       />
                     ))}
-                </div>
+                  </div>
+                )}
               </AnimatePresence>
             </>
           )}

@@ -1,7 +1,13 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Polyline, useMap } from 'react-leaflet';
+import {
+  MapContainer,
+  TileLayer,
+  Marker,
+  Polyline,
+  useMap,
+} from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -13,14 +19,18 @@ const iconBase = {
 
 const dropoffIcon = L.icon({
   ...iconBase,
-  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png',
-  iconRetinaUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
+  iconUrl:
+    'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png',
+  iconRetinaUrl:
+    'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
 });
 
 const courierIcon = L.icon({
   ...iconBase,
-  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png',
-  iconRetinaUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+  iconUrl:
+    'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png',
+  iconRetinaUrl:
+    'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
 });
 
 function FitBounds({ positions }: { positions: [number, number][] }) {
@@ -52,6 +62,7 @@ export function RouteMapSimulation({ pickup, dropoff, className }: Props) {
     fetch(url)
       .then((r) => r.json())
       .then((data) => {
+        console.log(data);
         const coords: [number, number][] = (
           data.routes?.[0]?.geometry?.coordinates ?? []
         ).map(([lon, lat]: [number, number]) => [lat, lon]);
@@ -59,7 +70,10 @@ export function RouteMapSimulation({ pickup, dropoff, className }: Props) {
         setStep(0);
       })
       .catch(() => {
-        setRoute([[pickup.lat, pickup.lon], [dropoff.lat, dropoff.lon]]);
+        setRoute([
+          [pickup.lat, pickup.lon],
+          [dropoff.lat, dropoff.lon],
+        ]);
       });
   }, [pickup.lat, pickup.lon, dropoff.lat, dropoff.lon]);
 
@@ -77,16 +91,22 @@ export function RouteMapSimulation({ pickup, dropoff, className }: Props) {
     } else {
       if (intervalRef.current) clearInterval(intervalRef.current);
     }
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
   }, [playing, route.length]);
 
   const courierPos: [number, number] | null = route[step] ?? null;
   const remainingRoute = route.slice(step);
   const travelledRoute = route.slice(0, step + 1);
-  const bounds: [number, number][] = [[pickup.lat, pickup.lon], [dropoff.lat, dropoff.lon]];
+  const bounds: [number, number][] = [
+    [pickup.lat, pickup.lon],
+    [dropoff.lat, dropoff.lon],
+  ];
   const done = step >= route.length - 1;
 
-  const progress = route.length > 1 ? Math.round((step / (route.length - 1)) * 100) : 0;
+  const progress =
+    route.length > 1 ? Math.round((step / (route.length - 1)) * 100) : 0;
 
   return (
     <div className="space-y-3">
@@ -100,7 +120,11 @@ export function RouteMapSimulation({ pickup, dropoff, className }: Props) {
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
         />
 
-        <Marker position={[dropoff.lat, dropoff.lon]} icon={dropoffIcon} title="Dropoff" />
+        <Marker
+          position={[dropoff.lat, dropoff.lon]}
+          icon={dropoffIcon}
+          title="Dropoff"
+        />
 
         {courierPos && (
           <Marker position={courierPos} icon={courierIcon} title="Courier" />
@@ -125,7 +149,10 @@ export function RouteMapSimulation({ pickup, dropoff, className }: Props) {
       {/* Controls */}
       <div className="flex items-center gap-3">
         <button
-          onClick={() => { setStep(0); setPlaying(false); }}
+          onClick={() => {
+            setStep(0);
+            setPlaying(false);
+          }}
           className="px-4 py-2 rounded-xl border text-sm font-bold hover:bg-muted transition-colors"
         >
           Reset
@@ -153,16 +180,20 @@ export function RouteMapSimulation({ pickup, dropoff, className }: Props) {
 
       <div className="flex gap-3 text-xs font-bold">
         <span className="flex items-center gap-1.5">
-          <span className="inline-block w-3 h-3 rounded-full bg-red-500" /> Courier
+          <span className="inline-block w-3 h-3 rounded-full bg-red-500" />{' '}
+          Courier
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="inline-block w-3 h-3 rounded-full bg-emerald-500" /> Dropoff
+          <span className="inline-block w-3 h-3 rounded-full bg-emerald-500" />{' '}
+          Dropoff
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="inline-block w-3 h-1 bg-blue-600 rounded" /> Remaining
+          <span className="inline-block w-3 h-1 bg-blue-600 rounded" />{' '}
+          Remaining
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="inline-block w-3 h-1 bg-gray-400 rounded" /> Travelled
+          <span className="inline-block w-3 h-1 bg-gray-400 rounded" />{' '}
+          Travelled
         </span>
       </div>
     </div>
