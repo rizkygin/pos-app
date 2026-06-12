@@ -1,17 +1,23 @@
 import { getSession } from "../auth";
 import { db } from "@/src/db";
 import { eq } from "drizzle-orm";
-import { customersTable, couriersTable, outletsTable } from "@/src/db/schema";
+import { adminsTable, customersTable, couriersTable, outletsTable } from "@/src/db/schema";
 import { count } from "drizzle-orm";
 
 
 export const getRole = async () => {
     const session = await getSession();
 
-    if (session.user.email === 'admin') {
+    const admin = db.query.adminsTable.findFirst({
+        where: eq(adminsTable.user_id, session.user.id),
+    })
+    const totalAdmin = await db.$count(adminsTable, eq(adminsTable.user_id, session.user.id));
+
+    if (totalAdmin > 0) {
         return {
-            role: 'admin'
-        }
+            role: 'admin',
+            data: admin
+        };
     }
 
     const customer = db.query.customersTable.findFirst({

@@ -43,8 +43,17 @@ export async function POST(req: Request) {
                 new_order_id = crypto.randomUUID();
                 await tx.insert(ordersTable).values({
                     id: new_order_id,
-                    costomer_id: customer!,
+                    customer_id: customer!,
                     courier_id: courier!,
+                    status: 'delivered',
+                    outlet_id: body.outletId,
+                    note: {
+                        customerName: body.customerName || null,
+                        discountAmount: body.discountAmount ?? 0,
+                        paymentMethod: body.paymentMethod ?? 'cash',
+                        amountPaid: body.amountPaid ?? 0,
+                        changeDue: body.changeDue ?? 0,
+                    },
                 });
 
                 for (const e of body.cart as any) {

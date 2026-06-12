@@ -17,6 +17,12 @@ import {
     MapPin,
     Package,
     Receipt,
+    Wallet,
+    Banknote,
+    Tag,
+    ArrowLeftRight,
+    Store,
+    Globe,
 } from "lucide-react";
 
 const STATUS_MAP = {
@@ -50,11 +56,21 @@ type Customer = {
     address: string | null;
 };
 
+type OfflineNote = {
+    customerName?: string | null;
+    discountAmount?: number;
+    paymentMethod?: "cash" | "non_cash";
+    amountPaid?: number;
+    changeDue?: number;
+};
+
 type ApiResponse = {
     success: boolean;
     outlet: { id: string; name: string };
     items: Item[];
     customer: Customer | null;
+    isOfflineOrder: boolean;
+    offlineNote: OfflineNote | null;
 };
 
 export default function OrderDetailPage() {
@@ -87,7 +103,7 @@ export default function OrderDetailPage() {
 
     if (!data) return null;
 
-    const { outlet, items, customer } = data;
+    const { outlet, items, customer, isOfflineOrder, offlineNote } = data;
 
     const totalAmount = items.reduce((sum, i) => sum + Number(i.summaryPrice), 0);
     const firstItem = items[0];
@@ -114,10 +130,20 @@ export default function OrderDetailPage() {
             </div>
 
             <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
-                <DashboardHeader
-                    title={`Order #${order_id.slice(-8).toUpperCase()}`}
-                    description={`${outlet.name} · ${orderDate}`}
-                />
+                <div className="space-y-1.5">
+                    <span
+                        className={`inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider ${
+                            isOfflineOrder ? "text-amber-600" : "text-blue-600"
+                        }`}
+                    >
+                        {isOfflineOrder ? <Store className="h-3.5 w-3.5" /> : <Globe className="h-3.5 w-3.5" />}
+                        {isOfflineOrder ? "Offline Receipt" : "Online Receipt"}
+                    </span>
+                    <DashboardHeader
+                        title={`Order #${order_id.slice(-8).toUpperCase()}`}
+                        description={`${outlet.name} · ${orderDate}`}
+                    />
+                </div>
                 <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-black ${s.className}`}>
                     <StatusIcon className="h-3.5 w-3.5" />
                     {s.label}
@@ -130,7 +156,19 @@ export default function OrderDetailPage() {
                     <div className="flex items-center gap-2 text-sm font-black text-muted-foreground uppercase tracking-widest">
                         <User className="h-4 w-4" /> Pelanggan
                     </div>
-                    {customer ? (
+                    {isOfflineOrder ? (
+                        <div className="space-y-3">
+                            <div className="flex items-center gap-3">
+                                <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center flex-shrink-0">
+                                    <User className="h-5 w-5 text-muted-foreground" />
+                                </div>
+                                <div>
+                                    <p className="font-black text-sm">{offlineNote?.customerName || "Walk-in Customer"}</p>
+                                    <p className="text-xs text-muted-foreground font-semibold">Pesanan Kasir (Offline)</p>
+                                </div>
+                            </div>
+                        </div>
+                    ) : customer ? (
                         <div className="space-y-3">
                             <div className="flex items-center gap-3">
                                 <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center flex-shrink-0">
@@ -211,11 +249,48 @@ export default function OrderDetailPage() {
                                 <span className="text-muted-foreground font-semibold">Subtotal ({items.length} item)</span>
                                 <span className="font-bold">{fmtIDR(totalAmount)}</span>
                             </div>
+                            {isOfflineOrder && (offlineNote?.discountAmount ?? 0) > 0 && (
+                                <div className="flex justify-between text-sm">
+                                    <span className="text-muted-foreground font-semibold flex items-center gap-1.5">
+                                        <Tag className="h-3.5 w-3.5" /> Diskon
+                                    </span>
+                                    <span className="font-bold text-rose-500">-{fmtIDR(offlineNote?.discountAmount ?? 0)}</span>
+                                </div>
+                            )}
                             <div className="border-t border-border/60 pt-2 flex justify-between">
                                 <span className="font-black text-sm">Total</span>
-                                <span className="font-black text-sm text-rose-600">{fmtIDR(totalAmount)}</span>
+                                <span className="font-black text-sm text-rose-600">
+                                    {fmtIDR(totalAmount - (isOfflineOrder ? (offlineNote?.discountAmount ?? 0) : 0))}
+                                </span>
                             </div>
                         </div>
+
+                        {isOfflineOrder && offlineNote && (
+                            <div className="border-t border-border/60 pt-3 space-y-2">
+                                <div className="flex justify-between text-sm">
+                                    <span className="text-muted-foreground font-semibold flex items-center gap-1.5">
+                                        <Wallet className="h-3.5 w-3.5" /> Metode Pembayaran
+                                    </span>
+                                    <span className="font-bold">{offlineNote.paymentMethod === "non_cash" ? "Non-Cash" : "Cash"}</span>
+                                </div>
+                                {offlineNote.paymentMethod !== "non_cash" && (
+                                    <>
+                                        <div className="flex justify-between text-sm">
+                                            <span className="text-muted-foreground font-semibold flex items-center gap-1.5">
+                                                <Banknote className="h-3.5 w-3.5" /> Uang Diterima
+                                            </span>
+                                            <span className="font-bold">{fmtIDR(offlineNote.amountPaid ?? 0)}</span>
+                                        </div>
+                                        <div className="flex justify-between text-sm">
+                                            <span className="text-muted-foreground font-semibold flex items-center gap-1.5">
+                                                <ArrowLeftRight className="h-3.5 w-3.5" /> Kembalian
+                                            </span>
+                                            <span className="font-bold text-emerald-600">{fmtIDR(offlineNote.changeDue ?? 0)}</span>
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>

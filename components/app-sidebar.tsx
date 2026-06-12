@@ -38,6 +38,9 @@ import {
   ClipboardList,
   Star,
   History,
+  Megaphone,
+  CreditCard,
+  Users,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -99,6 +102,7 @@ const navMain: NavItem[] = [
     iconBg: 'bg-rose-100 dark:bg-rose-950',
     iconColor: 'text-rose-600 dark:text-rose-400',
   },
+  
 ];
 
 const userSubItems = [
@@ -156,6 +160,76 @@ function NavRow({ item, isActive }: { item: NavItem; isActive: boolean }) {
   );
 }
 
+function NavCollapsible({
+  label,
+  icon: Icon,
+  iconBg,
+  iconColor,
+  items,
+  currentUrl,
+}: {
+  label: string;
+  icon: LucideIcon;
+  iconBg: string;
+  iconColor: string;
+  items: { name: string; url: string; icon: LucideIcon }[];
+  currentUrl: string | null;
+}) {
+  const isActive = items.some((sub) => sub.url === currentUrl);
+  return (
+    <Collapsible defaultOpen={isActive} className="group/collapsible">
+      <SidebarMenuItem>
+        <CollapsibleTrigger asChild>
+          <SidebarMenuButton
+            isActive={isActive}
+            className={cn(
+              'h-8 gap-2.5 rounded-md px-2 text-[13px] font-medium transition-colors',
+              'text-muted-foreground hover:bg-accent hover:text-foreground',
+              isActive && 'bg-accent text-foreground',
+            )}
+          >
+            <span
+              className={cn(
+                'flex size-5 shrink-0 items-center justify-center rounded-md',
+                iconBg,
+              )}
+            >
+              <Icon className={cn('size-3', iconColor)} />
+            </span>
+            <span>{label}</span>
+            <ChevronDown className="ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]/collapsible:rotate-180" />
+          </SidebarMenuButton>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <SidebarMenuSub className="mt-0.5">
+            {items.map((sub) => {
+              const SubIcon = sub.icon;
+              const subActive = sub.url === currentUrl;
+              return (
+                <SidebarMenuSubItem key={sub.name}>
+                  <SidebarMenuSubButton
+                    asChild
+                    isActive={subActive}
+                    className={cn(
+                      'text-[12px] text-muted-foreground',
+                      subActive && 'text-foreground font-medium',
+                    )}
+                  >
+                    <Link href={sub.url}>
+                      <SubIcon className="size-3.5" />
+                      <span>{sub.name}</span>
+                    </Link>
+                  </SidebarMenuSubButton>
+                </SidebarMenuSubItem>
+              );
+            })}
+          </SidebarMenuSub>
+        </CollapsibleContent>
+      </SidebarMenuItem>
+    </Collapsible>
+  );
+}
+
 const courierNavItems: NavItem[] = [
   {
     name: 'Lobby Order',
@@ -181,6 +255,13 @@ const ownerNavItems: NavItem[] = [
     iconBg: 'bg-emerald-100 dark:bg-emerald-950',
     iconColor: 'text-emerald-600 dark:text-emerald-400',
   },
+  {
+    name: 'Promosi Menu',
+    url: '/dashboard/promote',
+    icon: Megaphone,
+    iconBg: 'bg-rose-100 dark:bg-rose-950',
+    iconColor: 'text-rose-600 dark:text-rose-400',
+  },
 ];
 
 const ratingNavItem: NavItem = {
@@ -201,14 +282,65 @@ const customerNavItems: NavItem[] = [
   },
 ];
 
+const adminDashboardNavItem: NavItem = {
+  name: 'Dashboard',
+  url: '/dashboard/admin',
+  icon: LayoutDashboard,
+  iconBg: 'bg-blue-100 dark:bg-blue-950',
+  iconColor: 'text-blue-600 dark:text-blue-400',
+};
+
+const adminMenuSubItems = [
+  { name: 'Recommend Menu', url: '/dashboard/admin/menu/recommend', icon: Star },
+  { name: 'Promote Menu', url: '/dashboard/admin/menu/promote', icon: Megaphone },
+];
+
+const adminOutletSubItems = [
+  { name: 'Manage Outlet', url: '/dashboard/admin/outlet', icon: Building2 },
+  { name: 'Subscription Outlet', url: '/dashboard/admin/outlet/subscription', icon: CreditCard },
+];
+
+const adminManageNavItems: NavItem[] = [
+  {
+    name: 'Manage Courier',
+    url: '/dashboard/admin/courier',
+    icon: Bike,
+    iconBg: 'bg-orange-100 dark:bg-orange-950',
+    iconColor: 'text-orange-600 dark:text-orange-400',
+  },
+  {
+    name: 'Manage Customer',
+    url: '/dashboard/admin/customer',
+    icon: Users,
+    iconBg: 'bg-emerald-100 dark:bg-emerald-950',
+    iconColor: 'text-emerald-600 dark:text-emerald-400',
+  },
+  {
+    name: 'Manage User',
+    url: '/dashboard/admin/user',
+    icon: IdCard,
+    iconBg: 'bg-amber-100 dark:bg-amber-950',
+    iconColor: 'text-amber-600 dark:text-amber-400',
+  },
+  {
+    name: 'Manage Rating',
+    url: '/dashboard/admin/rating',
+    icon: Star,
+    iconBg: 'bg-violet-100 dark:bg-violet-950',
+    iconColor: 'text-violet-600 dark:text-violet-400',
+  },
+];
+
 export function AppSidebar({
   isOwner = false,
   isCourier = false,
   isCustomer = false,
+  isAdmin = false,
 }: {
   isOwner?: boolean;
   isCourier?: boolean;
   isCustomer?: boolean;
+  isAdmin?: boolean;
 }) {
   const router = useRouter();
   const currentUrl = useCurrentUrl();
@@ -233,8 +365,6 @@ export function AppSidebar({
         .toUpperCase()
         .slice(0, 2)
     : 'U';
-
-  const isUserSectionActive = userSubItems.some((s) => s.url === currentUrl);
 
   const signOut = async () => {
     await authClient.signOut({
@@ -275,114 +405,112 @@ export function AppSidebar({
             Overview
           </SidebarGroupLabel>
           <SidebarMenu className="gap-0.5">
-            {visibleNavMain.map((item) => (
-              <NavRow
-                key={item.name}
-                item={item}
-                isActive={item.url === currentUrl}
-              />
-            ))}
-            {isOwner &&
-              ownerNavItems.map((item) => (
+            {isAdmin ? (
+              <>
                 <NavRow
-                  key={item.name}
-                  item={item}
-                  isActive={item.url === currentUrl}
+                  item={adminDashboardNavItem}
+                  isActive={adminDashboardNavItem.url === currentUrl}
                 />
-              ))}
-            {isCourier &&
-              courierNavItems.map((item) => (
-                <NavRow
-                  key={item.name}
-                  item={item}
-                  isActive={item.url === currentUrl}
+                <NavCollapsible
+                  label="Menu"
+                  icon={LayoutGrid}
+                  iconBg="bg-green-100 dark:bg-green-950"
+                  iconColor="text-green-600 dark:text-green-400"
+                  items={adminMenuSubItems}
+                  currentUrl={currentUrl}
                 />
-              ))}
-            {isCustomer &&
-              customerNavItems.map((item) => (
-                <NavRow
-                  key={item.name}
-                  item={item}
-                  isActive={item.url === currentUrl}
+                <NavCollapsible
+                  label="Outlet"
+                  icon={Building2}
+                  iconBg="bg-cyan-100 dark:bg-cyan-950"
+                  iconColor="text-cyan-600 dark:text-cyan-400"
+                  items={adminOutletSubItems}
+                  currentUrl={currentUrl}
                 />
-              ))}
-            {isOwner && (
-              <NavRow
-                item={ratingNavItem}
-                isActive={ratingNavItem.url === currentUrl}
-              />
+                {adminManageNavItems.map((item) => (
+                  <NavRow
+                    key={item.name}
+                    item={item}
+                    isActive={item.url === currentUrl}
+                  />
+                ))}
+              </>
+            ) : (
+              <>
+                {visibleNavMain.map((item) => (
+                  <NavRow
+                    key={item.name}
+                    item={item}
+                    isActive={item.url === currentUrl}
+                  />
+                ))}
+                {isOwner &&
+                  ownerNavItems.map((item) => (
+                    <NavRow
+                      key={item.name}
+                      item={item}
+                      isActive={item.url === currentUrl}
+                    />
+                  ))}
+                {isCourier &&
+                  courierNavItems.map((item) => (
+                    <NavRow
+                      key={item.name}
+                      item={item}
+                      isActive={item.url === currentUrl}
+                    />
+                  ))}
+                {isCustomer &&
+                  customerNavItems.map((item) => (
+                    <NavRow
+                      key={item.name}
+                      item={item}
+                      isActive={item.url === currentUrl}
+                    />
+                  ))}
+                {isOwner && (
+                  <NavRow
+                    item={ratingNavItem}
+                    isActive={ratingNavItem.url === currentUrl}
+                  />
+                )}
+              </>
             )}
           </SidebarMenu>
         </SidebarGroup>
 
-        <SidebarSeparator className="mx-2 my-2" />
+        {!isAdmin && (
+          <>
+            <SidebarSeparator className="mx-2 my-2" />
 
-        <SidebarGroup className="p-0">
-          <SidebarGroupLabel className="px-2 py-1 text-[10px] font-medium uppercase tracking-widest text-muted-foreground/60">
-            Management
-          </SidebarGroupLabel>
-          <SidebarMenu className="gap-0.5">
-            {/* User collapsible item */}
-            {!isOwner && (
-              <Collapsible
-                defaultOpen={isUserSectionActive}
-                className="group/user-collapsible"
-              >
-                <SidebarMenuItem>
-                  <CollapsibleTrigger asChild>
-                    <SidebarMenuButton
-                      isActive={isUserSectionActive}
-                      className={cn(
-                        'h-8 gap-2.5 rounded-md px-2 text-[13px] font-medium transition-colors',
-                        'text-muted-foreground hover:bg-accent hover:text-foreground',
-                        isUserSectionActive && 'bg-accent text-foreground',
-                      )}
-                    >
-                      <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-amber-100 dark:bg-amber-950">
-                        <IdCard className="size-3 text-amber-600 dark:text-amber-400" />
-                      </span>
-                      <span>User</span>
-                      <ChevronDown className="ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]/user-collapsible:rotate-180" />
-                    </SidebarMenuButton>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <SidebarMenuSub className="mt-0.5">
-                      {userSubItems.map((sub) => {
-                        const SubIcon = sub.icon;
-                        const isActive = sub.url === currentUrl;
-                        return (
-                          <SidebarMenuSubItem key={sub.name}>
-                            <SidebarMenuSubButton
-                              asChild
-                              isActive={isActive}
-                              className={cn(
-                                'text-[12px] text-muted-foreground',
-                                isActive && 'text-foreground font-medium',
-                              )}
-                            >
-                              <Link href={sub.url}>
-                                <SubIcon className="size-3.5" />
-                                <span>{sub.name}</span>
-                              </Link>
-                            </SidebarMenuSubButton>
-                          </SidebarMenuSubItem>
-                        );
-                      })}
-                    </SidebarMenuSub>
-                  </CollapsibleContent>
-                </SidebarMenuItem>
-              </Collapsible>
-            )}
+            <SidebarGroup className="p-0">
+              <SidebarGroupLabel className="px-2 py-1 text-[10px] font-medium uppercase tracking-widest text-muted-foreground/60">
+                Management
+              </SidebarGroupLabel>
+              <SidebarMenu className="gap-0.5">
+                {/* User collapsible item */}
+                {!isOwner && (
+                  <NavCollapsible
+                    label="User"
+                    icon={IdCard}
+                    iconBg="bg-amber-100 dark:bg-amber-950"
+                    iconColor="text-amber-600 dark:text-amber-400"
+                    items={userSubItems}
+                    currentUrl={currentUrl}
+                  />
+                )}
 
-            {visibleNavManagement.map((item) => (
-              <NavRow
-                key={item.name}
-                item={item}
-                isActive={item.url === currentUrl}
-              />
-            ))}
-          </SidebarMenu>
-        </SidebarGroup>
+                {visibleNavManagement.map((item) => (
+                  <NavRow
+                    key={item.name}
+                    item={item}
+                    isActive={item.url === currentUrl}
+                  />
+                ))}
+              </SidebarMenu>
+            </SidebarGroup>
+          </>
+        )}
       </SidebarContent>
 
       <SidebarFooter className="px-2 py-3">

@@ -31,7 +31,7 @@ export default async function CashierPage() {
     const products = await db.select().from(productsTable).where(eq(productsTable.outlet_id, outlet.id));
 
     return (
-        <main className="flex flex-col min-h-[calc(100vh-4rem)] bg-muted/30">
+        <main className="flex flex-col h-[calc(100vh-2.5rem)] bg-muted/30">
             <CashierClient
                 outletId={outlet.id}
                 outletName={outlet.name}

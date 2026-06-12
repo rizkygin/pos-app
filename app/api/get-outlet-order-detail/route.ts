@@ -68,6 +68,7 @@ export const GET = async (req: Request) => {
                     email: usersTable.email,
                     phone: usersTable.phone,
                     address: usersTable.address,
+                    note: ordersTable.note,
                 })
                 .from(ordersTable)
                 .innerJoin(customersTable, eq(ordersTable.customer_id, customersTable.id))
@@ -80,11 +81,18 @@ export const GET = async (req: Request) => {
             return NextResponse.json({ success: false, error: "Order not found" }, { status: 404 });
         }
 
+        const orderRow = customerRes[0];
+        const isOfflineOrder = orderRow?.email === "rizkygin1@gmail.com";
+
         return NextResponse.json({
             success: true,
             outlet: { id: outlet.id, name: outlet.name },
             items,
-            customer: customerRes[0] ?? null,
+            customer: orderRow
+                ? { name: orderRow.name, email: orderRow.email, phone: orderRow.phone, address: orderRow.address }
+                : null,
+            isOfflineOrder,
+            offlineNote: isOfflineOrder ? (orderRow?.note ?? null) : null,
         });
     } catch (error) {
         return NextResponse.json({ success: false, error: String(error) }, { status: 500 });

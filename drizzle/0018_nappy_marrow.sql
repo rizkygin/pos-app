@@ -1,0 +1,1 @@
+ALTER TABLE "product_ads" ADD COLUMN "duration" integer;

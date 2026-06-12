@@ -12,8 +12,6 @@ import {
   MapPin,
   Phone,
   Clock,
-  Tag,
-  ChevronRight,
   ChevronLeft,
   X,
   Store,
@@ -23,10 +21,6 @@ import {
 import { StarRating } from '@/components/star-rating';
 import { fmtIDR, discountedPrice } from '@/lib/utils/format';
 import { ProductCard } from '@/components/order/product-card';
-import {
-  OutletPromoCard,
-  type OutletPromo,
-} from '@/components/order/outlet-promo-card';
 import {
   BasketSheetContent,
   type CartItem,
@@ -48,43 +42,19 @@ import { OutletSchema, ProductSchema, type Product } from '@/lib/types';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
-type Promo = OutletPromo;
+type ProductAd = {
+  id: number;
+  title: string;
+  description: string | null;
+  banner_image: string;
+  product_id: string;
+};
 
-const MOCK_PROMOS: Promo[] = [
-  {
-    id: 'p1',
-    title: 'Promo Makan Siang',
-    description: 'Diskon untuk semua menu makan siang',
-    code: 'SIANG20',
-    discountPercent: 20,
-    minOrder: 50000,
-    expiresAt: '2026-05-31',
-    color: 'text-white',
-    bgGradient: 'from-rose-500 to-pink-600',
-  },
-  {
-    id: 'p2',
-    title: 'Pelanggan Baru',
-    description: 'Khusus untuk pelanggan pertama kali',
-    code: 'NEWBIE30',
-    discountPercent: 30,
-    minOrder: 30000,
-    expiresAt: '2026-06-15',
-    color: 'text-white',
-    bgGradient: 'from-violet-500 to-purple-600',
-  },
-  {
-    id: 'p3',
-    title: 'Weekend Special',
-    description: 'Setiap Sabtu & Minggu',
-    code: 'WEEKEND15',
-    discountPercent: 15,
-    minOrder: 40000,
-    expiresAt: '2026-05-18',
-    color: 'text-white',
-    bgGradient: 'from-amber-500 to-orange-600',
-  },
-];
+function getAdBannerSrc(image: string): string {
+  if (!image) return '/avatar.png';
+  if (image.startsWith('http') || image.startsWith('/')) return image;
+  return `/ads/${image}`;
+}
 
 // ─── Main Component ─────────────────────────────────────────────────────────
 
@@ -108,10 +78,19 @@ export function OrderClient({
     }
   });
   const wishlistStore = useWishlist();
-  const [appliedPromo, setAppliedPromo] = useState<Promo | null>(null);
   const [basketOpen, setBasketOpen] = useState(false);
   const [wishlistOpen, setWishlistOpen] = useState(false);
-  const [showAllPromos, setShowAllPromos] = useState(false);
+
+  const { data: ads } = useQuery<ProductAd[]>({
+    queryKey: ['outlet-ads', _outletId],
+    queryFn: async () => {
+      const res = await fetch(`/api/get-outlet-ads?outletId=${_outletId}`);
+      if (!res.ok) throw new Error('Failed to fetch ads');
+      const json = await res.json();
+      return json.data;
+    },
+    enabled: !!_outletId,
+  });
 
   const { data: categoriesData } = useQuery<string[]>({
     queryKey: ['categories', _outletId],
@@ -359,56 +338,54 @@ export function OrderClient({
 
       <div className="px-4 md:px-8 space-y-8 pt-6">
         {/* ── Promo Section ──────────────────────────────────────── */}
-        <section className="space-y-4">
-          <div className="flex items-center justify-between">
+        {ads && ads.length > 0 && (
+          <section className="space-y-4">
             <div className="flex items-center gap-2">
               <BadgePercent className="h-5 w-5 text-rose-500" />
               <h2 className="font-black text-lg">Promo Outlet</h2>
             </div>
-            <button
-              onClick={() => setShowAllPromos((v) => !v)}
-              className="flex items-center gap-1 text-rose-600 text-sm font-bold hover:text-rose-700"
-            >
-              {showAllPromos ? 'Sembunyikan' : 'Lihat Semua'}
-              <ChevronRight
-                className={`h-4 w-4 transition-transform ${showAllPromos ? 'rotate-90' : ''}`}
-              />
-            </button>
-          </div>
 
-          <div
-            className={`flex gap-4 ${showAllPromos ? 'flex-wrap' : 'overflow-x-auto pb-2'}`}
-          >
-            {MOCK_PROMOS.map((promo) => (
-              <OutletPromoCard
-                key={promo.id}
-                promo={promo}
-                onApply={(p: Promo) =>
-                  setAppliedPromo((prev) => (prev?.id === p.id ? null : p))
-                }
-                isApplied={appliedPromo?.id === promo.id}
-              />
-            ))}
-          </div>
+            <div className="flex gap-4 overflow-x-auto pb-2 no-scrollbar">
+              {ads.map((ad) => {
+                const product = products?.find((p) => p.id === ad.product_id);
 
-          {appliedPromo && (
-            <motion.div
-              initial={{ opacity: 0, y: -8 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-green-50 border border-green-200 text-green-700 text-sm font-bold"
-            >
-              <Tag className="h-4 w-4" />
-              Promo <span className="font-black">{appliedPromo.code}</span>{' '}
-              diterapkan — hemat {appliedPromo.discountPercent}%!
-              <button
-                onClick={() => setAppliedPromo(null)}
-                className="ml-auto text-green-600 hover:text-green-800"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </motion.div>
-          )}
-        </section>
+                return (
+                  <motion.div
+                    key={ad.id}
+                    whileHover={{ scale: 1.02 }}
+                    onClick={() => {
+                      if (!product) return;
+                      addToCart(product);
+                      setBasketOpen(true);
+                    }}
+                    className="relative flex-shrink-0 w-72 md:w-96 h-36 md:h-48 rounded-[2rem] overflow-hidden cursor-pointer text-white"
+                  >
+                    <Image
+                      src={getAdBannerSrc(ad.banner_image)}
+                      alt={ad.title}
+                      fill
+                      className="object-cover"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-r from-black/70 via-black/30 to-transparent" />
+                    <div className="relative z-10 flex h-full flex-col justify-center gap-2 max-w-xs px-5">
+                      <span className="w-fit px-3 py-1 rounded-full bg-white/20 text-[10px] font-black uppercase tracking-widest backdrop-blur-sm">
+                        Promo
+                      </span>
+                      <h3 className="text-lg md:text-2xl font-black leading-tight line-clamp-2">
+                        {ad.title}
+                      </h3>
+                      {ad.description && (
+                        <p className="text-xs text-white/80 font-medium line-clamp-1">
+                          {ad.description}
+                        </p>
+                      )}
+                    </div>
+                  </motion.div>
+                );
+              })}
+            </div>
+          </section>
+        )}
 
         {/* ── Search ────────────────────────────────────────────── */}
         <div className="relative">
@@ -595,8 +572,8 @@ export function OrderClient({
               onIncrement={incrementCart}
               onDecrement={decrementCart}
               onRemove={removeFromCart}
-              appliedPromo={appliedPromo}
-              onRemovePromo={() => setAppliedPromo(null)}
+              appliedPromo={null}
+              onRemovePromo={() => {}}
               outlet_id={Number(_outletId)}
             />
           </SheetContent>

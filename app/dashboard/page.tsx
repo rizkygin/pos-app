@@ -1,3 +1,4 @@
+import { redirect } from 'next/navigation';
 import { getSession } from '@/lib/auth';
 import { getRole, getOutlet } from '@/lib/utils/get-role';
 import RegisterRolePage from '@/pages/register-role';
@@ -13,17 +14,41 @@ import {
   ordersTable,
   orderDetailsTable,
   outletsTable,
+  productAdsTable,
+  productAdsSchedule,
+  scheduleProductAdsTable,
+  productsTable,
   usersTable,
 } from '@/src/db/schema';
-import { and, desc, eq, gte, inArray, isNull, sql, sum, count } from 'drizzle-orm';
+import {
+  and,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNull,
+  lt,
+  lte,
+  notInArray,
+  or,
+  sql,
+  sum,
+  count,
+} from 'drizzle-orm';
 import { getUTCTime } from '@/lib/timezone';
+import { getCurrentAdSlot } from '@/lib/utils/ad-schedule';
 import { formatCurrency } from '@/lib/utils/format';
+import { NextResponse } from 'next/server';
+import { haversineKm } from '@/lib/utils/geo';
 
 const dashboardPage = async () => {
   const role = await getRole();
 
   if (!role) {
     return <RegisterRolePage />;
+  }
+  if (role.role === 'admin') {
+    redirect('/dashboard/admin');
   }
 
   if (role.role === 'owner') {
@@ -73,10 +98,109 @@ const dashboardPage = async () => {
       (o) => !['delivered', 'cancelled'].includes(o.status),
     ).length;
 
+    const now = new Date();
+    const currentPeriodStart = new Date(
+      now.getFullYear(),
+      now.getMonth() - 5,
+      1,
+    );
+    const previousPeriodStart = new Date(
+      now.getFullYear(),
+      now.getMonth() - 11,
+      1,
+    );
+
+    const validOrderDetails = and(
+      eq(ordersTable.outlet_id, outletId),
+      notInArray(ordersTable.status, ['cancelled', 'pending']),
+    );
+
+    const [[currentPeriod], [previousPeriod], [topProductRow]] =
+      await Promise.all([
+        db
+          .select({
+            total:
+              sql<number>`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric)), 0)`.mapWith(
+                Number,
+              ),
+          })
+          .from(orderDetailsTable)
+          .innerJoin(
+            ordersTable,
+            eq(orderDetailsTable.order_id, ordersTable.id),
+          )
+          .where(
+            and(
+              validOrderDetails,
+              gte(orderDetailsTable.created_at, currentPeriodStart),
+            ),
+          ),
+        db
+          .select({
+            total:
+              sql<number>`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric)), 0)`.mapWith(
+                Number,
+              ),
+          })
+          .from(orderDetailsTable)
+          .innerJoin(
+            ordersTable,
+            eq(orderDetailsTable.order_id, ordersTable.id),
+          )
+          .where(
+            and(
+              validOrderDetails,
+              gte(orderDetailsTable.created_at, previousPeriodStart),
+              lt(orderDetailsTable.created_at, currentPeriodStart),
+            ),
+          ),
+        db
+          .select({
+            name: productsTable.product_name,
+            category: productsTable.category,
+            totalSold: sum(orderDetailsTable.quantity).mapWith(Number),
+          })
+          .from(orderDetailsTable)
+          .innerJoin(
+            ordersTable,
+            eq(orderDetailsTable.order_id, ordersTable.id),
+          )
+          .innerJoin(
+            productsTable,
+            eq(orderDetailsTable.product_id, productsTable.id),
+          )
+          .where(
+            and(
+              validOrderDetails,
+              gte(orderDetailsTable.created_at, currentPeriodStart),
+            ),
+          )
+          .groupBy(productsTable.id)
+          .orderBy(desc(sum(orderDetailsTable.quantity)))
+          .limit(1),
+      ]);
+
+    const currentSales = currentPeriod?.total ?? 0;
+    const previousSales = previousPeriod?.total ?? 0;
+
+    const total6monthsSales = {
+      totalSales: currentSales,
+      percentage:
+        previousSales > 0
+          ? ((currentSales - previousSales) / previousSales) * 100
+          : currentSales > 0
+            ? 100
+            : 0,
+    };
+
+    const topProduct = topProductRow ?? null;
+
     return (
       <OwnerDashboard
         activeOrdersCount={activeOrdersCount}
         recentOrders={recentOrder}
+        total6monthsSales={total6monthsSales}
+        topProduct={topProduct}
       />
     );
   }
@@ -230,7 +354,181 @@ const dashboardPage = async () => {
   }
 
   if (role.role === 'customer') {
-    return <CustomerDashboard />;
+    const session = await getSession();
+
+    const [customer] = await db
+      .select({ id: customersTable.id })
+      .from(customersTable)
+      .where(eq(customersTable.user_id, session.user.id))
+      .limit(1);
+
+    let lastOrders: {
+      orderId: string;
+      outletId: number;
+      outletName: string;
+      outletAvatar: string;
+      outletFeature: string;
+      itemCount: number;
+      totalAmount: number;
+      itemsSummary: string;
+    }[] = [];
+
+    let recommend: {
+      outletId: number;
+      menuName: string;
+      rating: string;
+      distance: string;
+      image: string;
+    }[] = [];
+
+    if (customer) {
+      const rawLastOrders = await db
+        .select({
+          orderId: ordersTable.id,
+          outletId: outletsTable.id,
+          outletName: outletsTable.name,
+          outeletFeature: outletsTable.features,
+          outletAvatar: outletsTable.avatar,
+          itemCount: sum(orderDetailsTable.quantity).mapWith(Number),
+          totalAmount: sum(
+            sql<number>`CAST(${orderDetailsTable.summary_price} AS NUMERIC)`,
+          ).mapWith(Number),
+          itemNames: sql<string[]>`array_agg(${productsTable.product_name})`,
+        })
+        .from(ordersTable)
+        .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))
+        .leftJoin(
+          orderDetailsTable,
+          eq(orderDetailsTable.order_id, ordersTable.id),
+        )
+        .leftJoin(
+          productsTable,
+          eq(orderDetailsTable.product_id, productsTable.id),
+        )
+        .where(
+          and(
+            eq(ordersTable.customer_id, customer.id),
+            eq(ordersTable.status, 'delivered'),
+          ),
+        )
+        .groupBy(ordersTable.id, outletsTable.id)
+        .orderBy(desc(ordersTable.createdAt))
+        .limit(3);
+
+      rawLastOrders.map((o) => {
+        lastOrders.push({
+          orderId: o.orderId,
+          outletId: o.outletId,
+          outletName: o.outletName,
+          outletFeature: o.outeletFeature[0] ?? 'food',
+          outletAvatar: o.outletAvatar,
+          itemCount: o.itemCount ?? 0,
+          totalAmount: o.totalAmount ?? 0,
+          itemsSummary: (o.itemNames ?? []).filter(Boolean).join(', '),
+        });
+      });
+    }
+
+    const recommendedMenus = await db
+      .select({
+        outletId: outletsTable.id,
+        name: productsTable.product_name,
+        lat: outletsTable.lat,
+        lon: outletsTable.lon,
+        address: outletsTable.address,
+        rating: productsTable.ratings,
+        image: productsTable.image,
+      })
+      .from(productsTable)
+      .innerJoin(outletsTable, eq(productsTable.outlet_id, outletsTable.id))
+      .where(eq(productsTable.is_recommended, true))
+      .groupBy(outletsTable.id, productsTable.id)
+      .orderBy(desc(productsTable.review_count))
+      .limit(3);
+
+    const [userLocation] = await db
+      .select({ lat: locationsTable.lat, lon: locationsTable.lon })
+      .from(locationsTable)
+      .where(
+        and(
+          eq(locationsTable.user_id, session.user.id),
+          eq(locationsTable.is_default, true),
+        ),
+      )
+      .limit(1);
+
+    recommend = recommendedMenus.map((r) => {
+      const distance = userLocation
+        ? `${haversineKm(
+            parseFloat(userLocation.lat),
+            parseFloat(userLocation.lon),
+            parseFloat(r.lat),
+            parseFloat(r.lon),
+          ).toFixed(1)} km`
+        : '-';
+
+      return {
+        outletId: r.outletId,
+        menuName: r.name,
+        rating: r.rating ?? '5.00',
+        distance,
+        image: r.image,
+      };
+    });
+
+    const { now: adNow, day: adDay, hour: adHour } = getCurrentAdSlot();
+
+    const adRows = await db
+      .select({
+        id: productAdsTable.id,
+        title: productAdsTable.title,
+        description: productAdsTable.description,
+        bannerImage: productAdsTable.banner_image,
+        outletId: outletsTable.id,
+        outletFeatures: outletsTable.features,
+        productName: productsTable.product_name,
+      })
+      .from(productAdsTable)
+      .innerJoin(outletsTable, eq(productAdsTable.outlet_id, outletsTable.id))
+      .innerJoin(productsTable, eq(productAdsTable.product_id, productsTable.id))
+      .innerJoin(
+        productAdsSchedule,
+        eq(productAdsSchedule.productAdsSchedule_id, productAdsTable.id),
+      )
+      .innerJoin(
+        scheduleProductAdsTable,
+        eq(scheduleProductAdsTable.id, productAdsSchedule.scheduleProductAdsTable_id),
+      )
+      .where(
+        and(
+          eq(productAdsTable.status, 'approved'),
+          eq(productAdsTable.is_active, true),
+          lte(productAdsTable.starts_at, adNow),
+          or(isNull(productAdsTable.ends_at), gte(productAdsTable.ends_at, adNow)),
+          sql`${scheduleProductAdsTable.time}->>'day' = ${adDay}`,
+          sql`${scheduleProductAdsTable.time}->>'hour' = ${adHour}`,
+        ),
+      )
+      .orderBy(sql`RANDOM()`)
+      .limit(3);
+
+    const ads = adRows.map((ad) => ({
+      id: ad.id,
+      title: ad.title,
+      description: ad.description ?? '',
+      bannerImage: ad.bannerImage,
+      outletId: ad.outletId,
+      outletFeature: ad.outletFeatures[0] ?? 'food',
+      productName: ad.productName,
+    }));
+
+    return (
+      <CustomerDashboard
+        lastOrders={lastOrders}
+        recommend={recommend}
+        ads={ads}
+      />
+    );
   }
 };
 

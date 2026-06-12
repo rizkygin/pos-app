@@ -9,7 +9,7 @@ import { AppContent } from '@/components/app-content';
 import { AppShell } from '@/components/app-shell';
 import { AppSidebarHeader } from "@/components/app-sidebar-header"
 import { db } from "@/src/db";
-import { outletsTable, couriersTable } from "@/src/db/schema";
+import { outletsTable, couriersTable, adminsTable } from "@/src/db/schema";
 import { eq } from "drizzle-orm";
 
 
@@ -21,19 +21,21 @@ const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
         return <Forbidden />
     }
 
-    const [[outlet], [courier]] = await Promise.all([
+    const [[outlet], [courier], [admin]] = await Promise.all([
         db.select({ id: outletsTable.id }).from(outletsTable).where(eq(outletsTable.user_id, session.user.id)).limit(1),
         db.select({ id: couriersTable.id }).from(couriersTable).where(eq(couriersTable.user_id, session.user.id)).limit(1),
+        db.select({ id: adminsTable.id }).from(adminsTable).where(eq(adminsTable.user_id, session.user.id)).limit(1),
     ]);
 
     const isOwner = !!outlet;
     const isCourier = !!courier;
-    const isCustomer = !isOwner && !isCourier;
+    const isAdmin = !!admin;
+    const isCustomer = !isOwner && !isCourier && !isAdmin;
 
     return (
         <>
             <AppShell variant="sidebar">
-                <AppSidebar isOwner={isOwner} isCourier={isCourier} isCustomer={isCustomer} />
+                <AppSidebar isOwner={isOwner} isCourier={isCourier} isCustomer={isCustomer} isAdmin={isAdmin} />
 
                 <AppContent variant="sidebar" className="overflow-x-hidden">
                     <header className="sticky top-0 z-10 flex h-10 shrink-0 items-center border-b bg-background px-3">

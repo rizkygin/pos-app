@@ -15,6 +15,7 @@ import {
 } from '@/src/db/schema';
 import { and, eq, isNotNull, or, sql } from 'drizzle-orm';
 import { CATEGORY_IN } from '@/lib/cashflow-categories';
+import { OrdersTable } from '../order-outlet/data-table';
 
 export async function cancelOrderbyCustomer(orderId: string) {
   const session = await getSession();
@@ -29,7 +30,11 @@ export async function cancelOrderbyCustomer(orderId: string) {
 
   await db
     .update(ordersTable)
-    .set({ status: 'cancelled', rejected_by: 'customer', updatedAt: new Date() })
+    .set({
+      status: 'cancelled',
+      rejected_by: 'customer',
+      updatedAt: new Date(),
+    })
     .where(
       and(
         eq(ordersTable.id, orderId),
@@ -140,6 +145,13 @@ export async function markOrderDelivered(orderId: string) {
       .limit(1);
 
     if (!courier) throw new Error('Not a courier');
+    
+    await tx
+      .update(orderDetailsTable)
+      .set({
+        status: 'checkout',
+      })
+      .where(eq(orderDetailsTable.order_id, orderId));
 
     await tx
       .update(ordersTable)

@@ -4,8 +4,8 @@ import {
   TrendingUp,
   ShoppingBag,
   Layers,
-  AlertTriangle,
   ArrowUpRight,
+  ArrowDownRight,
   ShoppingCart,
   History,
   User,
@@ -20,6 +20,17 @@ type RecentOrder = {
   totalAmount: number;
   status: 'addToChart' | 'checkout' | null;
 };
+
+type Total6MonthsSales = {
+  totalSales: number;
+  percentage: number;
+};
+
+type TopProduct = {
+  name: string;
+  category: string;
+  totalSold: number;
+} | null;
 
 function fmtIDR(amount: number) {
   return new Intl.NumberFormat('id-ID', {
@@ -37,10 +48,15 @@ const STATUS_MAP = {
 export const OwnerDashboard = ({
   activeOrdersCount,
   recentOrders,
+  total6monthsSales,
+  topProduct,
 }: {
   activeOrdersCount: number;
   recentOrders: RecentOrder[];
+  total6monthsSales: Total6MonthsSales;
+  topProduct: TopProduct;
 }) => {
+  const isPositive = total6monthsSales.percentage >= 0;
   return (
     <main className="px-4 mx-2 md:mx-6 pb-12">
       <DashboardHeader
@@ -55,17 +71,30 @@ export const OwnerDashboard = ({
             <div className="rounded-xl bg-blue-600 p-2.5 text-white shadow-lg shadow-blue-600/20 transition-transform group-hover:scale-110">
               <TrendingUp className="h-5 w-5" />
             </div>
-            <div className="flex items-center gap-1 text-xs font-semibold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">
-              <ArrowUpRight className="h-3 w-3" />
-              <span>+12.5%</span>
+            <div
+              className={`flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-full ${
+                isPositive
+                  ? 'text-emerald-600 bg-emerald-50'
+                  : 'text-rose-600 bg-rose-50'
+              }`}
+            >
+              {isPositive ? (
+                <ArrowUpRight className="h-3 w-3" />
+              ) : (
+                <ArrowDownRight className="h-3 w-3" />
+              )}
+              <span>
+                {isPositive ? '+' : ''}
+                {total6monthsSales.percentage.toFixed(1)}%
+              </span>
             </div>
           </div>
           <div className="mt-4 flex flex-col gap-1">
             <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
-              Total Sales
+              Sales (6 Months)
             </p>
             <h2 className="text-3xl font-extrabold tracking-tight">
-              $45,231.89
+              {fmtIDR(total6monthsSales.totalSales)}
             </h2>
           </div>
           <div className="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-blue-600/5 blur-2xl transition-opacity group-hover:opacity-100 opacity-50" />
@@ -92,45 +121,51 @@ export const OwnerDashboard = ({
           <div className="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-purple-600/5 blur-2xl transition-opacity group-hover:opacity-100 opacity-50" />
         </div>
 
-        {/* Stats Card: Top Category */}
+        {/* Stats Card: Top Product */}
         <div className="group relative overflow-hidden rounded-2xl border bg-gradient-to-br from-amber-600/10 to-transparent p-6 transition-all hover:shadow-lg hover:border-amber-600/30">
           <div className="flex items-center justify-between">
             <div className="rounded-xl bg-amber-600 p-2.5 text-white shadow-lg shadow-amber-600/20 transition-transform group-hover:scale-110">
               <Layers className="h-5 w-5" />
             </div>
             <div className="text-xs font-semibold text-amber-600 bg-amber-50 px-2 py-1 rounded-full">
-              Popular
+              {topProduct ? topProduct.category : 'Popular'}
             </div>
           </div>
           <div className="mt-4 flex flex-col gap-1">
             <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
-              Top Category
+              Top Product
             </p>
-            <h2 className="text-3xl font-extrabold tracking-tight">
-              Electronics
+            <h2 className="text-3xl font-extrabold tracking-tight truncate">
+              {topProduct ? topProduct.name : '-'}
             </h2>
           </div>
           <div className="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-amber-600/5 blur-2xl transition-opacity group-hover:opacity-100 opacity-50" />
         </div>
 
-        {/* Stats Card: Low Stock */}
-        <div className="group relative overflow-hidden rounded-2xl border bg-gradient-to-br from-rose-600/10 to-transparent p-6 transition-all hover:shadow-lg hover:border-rose-600/30">
+        {/* Stats Card: Order Outlet */}
+        <Link
+          href="/dashboard/order-outlet"
+          className="group relative overflow-hidden rounded-2xl border bg-gradient-to-br from-rose-600/10 to-transparent p-6 transition-all hover:shadow-lg hover:border-rose-600/30"
+        >
           <div className="flex items-center justify-between">
             <div className="rounded-xl bg-rose-600 p-2.5 text-white shadow-lg shadow-rose-600/20 transition-transform group-hover:scale-110">
-              <AlertTriangle className="h-5 w-5" />
+              <ShoppingCart className="h-5 w-5" />
             </div>
-            <div className="text-xs font-semibold text-rose-600 bg-rose-50 px-2 py-1 rounded-full">
-              Action Needed
+            <div className="flex items-center gap-1 text-xs font-semibold text-rose-600 bg-rose-50 px-2 py-1 rounded-full">
+              <span>Manage</span>
+              <ArrowUpRight className="h-3 w-3" />
             </div>
           </div>
           <div className="mt-4 flex flex-col gap-1">
             <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
-              Low Stock
+              History Pesanan
             </p>
-            <h2 className="text-3xl font-extrabold tracking-tight">12 Items</h2>
+            <h2 className="text-3xl font-extrabold tracking-tight">
+              {activeOrdersCount} Active
+            </h2>
           </div>
           <div className="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-rose-600/5 blur-2xl transition-opacity group-hover:opacity-100 opacity-50" />
-        </div>
+        </Link>
       </div>
 
       {/* Premium Dashboard Sections */}

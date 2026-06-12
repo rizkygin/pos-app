@@ -77,13 +77,14 @@ export const GET = async (req: Request) => {
                 .from(orderDetailsTable)
                 .innerJoin(productsTable,  eq(orderDetailsTable.product_id, productsTable.id))
                 .innerJoin(ordersTable,    eq(orderDetailsTable.order_id,   ordersTable.id))
-                .innerJoin(customersTable, eq(ordersTable.costomer_id,      customersTable.id))
+                .innerJoin(customersTable, eq(ordersTable.customer_id,      customersTable.id))
                 .innerJoin(usersTable,     eq(customersTable.user_id,       usersTable.id))
                 .where(baseFilter)
                 .groupBy(orderDetailsTable.order_id, usersTable.name, ordersTable.status)
                 .orderBy(desc(sql`max(${orderDetailsTable.created_at})`))
                 .limit(limit)
                 .offset(offset),
+                
 
             // total matching orders (for page count)
             db
@@ -91,7 +92,7 @@ export const GET = async (req: Request) => {
                 .from(orderDetailsTable)
                 .innerJoin(productsTable,  eq(orderDetailsTable.product_id, productsTable.id))
                 .innerJoin(ordersTable,    eq(orderDetailsTable.order_id,   ordersTable.id))
-                .innerJoin(customersTable, eq(ordersTable.costomer_id,      customersTable.id))
+                .innerJoin(customersTable, eq(ordersTable.customer_id,      customersTable.id))
                 .innerJoin(usersTable,     eq(customersTable.user_id,       usersTable.id))
                 .where(baseFilter),
 

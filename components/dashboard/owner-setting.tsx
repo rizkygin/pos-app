@@ -67,7 +67,7 @@ export function OwnerSetting({ outlet }: { outlet: Outlet | null }) {
     const [isPending, startTransition] = useTransition();
     const fileRef = useRef<HTMLInputElement>(null);
 
-    const avatarSrc = avatar.startsWith("/") ? avatar : `/${avatar}`;
+    const avatarSrc = avatar.startsWith("http") || avatar.startsWith("/") ? avatar : `/${avatar}`;
 
     function handleGetLocation() {
         setLocating(true);

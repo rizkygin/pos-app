@@ -3,6 +3,7 @@ import { Utensils, Coffee, Wrench, ShoppingBag, PackageOpen, Sparkles, Bike, Sci
 export type OrderFeature = {
     slug: string;
     label: string;
+    category: string;
     description: string;
     icon: React.ElementType;
     gradient: string;
@@ -17,6 +18,7 @@ export type OrderFeature = {
 export const ORDER_FEATURES: OrderFeature[] = [
     {
         slug: "food",
+        category: "makanan",
         label: "Pesan Makanan",
         description: "Makanan lezat dari restoran & warung terdekat",
         icon: Utensils,
@@ -29,6 +31,7 @@ export const ORDER_FEATURES: OrderFeature[] = [
     },
     {
         slug: "drink",
+        category: "minuman",
         label: "Pesan Minuman",
         description: "Kopi, teh, jus, dan minuman segar lainnya",
         icon: Coffee,
@@ -40,6 +43,7 @@ export const ORDER_FEATURES: OrderFeature[] = [
     },
     {
         slug: "service",
+        category: "jasa",
         label: "Layanan Jasa",
         description: "Servis rumah tangga, reparasi, dan kebutuhan teknis",
         icon: Wrench,
@@ -51,6 +55,7 @@ export const ORDER_FEATURES: OrderFeature[] = [
     },
     {
         slug: "mart",
+        category: 'mart',
         label: "Belanja Mart",
         description: "Kebutuhan sehari-hari, sembako, dan produk rumah",
         icon: ShoppingBag,
@@ -63,6 +68,7 @@ export const ORDER_FEATURES: OrderFeature[] = [
     },
     {
         slug: "delivery",
+        category: 'antar',
         label: "Kirim Paket",
         description: "Pengiriman cepat ke seluruh kota",
         icon: PackageOpen,
@@ -74,6 +80,7 @@ export const ORDER_FEATURES: OrderFeature[] = [
     },
     {
         slug: "beauty",
+        category: 'kecantikan',
         label: "Kecantikan & Spa",
         description: "Salon, barbershop, perawatan tubuh & kecantikan",
         icon: Scissors,
@@ -85,6 +92,7 @@ export const ORDER_FEATURES: OrderFeature[] = [
     },
     {
         slug: "ride",
+        category: 'sewa kendaraan',
         label: "Sewa Kendaraan",
         description: "Motor, mobil, dan ojek instan di sekitarmu",
         icon: Bike,
@@ -96,6 +104,7 @@ export const ORDER_FEATURES: OrderFeature[] = [
     },
     {
         slug: "entertainment",
+        category: 'hiburan',
         label: "Hiburan & Aktivitas",
         description: "Tiket, workshop, event, dan pengalaman seru",
         icon: Sparkles,

@@ -11,8 +11,15 @@ type ReceiptItem = {
 
 export type ReceiptData = {
     orderId: string;
+    customerName: string;
     items: ReceiptItem[];
+    subtotal: number;
+    discountAmount: number;
+    discountLabel: string;
     total: number;
+    paymentMethod: 'cash' | 'non_cash';
+    amountPaid: number;
+    changeDue: number;
     date: Date;
     outletName: string;
     outletAddress: string;
@@ -100,6 +107,12 @@ export function ReceiptModal({ data, onClose }: Props) {
                             <span className="text-gray-500">Cashier</span>
                             <span>{data.cashierName}</span>
                         </div>
+                        {data.customerName && (
+                            <div className="flex justify-between text-xs mb-1">
+                                <span className="text-gray-500">Customer</span>
+                                <span className="font-semibold">{data.customerName}</span>
+                            </div>
+                        )}
 
                         <div className="border-t border-dashed border-gray-300 my-3" />
 
@@ -107,15 +120,28 @@ export function ReceiptModal({ data, onClose }: Props) {
                         <div className="space-y-2">
                             {data.items.map((item, i) => {
                                 const isDiscount = item.price_mark_down && item.price_mark_down !== "0";
+                                const originalPrice = parseFloat(item.price);
                                 const unitPrice = parseFloat(isDiscount ? item.price_mark_down : item.price);
                                 const subtotal = unitPrice * item.quantity;
+                                const itemDiscount = isDiscount ? (originalPrice - unitPrice) * item.quantity : 0;
                                 return (
                                     <div key={i}>
                                         <p className="font-semibold text-[13px] leading-tight">{item.product_name}</p>
                                         <div className="flex justify-between text-xs text-gray-500">
-                                            <span>{item.quantity} × {fmt(unitPrice)}</span>
+                                            <span>
+                                                {item.quantity} × {fmt(unitPrice)}
+                                                {isDiscount && (
+                                                    <span className="ml-1 line-through text-gray-400">{fmt(originalPrice)}</span>
+                                                )}
+                                            </span>
                                             <span className="font-semibold text-gray-800">{fmt(subtotal)}</span>
                                         </div>
+                                        {isDiscount && (
+                                            <div className="flex justify-between text-[11px] text-rose-500">
+                                                <span>Item discount</span>
+                                                <span>-{fmt(itemDiscount)}</span>
+                                            </div>
+                                        )}
                                     </div>
                                 );
                             })}
@@ -126,16 +152,39 @@ export function ReceiptModal({ data, onClose }: Props) {
                         {/* Totals */}
                         <div className="flex justify-between text-xs mb-1">
                             <span className="text-gray-500">Subtotal</span>
-                            <span>{fmt(data.total)}</span>
+                            <span>{fmt(data.subtotal)}</span>
                         </div>
                         <div className="flex justify-between text-xs mb-2">
-                            <span className="text-gray-500">Tax (0%)</span>
-                            <span>Rp 0</span>
+                            <span className="text-gray-500">{data.discountLabel}</span>
+                            <span className={data.discountAmount > 0 ? 'text-rose-500' : ''}>
+                                {data.discountAmount > 0 ? '-' : ''}{fmt(data.discountAmount)}
+                            </span>
                         </div>
                         <div className="flex justify-between font-bold text-sm">
                             <span>TOTAL</span>
                             <span className="text-blue-600">{fmt(data.total)}</span>
                         </div>
+
+                        <div className="border-t border-dashed border-gray-300 my-3" />
+
+                        {/* Payment */}
+                        {data.paymentMethod === 'non_cash' ? (
+                            <div className="flex justify-between font-bold text-sm">
+                                <span>Payment</span>
+                                <span className="text-blue-600">Non-Cash</span>
+                            </div>
+                        ) : (
+                            <>
+                                <div className="flex justify-between text-xs mb-1">
+                                    <span className="text-gray-500">Cash</span>
+                                    <span>{fmt(data.amountPaid)}</span>
+                                </div>
+                                <div className="flex justify-between font-bold text-sm">
+                                    <span>Change</span>
+                                    <span className="text-emerald-600">{fmt(data.changeDue)}</span>
+                                </div>
+                            </>
+                        )}
 
                         <div className="border-t border-dashed border-gray-300 my-3" />
 

@@ -38,6 +38,11 @@ export const REJECTED_BY = pgEnum('rejected_by', [
   'customer',
   'owner',
 ]);
+export const AD_STATUS = pgEnum('ad_status', [
+  'pending',
+  'approved',
+  'rejected',
+]);
 
 export const usersTable = pgTable('users', {
   id: text('id').primaryKey(),
@@ -84,6 +89,16 @@ export const outletsTable = pgTable('outlets', {
   ...timestamps,
 });
 
+export const adminsTable = pgTable('admins', {
+  id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+  user_id: text('user_id')
+    .notNull()
+    .references(() => usersTable.id),
+  name: varchar('name', { length: 255 }).notNull(),
+  email: varchar('email', { length: 255 }).notNull().unique(),
+  ...timestamps,
+});
+
 export const customersTable = pgTable('customers', {
   id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
   user_id: text('user_id')
@@ -125,8 +140,7 @@ export const productsTable = pgTable(
     ratings: numeric('ratings', { precision: 3, scale: 2 }).default('5'),
     image: varchar('image', { length: 255 }).notNull().default('avatar.png'),
     category: varchar('category', { length: 255 })
-      .notNull()
-      .default('avatar.png'),
+      .notNull(),
     isAvailable: boolean('is_available').default(true).notNull(),
     description: varchar('description', { length: 255 }).default(''),
     unit: varchar('unit', { length: 10 }).notNull().default('pcs'),
@@ -278,6 +292,38 @@ export const promosTable = pgTable('promos', {
   image: varchar('image', { length: 255 })
     .notNull()
     .default('/promos/default-promo.png'),
+  ...timestamps,
+});
+
+export const scheduleProductAdsTable = pgTable('schedule_product_ads', {
+  id: integer('id').primaryKey(),
+  time: json('time_display').$type<{ day: string; hour: string }>(),
+});
+
+export const productAdsSchedule = pgTable('product_ads_schedule' ,{
+  id: integer('id').primaryKey().generatedAlwaysAsIdentity(),
+  scheduleProductAdsTable_id : integer('schedule_products_ads_id').notNull().references(() => scheduleProductAdsTable.id),
+  productAdsSchedule_id: integer('products_ads_id').notNull().references(()=> productAdsTable.id)
+})
+
+export const productAdsTable = pgTable('product_ads', {
+  id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+  outlet_id: integer('outlet_id')
+    .notNull()
+    .references(() => outletsTable.id),
+  product_id: text('product_id')
+    .notNull()
+    .references(() => productsTable.id),
+  title: varchar('title', { length: 255 }).notNull(),
+  description: varchar('description', { length: 500 }).default(''),
+  banner_image: varchar('banner_image', { length: 255 }).notNull(),
+  status: AD_STATUS('status').default('pending').notNull(),
+  is_active: boolean('is_active').default(true).notNull(),
+  rejection_reason: varchar('rejection_reason', { length: 255 }),
+  starts_at: timestamp('starts_at', { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  ends_at: timestamp('ends_at', { withTimezone: true }),
   ...timestamps,
 });
 
