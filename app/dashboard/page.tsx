@@ -37,6 +37,7 @@ import {
 } from 'drizzle-orm';
 import { getUTCTime } from '@/lib/timezone';
 import { getCurrentAdSlot } from '@/lib/utils/ad-schedule';
+import { getCourierRatingInfo } from '@/lib/utils/courier-availability';
 import { formatCurrency } from '@/lib/utils/format';
 import { NextResponse } from 'next/server';
 import { haversineKm } from '@/lib/utils/geo';
@@ -288,6 +289,68 @@ const dashboardPage = async () => {
       completion: String((1 - cancelOrderByCourier / completion) * 100) + '%',
     };
 
+    const { ratingStatus, delaySeconds } = await getCourierRatingInfo(courier.id);
+
+    const courierNow = getUTCTime();
+    const daysSinceMonday = (courierNow.getUTCDay() + 6) % 7;
+    const thisWeekStart = new Date(courierNow);
+    thisWeekStart.setUTCDate(courierNow.getUTCDate() - daysSinceMonday);
+    thisWeekStart.setUTCHours(0, 0, 0, 0);
+    const lastWeekStart = new Date(
+      thisWeekStart.getTime() - 7 * 24 * 60 * 60 * 1000,
+    );
+
+    const [[thisWeekStats], [lastWeekStats]] = await Promise.all([
+      db
+        .select({
+          total: sql<number>`coalesce(sum(cast(${ordersTable.delivery_fee} as numeric)), 0)`.mapWith(
+            Number,
+          ),
+          orders: count(ordersTable.id),
+        })
+        .from(ordersTable)
+        .where(
+          and(
+            eq(ordersTable.courier_id, courier.id),
+            eq(ordersTable.status, 'delivered'),
+            gte(ordersTable.createdAt, thisWeekStart),
+          ),
+        ),
+      db
+        .select({
+          total: sql<number>`coalesce(sum(cast(${ordersTable.delivery_fee} as numeric)), 0)`.mapWith(
+            Number,
+          ),
+        })
+        .from(ordersTable)
+        .where(
+          and(
+            eq(ordersTable.courier_id, courier.id),
+            eq(ordersTable.status, 'delivered'),
+            gte(ordersTable.createdAt, lastWeekStart),
+            lt(ordersTable.createdAt, thisWeekStart),
+          ),
+        ),
+    ]);
+
+    const thisWeekEarnings = thisWeekStats?.total ?? 0;
+    const lastWeekEarnings = lastWeekStats?.total ?? 0;
+    const thisWeekOrders = thisWeekStats?.orders ?? 0;
+
+    const weeklyPerformance = {
+      totalEarnings: formatCurrency(thisWeekEarnings),
+      percentageChange:
+        lastWeekEarnings > 0
+          ? ((thisWeekEarnings - lastWeekEarnings) / lastWeekEarnings) * 100
+          : thisWeekEarnings > 0
+            ? 100
+            : 0,
+      orders: thisWeekOrders,
+      avgPerOrder: formatCurrency(
+        thisWeekOrders > 0 ? thisWeekEarnings / thisWeekOrders : 0,
+      ),
+    };
+
     const [activeOrder] = await db
       .select({
         id: ordersTable.id,
@@ -347,8 +410,11 @@ const dashboardPage = async () => {
       <CourierDashboard
         currentPickUp={currentPickUp}
         dashboardValue={dashboardCurierValue}
+        weeklyPerformance={weeklyPerformance}
         initialIsOnline={initialIsOnline}
         todayOnlineSeconds={todayOnlineSeconds}
+        ratingStatus={ratingStatus}
+        delaySeconds={delaySeconds}
       />
     );
   }
@@ -510,7 +576,7 @@ const dashboardPage = async () => {
         ),
       )
       .orderBy(sql`RANDOM()`)
-      .limit(3);
+      .limit(10);
 
     const ads = adRows.map((ad) => ({
       id: ad.id,
@@ -527,6 +593,7 @@ const dashboardPage = async () => {
         lastOrders={lastOrders}
         recommend={recommend}
         ads={ads}
+        hasLocation={!!userLocation}
       />
     );
   }

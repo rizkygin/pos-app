@@ -12,6 +12,7 @@ import {
     couriersTable,
 } from "@/src/db/schema";
 import { eq, and, isNull } from "drizzle-orm";
+import { getCourierAvailability } from "@/lib/utils/courier-availability";
 
 export const GET = async () => {
     const session = await auth.api.getSession({ headers: await headers() });
@@ -24,6 +25,19 @@ export const GET = async () => {
         .limit(1);
 
     if (!courier) return NextResponse.json({ success: false, error: "Not a courier" }, { status: 403 });
+
+    const availability = await getCourierAvailability(courier.id);
+
+    if (!availability.canReceiveOrder) {
+        return NextResponse.json({
+            success: true,
+            orders: [],
+            canReceiveOrder: false,
+            reason: !availability.isOnline ? "offline" : "busy",
+            ratingStatus: availability.ratingStatus,
+            delaySeconds: availability.delaySeconds,
+        });
+    }
 
     const orders = await db
         .select({
@@ -43,8 +57,15 @@ export const GET = async () => {
         .where(and(eq(ordersTable.status, "confirmed"), isNull(ordersTable.courier_id)))
         .orderBy(ordersTable.createdAt);
 
+    const visibleOrders = availability.delaySeconds > 0
+        ? orders.filter((order) => {
+            const ageMs = Date.now() - new Date(order.createdAt!).getTime();
+            return ageMs >= availability.delaySeconds * 1000;
+        })
+        : orders;
+
     const ordersWithItems = await Promise.all(
-        orders.map(async (order) => {
+        visibleOrders.map(async (order) => {
             const items = await db
                 .select({
                     productName: productsTable.product_name,
@@ -62,5 +83,12 @@ export const GET = async () => {
         })
     );
 
-    return NextResponse.json({ success: true, orders: ordersWithItems });
+    return NextResponse.json({
+        success: true,
+        orders: ordersWithItems,
+        canReceiveOrder: true,
+        reason: null,
+        ratingStatus: availability.ratingStatus,
+        delaySeconds: availability.delaySeconds,
+    });
 };

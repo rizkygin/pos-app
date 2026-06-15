@@ -141,3 +141,27 @@ body {
     @apply font-sans;
   }
 }
+
+.promo-tour-popover .driver-popover-footer {
+  margin-top: 12px;
+}
+
+.promo-tour-popover .driver-popover-next-btn,
+.promo-tour-popover .driver-popover-prev-btn {
+  font-size: 14px;
+  font-weight: 700;
+  padding: 8px 18px;
+  border-radius: 10px;
+  text-shadow: none;
+  border: none;
+}
+
+.promo-tour-popover .driver-popover-next-btn {
+  background-color: #e11d48;
+  color: #fff;
+}
+
+.promo-tour-popover .driver-popover-prev-btn {
+  background-color: #f1f5f9;
+  color: #0f172a;
+}

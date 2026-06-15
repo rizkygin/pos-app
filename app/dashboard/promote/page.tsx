@@ -1,5 +1,10 @@
 import { db } from '@/src/db';
-import { productAdsTable, productsTable } from '@/src/db/schema';
+import {
+  productAdsTable,
+  productsTable,
+  productAdsSchedule,
+  scheduleProductAdsTable,
+} from '@/src/db/schema';
 import { eq, and, isNull, desc } from 'drizzle-orm';
 import getOutletID from '@/lib/outlet-id';
 import { PromoteManager } from './promote-manager';
@@ -46,11 +51,32 @@ export const Page = async () => {
       status: productAdsTable.status,
       is_active: productAdsTable.is_active,
       rejection_reason: productAdsTable.rejection_reason,
+      ends_at: productAdsTable.ends_at,
     })
     .from(productAdsTable)
     .innerJoin(productsTable, eq(productAdsTable.product_id, productsTable.id))
     .where(eq(productAdsTable.outlet_id, outlet.id))
     .orderBy(desc(productAdsTable.createdAt));
+
+  const schedules = await db
+    .select({
+      ad_id: productAdsSchedule.productAdsSchedule_id,
+      time: scheduleProductAdsTable.time,
+    })
+    .from(productAdsSchedule)
+    .innerJoin(
+      scheduleProductAdsTable,
+      eq(productAdsSchedule.scheduleProductAdsTable_id, scheduleProductAdsTable.id),
+    );
+
+  const scheduleByAdId = new Map<number, { days: Set<string>; hours: Set<string> }>();
+  for (const { ad_id, time } of schedules) {
+    if (!time) continue;
+    const entry = scheduleByAdId.get(ad_id) ?? { days: new Set(), hours: new Set() };
+    entry.days.add(time.day);
+    entry.hours.add(time.hour);
+    scheduleByAdId.set(ad_id, entry);
+  }
 
   return (
     <main className="px-4 mx-2 md:mx-6 pb-12 space-y-4">
@@ -60,11 +86,17 @@ export const Page = async () => {
       />
       <PromoteManager
         products={products}
-        ads={ads.map((ad) => ({
-          ...ad,
-          description: ad.description ?? '',
-          rejection_reason: ad.rejection_reason ?? null,
-        }))}
+        ads={ads.map((ad) => {
+          const schedule = scheduleByAdId.get(ad.id);
+          return {
+            ...ad,
+            description: ad.description ?? '',
+            rejection_reason: ad.rejection_reason ?? null,
+            ends_at: ad.ends_at ? ad.ends_at.toISOString() : null,
+            schedule_days: schedule ? Array.from(schedule.days) : [],
+            schedule_hours: schedule ? Array.from(schedule.hours).sort() : [],
+          };
+        })}
       />
     </main>
   );

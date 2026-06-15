@@ -62,7 +62,8 @@ const CATEGORIES = ORDER_FEATURES.map((feature) => ({
   label: feature.label,
   category: feature.category,
   icon: feature.icon,
-}));
+  isAvailable: feature.isAvailable,
+})).sort((a, b) => Number(b.isAvailable) - Number(a.isAvailable));
 
 export const ProductsManager = ({
   outletId,
@@ -431,18 +432,31 @@ export const ProductsManager = ({
             {CATEGORIES.map((cat) => (
               <button
                 key={cat.id}
+                disabled={!cat.isAvailable}
                 onClick={() => handleCategorySelect(cat.category)}
-                className={`flex flex-col items-center justify-center p-4 md:p-8 rounded-2xl md:rounded-3xl border-2 transition-all hover:-translate-y-1 hover:shadow-xl bg-background hover:border-blue-500 group relative overflow-hidden`}
+                className={`flex flex-col items-center justify-center p-4 md:p-8 rounded-2xl md:rounded-3xl border-2 transition-all group relative overflow-hidden ${
+                  !cat.isAvailable
+                    ? 'bg-muted/30 cursor-not-allowed opacity-50'
+                    : 'hover:-translate-y-1 hover:shadow-xl bg-background hover:border-blue-500'
+                }`}
               >
                 <div
-                  className={`p-3 md:p-4 rounded-xl md:rounded-2xl text-amber-500 bg-amber-50 mb-2 md:mb-4 group-hover:scale-110 transition-transform duration-300 relative z-10 shadow-sm`}
+                  className={`p-3 md:p-4 rounded-xl md:rounded-2xl mb-2 md:mb-4 transition-transform duration-300 relative z-10 shadow-sm ${
+                    !cat.isAvailable
+                      ? 'text-muted-foreground bg-muted/50'
+                      : 'text-amber-500 bg-amber-50 group-hover:scale-110'
+                  }`}
                 >
                   <cat.icon className="h-6 w-6 md:h-10 md:w-10" />
                 </div>
-                <span className="font-bold text-sm md:text-lg text-foreground relative z-10 group-hover:text-blue-600 transition-colors text-center">
+                <span className={`font-bold text-sm md:text-lg relative z-10 transition-colors text-center ${
+                  !cat.isAvailable ? 'text-muted-foreground' : 'text-foreground group-hover:text-blue-600'
+                }`}>
                   {cat.label}
                 </span>
-                <div className="absolute inset-0 bg-gradient-to-b from-transparent to-muted/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+                {cat.isAvailable && (
+                  <div className="absolute inset-0 bg-gradient-to-b from-transparent to-muted/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+                )}
               </button>
             ))}
           </div>
@@ -600,6 +614,7 @@ export const ProductsManager = ({
                       <button
                         key={f.id}
                         type="button"
+                        disabled={!f.isAvailable}
                         onClick={() =>
                           setSelectedFeatures((prev) =>
                             prev.includes(f.id)
@@ -608,9 +623,11 @@ export const ProductsManager = ({
                           )
                         }
                         className={`px-3 py-1.5 rounded-full text-xs font-bold border-2 transition-all duration-150 ${
-                          active
-                            ? 'border-blue-500 bg-blue-500 text-white shadow-sm'
-                            : 'border-border bg-background text-muted-foreground hover:border-blue-300 hover:text-blue-600'
+                          !f.isAvailable
+                            ? 'border-border bg-muted/30 text-muted-foreground/40 cursor-not-allowed'
+                            : active
+                              ? 'border-blue-500 bg-blue-500 text-white shadow-sm'
+                              : 'border-border bg-background text-muted-foreground hover:border-blue-300 hover:text-blue-600'
                         }`}
                       >
                         {f.label}

@@ -16,10 +16,15 @@ import {
   Camera,
   CameraOff,
   ExternalLink,
+  WifiOff,
+  Wifi,
+  Loader2,
+  AlertTriangle,
 } from 'lucide-react';
 import QRCode from 'react-qr-code';
 import { acceptOrder } from '@/app/dashboard/lobby/actions';
 import { markOrderDelivered } from '@/app/dashboard/activeorder/actions';
+import { goOnline } from '@/app/dashboard/courier-sessions/actions';
 
 type OrderItem = {
   productName: string;
@@ -463,14 +468,24 @@ function MyOrderCard({
   );
 }
 
-function EmptyState({ tab }: { tab: Tab }) {
+function EmptyState({ tab, reason }: { tab: Tab; reason?: string | null }) {
   const config = {
     available: {
       icon: <Bike className="h-8 w-8 text-violet-400" />,
       bg: 'bg-violet-50 dark:bg-violet-950/30',
       ring: 'border-violet-300/50',
-      title: 'Tidak Ada Order Tersedia',
-      desc: 'Belum ada pesanan yang menunggu kurir.',
+      title:
+        reason === 'offline'
+          ? 'Kamu Sedang Offline'
+          : reason === 'busy'
+            ? 'Selesaikan Pesanan Aktif Dulu'
+            : 'Tidak Ada Order Tersedia',
+      desc:
+        reason === 'offline'
+          ? 'Aktifkan status online untuk menerima order baru.'
+          : reason === 'busy'
+            ? 'Selesaikan pesanan yang sedang berjalan sebelum menerima order baru.'
+            : 'Belum ada pesanan yang menunggu kurir.',
     },
     mine: {
       icon: <ShoppingBag className="h-8 w-8 text-blue-400" />,
@@ -762,6 +777,9 @@ function useOrdersPolling(endpoint: string) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [reason, setReason] = useState<string | null>(null);
+  const [ratingStatus, setRatingStatus] = useState<string | null>(null);
+  const [delaySeconds, setDelaySeconds] = useState(0);
 
   const fetch_ = useCallback(async () => {
     try {
@@ -769,6 +787,9 @@ function useOrdersPolling(endpoint: string) {
       const data = await res.json();
       if (data.success) {
         setOrders(data.orders);
+        setReason(data.reason ?? null);
+        setRatingStatus(data.ratingStatus ?? null);
+        setDelaySeconds(data.delaySeconds ?? 0);
         setLastUpdated(new Date());
       }
     } catch {
@@ -784,7 +805,74 @@ function useOrdersPolling(endpoint: string) {
     return () => clearInterval(id);
   }, [fetch_]);
 
-  return { orders, setOrders, loading, lastUpdated };
+  return { orders, setOrders, loading, lastUpdated, reason, ratingStatus, delaySeconds, refetch: fetch_ };
+}
+
+function OfflineReminderBanner({ onGoOnline }: { onGoOnline: () => void }) {
+  const [isPending, startTransition] = useTransition();
+
+  const handleClick = () => {
+    startTransition(async () => {
+      await goOnline();
+      onGoOnline();
+    });
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="mb-6 flex items-center justify-between gap-4 rounded-2xl border border-rose-200 bg-rose-50 px-5 py-3.5 dark:border-rose-900/30 dark:bg-rose-950/20"
+    >
+      <div className="flex items-center gap-3">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-rose-100 text-rose-600 dark:bg-rose-900/40 dark:text-rose-400">
+          <WifiOff className="h-4 w-4" />
+        </div>
+        <div>
+          <p className="text-sm font-bold text-rose-700 dark:text-rose-400">
+            Kamu sedang offline
+          </p>
+          <p className="text-xs text-rose-600/80 dark:text-rose-400/70">
+            Aktifkan status online untuk mulai menerima order.
+          </p>
+        </div>
+      </div>
+      <button
+        disabled={isPending}
+        onClick={handleClick}
+        className="flex shrink-0 items-center gap-1.5 rounded-full bg-rose-500 px-4 py-2 text-xs font-bold text-white shadow-sm shadow-rose-500/30 transition-colors hover:bg-rose-600 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {isPending ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <Wifi className="h-3.5 w-3.5" />
+        )}
+        {isPending ? 'Memproses...' : 'Go Online'}
+      </button>
+    </motion.div>
+  );
+}
+
+function ProbationBanner({ delaySeconds }: { delaySeconds: number }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="mb-6 flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3.5 dark:border-amber-900/30 dark:bg-amber-950/20"
+    >
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-400">
+        <AlertTriangle className="h-4 w-4" />
+      </div>
+      <div>
+        <p className="text-sm font-bold text-amber-700 dark:text-amber-400">
+          Kamu sedang tidak menjadi prioritas
+        </p>
+        <p className="text-xs text-amber-600/80 dark:text-amber-400/70">
+          Order baru muncul {Math.round(delaySeconds)} detik lebih lambat untukmu karena rating kamu sedang rendah. Selesaikan order dengan baik untuk kembali jadi prioritas.
+        </p>
+      </div>
+    </motion.div>
+  );
 }
 
 export function CourierLobby({ courierId }: { courierId: number }) {
@@ -795,8 +883,16 @@ export function CourierLobby({ courierId }: { courierId: number }) {
 
   const handleAccept = useCallback(
     async (orderId: string) => {
+      const removed = available.orders.find((o) => o.orderId === orderId);
       available.setOrders((prev) => prev.filter((o) => o.orderId !== orderId));
-      await acceptOrder(orderId);
+      try {
+        await acceptOrder(orderId);
+      } catch (err) {
+        if (removed) {
+          available.setOrders((prev) => [...prev, removed]);
+        }
+        alert(err instanceof Error ? err.message : 'Gagal menerima order');
+      }
     },
     [available],
   );
@@ -863,6 +959,14 @@ export function CourierLobby({ courierId }: { courierId: number }) {
         )}
       </div>
 
+      {available.reason === 'offline' && (
+        <OfflineReminderBanner onGoOnline={available.refetch} />
+      )}
+
+      {available.ratingStatus === 'probation' && (
+        <ProbationBanner delaySeconds={available.delaySeconds} />
+      )}
+
       <div className="flex gap-1 p-1 rounded-xl bg-muted/50 w-fit mb-6">
         {tabs.map(({ id, label, count, badgeColor }) => {
           const isActive = activeTab === id;
@@ -909,7 +1013,7 @@ export function CourierLobby({ courierId }: { courierId: number }) {
               />
             </div>
           ) : current.orders.length === 0 ? (
-            <EmptyState tab={activeTab} />
+            <EmptyState tab={activeTab} reason={current.reason} />
           ) : (
             <>
               {activeTab === 'mine' && (

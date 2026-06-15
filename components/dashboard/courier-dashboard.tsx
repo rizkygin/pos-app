@@ -18,6 +18,7 @@ import {
   WifiOff,
   Wifi,
   XCircle,
+  AlertTriangle,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Button } from '@/components/ui/button';
@@ -30,6 +31,12 @@ type Props = {
     completion: string;
     rating: string;
   };
+  weeklyPerformance: {
+    totalEarnings: string;
+    percentageChange: number;
+    orders: number;
+    avgPerOrder: string;
+  };
   currentPickUp: {
     id: string;
     name_customer: string;
@@ -41,6 +48,8 @@ type Props = {
   } | null;
   initialIsOnline: boolean;
   todayOnlineSeconds: number;
+  ratingStatus: 'good_standing' | 'probation';
+  delaySeconds: number;
 };
 
 function formatSeconds(totalSeconds: number): string {
@@ -100,9 +109,12 @@ function relativeTime(iso: string) {
 
 export const CourierDashboard = ({
   dashboardValue,
+  weeklyPerformance,
   currentPickUp,
   initialIsOnline,
   todayOnlineSeconds,
+  ratingStatus,
+  delaySeconds,
 }: Props) => {
   const [isOnline, setIsOnline] = useState(initialIsOnline);
   const [isPending, startTransition] = useTransition();
@@ -302,6 +314,27 @@ export const CourierDashboard = ({
           </div>
         </div>
       </div>
+
+      {/* Rating awareness banner */}
+      {ratingStatus === 'probation' && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3.5 dark:border-amber-900/30 dark:bg-amber-950/20"
+        >
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-400">
+            <AlertTriangle className="h-4 w-4" />
+          </div>
+          <div>
+            <p className="text-sm font-bold text-amber-700 dark:text-amber-400">
+              Kamu sedang tidak menjadi prioritas
+            </p>
+            <p className="text-xs text-amber-600/80 dark:text-amber-400/70">
+              Rating kamu di bawah 3.0, jadi order baru muncul {Math.round(delaySeconds)} detik lebih lambat untukmu dibanding kurir lain. Selesaikan order dengan baik untuk meningkatkan rating dan kembali jadi prioritas.
+            </p>
+          </div>
+        </motion.div>
+      )}
 
       {/* Quick Stats Grid */}
       <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
@@ -583,9 +616,10 @@ export const CourierDashboard = ({
             </div>
             <div className="space-y-2 mb-8">
               <p className="text-xs font-bold opacity-60">Total Earnings</p>
-              <h2 className="text-4xl font-black">Rp 2.450.000</h2>
+              <h2 className="text-4xl font-black">{weeklyPerformance.totalEarnings}</h2>
               <p className="text-[10px] font-bold bg-white/20 w-fit px-2 py-0.5 rounded-full">
-                +18.5% from last week
+                {weeklyPerformance.percentageChange >= 0 ? '+' : ''}
+                {weeklyPerformance.percentageChange.toFixed(1)}% from last week
               </p>
             </div>
             <div className="grid grid-cols-2 gap-4 border-t border-white/10 pt-6">
@@ -593,13 +627,13 @@ export const CourierDashboard = ({
                 <p className="text-[10px] font-bold opacity-60 uppercase tracking-widest mb-1">
                   Orders
                 </p>
-                <p className="text-xl font-black">42</p>
+                <p className="text-xl font-black">{weeklyPerformance.orders}</p>
               </div>
               <div>
                 <p className="text-[10px] font-bold opacity-60 uppercase tracking-widest mb-1">
-                  Incentives
+                  Avg / Order
                 </p>
-                <p className="text-xl font-black">Rp 120k</p>
+                <p className="text-xl font-black">{weeklyPerformance.avgPerOrder}</p>
               </div>
             </div>
           </div>

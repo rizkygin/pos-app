@@ -41,6 +41,7 @@ import {
   Megaphone,
   CreditCard,
   Users,
+  Calculator,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -89,7 +90,7 @@ const navMain: NavItem[] = [
     iconColor: 'text-violet-600 dark:text-violet-400',
   },
   {
-    name: 'Cashier',
+    name: 'Kasir',
     url: '/dashboard/cashier',
     icon: Building2,
     iconBg: 'bg-cyan-100 dark:bg-cyan-950',
@@ -116,7 +117,7 @@ const userSubItems = [
 
 const navManagement: NavItem[] = [
   {
-    name: 'Setting',
+    name: 'Pengaturan',
     url: '/dashboard/setting',
     icon: SunDim,
     iconBg: 'bg-slate-100 dark:bg-slate-800',
@@ -249,18 +250,25 @@ const courierNavItems: NavItem[] = [
 
 const ownerNavItems: NavItem[] = [
   {
-    name: 'Active Order',
+    name: 'Pesanan Aktif',
     url: '/dashboard/activeorder',
     icon: ClipboardList,
     iconBg: 'bg-emerald-100 dark:bg-emerald-950',
     iconColor: 'text-emerald-600 dark:text-emerald-400',
   },
   {
-    name: 'Promosi Menu',
+    name: 'Pasang Iklan',
     url: '/dashboard/promote',
     icon: Megaphone,
     iconBg: 'bg-rose-100 dark:bg-rose-950',
     iconColor: 'text-rose-600 dark:text-rose-400',
+  },
+  {
+    name: 'Kalkulator HPP',
+    url: '/dashboard/hpp-calculator',
+    icon: Calculator,
+    iconBg: 'bg-amber-100 dark:bg-amber-950',
+    iconColor: 'text-amber-600 dark:text-amber-400',
   },
 ];
 

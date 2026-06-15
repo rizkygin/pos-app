@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import {
     MapPin,
     Utensils,
@@ -10,9 +10,21 @@ import {
     Coffee,
     Wrench,
     Star,
+    ChevronLeft,
+    ChevronRight,
 } from "lucide-react";
-import { motion } from "motion/react";
+import { motion, AnimatePresence } from "motion/react";
 import { Button } from "@/components/ui/button";
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogMedia,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { DashboardHeader } from "@/components/dashboard-header";
 import Image from "next/image";
 import Link from "next/link";
@@ -69,16 +81,30 @@ type CustomerDashboardProps = {
     lastOrders?: LastOrder[];
     recommend?: RecommendedMenu[];
     ads?: AdBanner[];
+    hasLocation?: boolean;
 };
 
-export const CustomerDashboard = ({ lastOrders = [], recommend = [], ads = [] }: CustomerDashboardProps) => {
+export const CustomerDashboard = ({ lastOrders = [], recommend = [], ads = [], hasLocation = true }: CustomerDashboardProps) => {
+    const [adIndex, setAdIndex] = useState(0);
+
+    useEffect(() => {
+        if (ads.length <= 1) return;
+        const interval = setInterval(() => {
+            setAdIndex((i) => (i + 1) % ads.length);
+        }, 5000);
+        return () => clearInterval(interval);
+    }, [ads.length]);
+
+    const goToPrevAd = () => setAdIndex((i) => (i - 1 + ads.length) % ads.length);
+    const goToNextAd = () => setAdIndex((i) => (i + 1) % ads.length);
+
     const categories = [
         { name: "Food", icon: Utensils, url: 'food', color: "bg-orange-100 text-orange-600" , available: 'available'},
-        { name: "Send", icon: Truck, url:'send', color: "bg-blue-100 text-blue-600" , available: 'available'},
-        { name: "Ride", icon: Bike, url: 'ride',color: "bg-purple-100 text-purple-600" , available: 'available'},
         { name: "Mart", icon: ShoppingBag,url: 'mart', color: "bg-emerald-100 text-emerald-600" , available: 'available'},
         { name: "Minuman", icon: Coffee, url: 'drink', color: "bg-amber-100 text-amber-800" , available: 'available'},
         { name: "Jasa", icon: Wrench, url: 'service', color: "bg-amber-100 text-amber-800", available: 'non' },
+        { name: "Send", icon: Truck, url:'send', color: "bg-blue-100 text-blue-600" , available: 'non'},
+        { name: "Ride", icon: Bike, url: 'ride',color: "bg-purple-100 text-purple-600" , available: 'non'},
     ];
 
     return (
@@ -97,29 +123,66 @@ export const CustomerDashboard = ({ lastOrders = [], recommend = [], ads = [] }:
 
             {/* Promo Banner */}
             {ads.length > 0 && (
-                <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="relative overflow-hidden rounded-[2rem] h-36 md:h-48 text-white"
-                >
-                    <Image
-                        src={getAdBannerSrc(ads[0].bannerImage)}
-                        alt={ads[0].title}
-                        fill
-                        className="object-cover"
-                    />
-                    <div className="absolute inset-0 bg-gradient-to-r from-black/70 via-black/30 to-transparent" />
-                    <div className="relative z-10 flex h-full flex-col justify-center gap-2 max-w-md px-5 md:px-10">
-                        <span className="w-fit px-3 py-1 rounded-full bg-white/20 text-[10px] font-black uppercase tracking-widest backdrop-blur-sm">Promo</span>
-                        <h2 className="text-xl md:text-3xl font-black leading-tight line-clamp-2">{ads[0].title}</h2>
-                        {ads[0].description && (
-                            <p className="text-sm text-white/80 font-medium line-clamp-1">{ads[0].description}</p>
-                        )}
-                        <Button asChild size="sm" className="w-fit rounded-full bg-white text-rose-600 hover:bg-rose-50 font-black mt-1">
-                            <Link href={`/dashboard/order/${ads[0].outletFeature}/${ads[0].outletId}`}>Lihat Menu</Link>
-                        </Button>
-                    </div>
-                </motion.div>
+                <div className="relative overflow-hidden rounded-[2rem] h-36 md:h-48 text-white">
+                    <AnimatePresence initial={false} mode="popLayout">
+                        <motion.div
+                            key={ads[adIndex].id}
+                            initial={{ opacity: 0, x: 40 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            exit={{ opacity: 0, x: -40 }}
+                            transition={{ duration: 0.4 }}
+                            className="absolute inset-0"
+                        >
+                            <Image
+                                src={getAdBannerSrc(ads[adIndex].bannerImage)}
+                                alt={ads[adIndex].title}
+                                fill
+                                className="object-cover"
+                            />
+                            <div className="absolute inset-0 bg-gradient-to-r from-black/70 via-black/30 to-transparent" />
+                            <div className="relative z-10 flex h-full flex-col justify-center gap-2 max-w-md px-5 md:px-10">
+                                <span className="w-fit px-3 py-1 rounded-full bg-white/20 text-[10px] font-black uppercase tracking-widest backdrop-blur-sm">Promo</span>
+                                <h2 className="text-xl md:text-3xl font-black leading-tight line-clamp-2">{ads[adIndex].title}</h2>
+                                {ads[adIndex].description && (
+                                    <p className="text-sm text-white/80 font-medium line-clamp-1">{ads[adIndex].description}</p>
+                                )}
+                                <Button asChild size="sm" className="w-fit rounded-full bg-white text-rose-600 hover:bg-rose-50 font-black mt-1">
+                                    <Link href={`/dashboard/order/${ads[adIndex].outletFeature}/${ads[adIndex].outletId}`}>Lihat Menu</Link>
+                                </Button>
+                            </div>
+                        </motion.div>
+                    </AnimatePresence>
+
+                    {ads.length > 1 && (
+                        <>
+                            <button
+                                onClick={goToPrevAd}
+                                aria-label="Previous ad"
+                                className="absolute left-2 top-1/2 -translate-y-1/2 z-20 flex h-8 w-8 items-center justify-center rounded-full bg-black/30 text-white backdrop-blur-sm hover:bg-black/50 transition-colors"
+                            >
+                                <ChevronLeft className="h-5 w-5" />
+                            </button>
+                            <button
+                                onClick={goToNextAd}
+                                aria-label="Next ad"
+                                className="absolute right-2 top-1/2 -translate-y-1/2 z-20 flex h-8 w-8 items-center justify-center rounded-full bg-black/30 text-white backdrop-blur-sm hover:bg-black/50 transition-colors"
+                            >
+                                <ChevronRight className="h-5 w-5" />
+                            </button>
+
+                            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 flex gap-1.5">
+                                {ads.map((ad, i) => (
+                                    <button
+                                        key={ad.id}
+                                        onClick={() => setAdIndex(i)}
+                                        aria-label={`Go to ad ${i + 1}`}
+                                        className={`h-1.5 rounded-full transition-all ${i === adIndex ? 'w-6 bg-white' : 'w-1.5 bg-white/40'}`}
+                                    />
+                                ))}
+                            </div>
+                        </>
+                    )}
+                </div>
             )}
 
             {/* Categories */}
@@ -247,6 +310,25 @@ export const CustomerDashboard = ({ lastOrders = [], recommend = [], ads = [] }:
                     </div>
                 </div>
             )}
+
+            <AlertDialog open={!hasLocation}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogMedia className="size-12 bg-rose-50 text-rose-600">
+                            <MapPin className="size-6" />
+                        </AlertDialogMedia>
+                        <AlertDialogTitle>Lokasi Belum Diatur</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Pian wajib mengatur lokasi pengiriman terlebih dahulu agar pesanan bisa diproses.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogAction asChild>
+                            <Link href="/dashboard/users/locations/setting">Atur Lokasi</Link>
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </main>
     );
 };

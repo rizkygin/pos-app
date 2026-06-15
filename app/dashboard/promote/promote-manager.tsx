@@ -2,7 +2,9 @@
 
 import { useRef, useState } from 'react';
 import Image from 'next/image';
-import { Loader2, Megaphone, Image as ImageIcon, Trash2 } from 'lucide-react';
+import { driver } from 'driver.js';
+import 'driver.js/dist/driver.css';
+import { Loader2, Megaphone, Image as ImageIcon, Trash2, HelpCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   createAdAction,
@@ -28,6 +30,9 @@ type Ad = {
   status: 'pending' | 'approved' | 'rejected';
   is_active: boolean;
   rejection_reason: string | null;
+  ends_at: string | null;
+  schedule_days: string[];
+  schedule_hours: string[];
 };
 
 type PromoteManagerProps = {
@@ -74,6 +79,30 @@ const HOUR_OPTIONS = Array.from({ length: 24 }, (_, i) => {
   const value = String(i + 1).padStart(2, '0');
   return { value, label: `${value}:00` };
 });
+
+const DAY_LABEL: Record<string, string> = Object.fromEntries(
+  DAY_OPTIONS.map((option) => [option.value, option.label]),
+);
+
+function formatEndsAt(endsAt: string | null): string {
+  if (!endsAt) return 'Tidak ada (rutin setiap minggu)';
+  return new Date(endsAt).toLocaleDateString('id-ID', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+}
+
+function formatScheduleHours(hours: string[]): string {
+  if (hours.length === 0) return '-';
+  const sorted = [...hours].sort();
+  return `${sorted[0]}:00 - ${sorted[sorted.length - 1]}:00`;
+}
+
+function formatScheduleDays(days: string[]): string {
+  if (days.length === 0) return '-';
+  return days.map((day) => DAY_LABEL[day] ?? day).join(', ');
+}
 
 export const PromoteManager = ({ products, ads }: PromoteManagerProps) => {
   const [productId, setProductId] = useState('');
@@ -174,6 +203,74 @@ export const PromoteManager = ({ products, ads }: PromoteManagerProps) => {
     }
   };
 
+  const startTour = () => {
+    const tour = driver({
+      showProgress: true,
+      progressText: '{{current}} / {{total}}',
+      nextBtnText: 'Lanjut',
+      prevBtnText: 'Kembali',
+      doneBtnText: 'OK',
+      overlayColor: 'rgba(0, 0, 0, 0.6)',
+      stagePadding: 6,
+      stageRadius: 12,
+      popoverClass: 'promo-tour-popover',
+      steps: [
+        {
+          popover: {
+            title: 'Di Mana Iklan Pian Tampil?',
+            description: `
+              <img src="/images/Screenshot-promo.jpg" alt="Contoh tampilan iklan" style="width:100%;border-radius:8px;margin-bottom:8px;" />
+              Begini tampilan iklan pian di halaman pelanggan.
+            `,
+          },
+        },
+        {
+          popover: {
+            title: 'Detail Iklan',
+            description: `
+              <img src="/images/Screenshot-promo2.jpg" alt="Contoh detail iklan" style="width:100%;border-radius:8px;margin-bottom:8px;" />
+              Saat diklik, pelanggan akan melihat detail promo pian seperti ini.
+            `,
+          },
+        },
+        {
+          element: '[data-tour="product"]',
+          popover: {
+            title: 'Pilih Produk',
+            description: 'Langkah 1: Pilih produk yang ingin pian promosikan dari daftar menu pian.',
+            side: 'bottom',
+          },
+        },
+        {
+          element: '[data-tour="title-description"]',
+          popover: {
+            title: 'Judul & Deskripsi',
+            description: 'Langkah 2: Isi judul iklan yang menarik dan deskripsi singkat tentang promo pian.',
+            side: 'bottom',
+          },
+        },
+        {
+          element: '[data-tour="banner"]',
+          popover: {
+            title: 'Unggah Banner',
+            description: 'Langkah 3: Unggah gambar banner untuk iklan pian. Ukuran maksimal 1MB, rasio 1200x500.',
+            side: 'top',
+          },
+        },
+        {
+          element: '[data-tour="submit"]',
+          popover: {
+            title: 'Ajukan Iklan',
+            description: 'Langkah 4: Setelah semua terisi, klik tombol ini untuk mengajukan iklan ke admin.',
+            side: 'top',
+          },
+        },
+      ],
+    });
+
+    tour.drive();
+  };
+
   return (
     <div className="space-y-8">
       <div className="bg-background border rounded-2xl md:rounded-3xl p-4 md:p-8 shadow-sm relative overflow-hidden">
@@ -183,16 +280,24 @@ export const PromoteManager = ({ products, ads }: PromoteManagerProps) => {
           <div className="p-3 rounded-xl bg-rose-50 text-rose-600">
             <Megaphone className="h-6 w-6" />
           </div>
-          <div>
+          <div className="flex-1">
             <h2 className="text-xl md:text-2xl font-bold tracking-tight">Buat Iklan Baru</h2>
             <p className="text-muted-foreground text-sm font-medium">
               Pilih produk, beri judul menarik, dan unggah banner.
             </p>
           </div>
+          <Button
+            type="button"
+            onClick={startTour}
+            className="rounded-xl shrink-0 gap-2 bg-rose-600 hover:bg-rose-700 text-white font-bold shadow-md animate-pulse"
+          >
+            <HelpCircle className="h-4 w-4" />
+            <span className="hidden sm:inline">Tutorial</span>
+          </Button>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-5">
-          <div className="space-y-2">
+          <div className="space-y-2" data-tour="product">
             <label className="text-sm font-bold">Produk</label>
             <select
               required
@@ -209,27 +314,29 @@ export const PromoteManager = ({ products, ads }: PromoteManagerProps) => {
             </select>
           </div>
 
-          <div className="space-y-2">
-            <label className="text-sm font-bold">Judul Iklan</label>
-            <input
-              required
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              maxLength={255}
-              className="flex h-12 w-full rounded-xl border border-input bg-transparent px-4 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
-              placeholder="e.g. Promo Spesial Hari Ini!"
-            />
-          </div>
+          <div className="space-y-5" data-tour="title-description">
+            <div className="space-y-2">
+              <label className="text-sm font-bold">Judul Iklan</label>
+              <input
+                required
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                maxLength={255}
+                className="flex h-12 w-full rounded-xl border border-input bg-transparent px-4 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
+                placeholder="e.g. Promo Spesial Hari Ini!"
+              />
+            </div>
 
-          <div className="space-y-2">
-            <label className="text-sm font-bold">Deskripsi</label>
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              maxLength={500}
-              className="flex min-h-[80px] w-full rounded-xl border border-input bg-transparent px-4 py-3 text-sm shadow-sm resize-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
-              placeholder="Jelaskan promo pian secara singkat..."
-            />
+            <div className="space-y-2">
+              <label className="text-sm font-bold">Deskripsi</label>
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                maxLength={500}
+                className="flex min-h-20 w-full rounded-xl border border-input bg-transparent px-4 py-3 text-sm shadow-sm resize-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
+                placeholder="Jelaskan promo pian secara singkat..."
+              />
+            </div>
           </div>
 
           <div className="space-y-2">
@@ -314,7 +421,7 @@ export const PromoteManager = ({ products, ads }: PromoteManagerProps) => {
             </div>
           )}
 
-          <div className="space-y-2">
+          <div className="space-y-2" data-tour="banner">
             <label className="text-sm font-bold flex items-center gap-2">
               <ImageIcon className="h-4 w-4 text-muted-foreground" />
               Banner Iklan
@@ -353,7 +460,7 @@ export const PromoteManager = ({ products, ads }: PromoteManagerProps) => {
             )}
           </div>
 
-          <div className="pt-2 flex justify-end">
+          <div className="pt-2 flex justify-end" data-tour="submit">
             <Button
               type="submit"
               disabled={isSubmitting || isUploading}
@@ -391,7 +498,13 @@ export const PromoteManager = ({ products, ads }: PromoteManagerProps) => {
                       {STATUS_LABEL[ad.status]}
                     </span>
                   </div>
-                  <p className="text-xs text-muted-foreground">{ad.product_name}</p>
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-xs text-muted-foreground">{ad.product_name}</p>
+                    <div className="text-right text-xs text-muted-foreground space-y-0.5 shrink-0">
+                      <p>Tampil: {formatScheduleDays(ad.schedule_days)} | {formatScheduleHours(ad.schedule_hours)}</p>
+                      <p>Berakhir: {formatEndsAt(ad.ends_at)}</p>
+                    </div>
+                  </div>
                   {ad.description && (
                     <p className="text-sm text-muted-foreground line-clamp-2">{ad.description}</p>
                   )}

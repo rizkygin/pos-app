@@ -330,74 +330,15 @@ export function FeaturePicker() {
                     </motion.section>
                 )}
             </AnimatePresence>
-            <section className="space-y-4">
-                <div className="flex items-center gap-2">
-                    <Tag className="h-5 w-5 text-rose-500" />
-                    <h2 className="font-black text-lg">Promo Spesial</h2>
-                    <span className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-600 text-xs font-black">{PROMOS.length} aktif</span>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {PROMOS.map((promo, i) => (
-                        <motion.button
-                            key={promo.id}
-                            initial={{ opacity: 0, y: 20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ delay: i * 0.07, type: "spring", stiffness: 200, damping: 20 }}
-                            whileHover={{ y: -4, scale: 1.02 }}
-                            whileTap={{ scale: 0.97 }}
-                            className={`relative text-left w-full bg-gradient-to-br ${promo.gradient} rounded-2xl px-4 py-3 overflow-hidden shadow-md hover:shadow-xl transition-all duration-300`}
-                        >
-                            {/* Decorative circle */}
-                            <div className={`absolute ${promo.shape}`} />
-
-                            <div className="relative z-10 flex items-center gap-3">
-                                {/* Icon */}
-                                <div className="h-9 w-9 rounded-xl bg-white/20 backdrop-blur-sm flex items-center justify-center flex-shrink-0">
-                                    <promo.icon className="h-4 w-4 text-white" />
-                                </div>
-
-                                {/* Middle */}
-                                <div className="flex-1 min-w-0">
-                                    <p className="font-black text-white text-sm leading-tight truncate">{promo.title}</p>
-                                    <div className="flex items-center gap-2 mt-0.5">
-                                        <span className="font-bold text-white/70 text-[10px] tracking-widest uppercase">{promo.code}</span>
-                                        <span className="text-white/50 text-[10px]">·</span>
-                                        <div className="flex items-center gap-0.5 text-white/70">
-                                            <Clock className="h-2.5 w-2.5" />
-                                            <span className="text-[10px] font-bold">
-                                                s/d {new Date(promo.valid_until).toLocaleDateString("id-ID", { day: "numeric", month: "short" })}
-                                            </span>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                {/* Discount */}
-                                <div className="flex-shrink-0 text-right">
-                                    <span className="font-black text-white text-xl leading-none">{promo.discount_percent}%</span>
-                                    <span className="text-[10px] font-bold text-white/70 block">OFF</span>
-                                </div>
-                            </div>
-                        </motion.button>
-                    ))}
-                </div>
-            </section>
+            
 
             {/* ── Feature grid ────────────────────────────────────────── */}
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                {ORDER_FEATURES.map((feature, i) => (
-                    <motion.div
-                        key={feature.slug}
-                        initial={{ opacity: 0, y: 24 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: i * 0.06, type: "spring", stiffness: 200, damping: 20 }}
-                        whileHover={{ y: -6, scale: 1.02 }}
-                        whileTap={{ scale: 0.97 }}
-                    >
-                        <Link
-                            href={`/dashboard/order/${feature.slug}`}
-                            className={`group relative flex flex-col gap-4 p-5 rounded-[1.75rem] border border-border/60 bg-gradient-to-br ${feature.gradient} shadow-sm hover:shadow-xl hover:border-border transition-all duration-300 h-full`}
-                        >
+                {[...ORDER_FEATURES]
+                    .sort((a, b) => Number(b.isAvailable) - Number(a.isAvailable))
+                    .map((feature, i) => {
+                    const content = (
+                        <>
                             {feature.badge && (
                                 <span className={`absolute top-4 right-4 px-2.5 py-0.5 rounded-full text-[10px] font-black
                                     ${feature.badge === "Terpopuler" ? "bg-rose-500 text-white" : ""}
@@ -408,8 +349,8 @@ export function FeaturePicker() {
                                 </span>
                             )}
 
-                            <div className={`h-14 w-14 rounded-2xl ${feature.iconBg} flex items-center justify-center shadow-sm group-hover:scale-110 transition-transform duration-300`}>
-                                <feature.icon className={`h-7 w-7 ${feature.iconColor}`} />
+                            <div className={`h-14 w-14 rounded-2xl ${feature.isAvailable ? feature.iconBg : "bg-muted"} flex items-center justify-center shadow-sm ${feature.isAvailable ? "group-hover:scale-110" : ""} transition-transform duration-300`}>
+                                <feature.icon className={`h-7 w-7 ${feature.isAvailable ? feature.iconColor : "text-muted-foreground"}`} />
                             </div>
 
                             <div className="space-y-1 flex-1">
@@ -418,14 +359,54 @@ export function FeaturePicker() {
                             </div>
 
                             <div className="flex items-center justify-between">
-                                <span className="text-[11px] font-bold text-muted-foreground/70">{feature.count}</span>
-                                <div className={`h-7 w-7 rounded-full ${feature.iconBg} flex items-center justify-center group-hover:translate-x-1 transition-transform duration-300`}>
-                                    <ArrowRight className={`h-3.5 w-3.5 ${feature.iconColor}`} />
-                                </div>
+                                <span className="text-[11px] font-bold text-muted-foreground/70">
+                                    {feature.isAvailable ? feature.count : "Under Developing"}
+                                </span>
+                                {feature.isAvailable && (
+                                    <div className={`h-7 w-7 rounded-full ${feature.iconBg} flex items-center justify-center group-hover:translate-x-1 transition-transform duration-300`}>
+                                        <ArrowRight className={`h-3.5 w-3.5 ${feature.iconColor}`} />
+                                    </div>
+                                )}
                             </div>
-                        </Link>
-                    </motion.div>
-                ))}
+                        </>
+                    );
+
+                    if (!feature.isAvailable) {
+                        return (
+                            <motion.div
+                                key={feature.slug}
+                                initial={{ opacity: 0, y: 24 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ delay: i * 0.06, type: "spring", stiffness: 200, damping: 20 }}
+                            >
+                                <div
+                                    aria-disabled="true"
+                                    className="group relative flex flex-col gap-4 p-5 rounded-[1.75rem] border border-border/60 bg-muted/30 grayscale opacity-60 cursor-not-allowed h-full"
+                                >
+                                    {content}
+                                </div>
+                            </motion.div>
+                        );
+                    }
+
+                    return (
+                        <motion.div
+                            key={feature.slug}
+                            initial={{ opacity: 0, y: 24 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: i * 0.06, type: "spring", stiffness: 200, damping: 20 }}
+                            whileHover={{ y: -6, scale: 1.02 }}
+                            whileTap={{ scale: 0.97 }}
+                        >
+                            <Link
+                                href={`/dashboard/order/${feature.slug}`}
+                                className={`group relative flex flex-col gap-4 p-5 rounded-[1.75rem] border border-border/60 bg-gradient-to-br ${feature.gradient} shadow-sm hover:shadow-xl hover:border-border transition-all duration-300 h-full`}
+                            >
+                                {content}
+                            </Link>
+                        </motion.div>
+                    );
+                })}
             </div>
         </main>
     );

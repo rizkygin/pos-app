@@ -11,6 +11,7 @@ export type OrderFeature = {
     iconColor: string;
     badge?: string;
     count: string;
+    isAvailable:boolean;
     color: string;
 };
 
@@ -27,6 +28,7 @@ export const ORDER_FEATURES: OrderFeature[] = [
         iconColor: "text-rose-600",
         badge: "Terpopuler",
         count: "240+ menu",
+        isAvailable: true,
         color: "text-rose-600"
     },
     {
@@ -39,6 +41,7 @@ export const ORDER_FEATURES: OrderFeature[] = [
         iconBg: "bg-amber-100",
         iconColor: "text-amber-700",
         count: "120+ menu",
+        isAvailable: true,
         color: 'text-amber-700'
     },
     {
@@ -51,6 +54,7 @@ export const ORDER_FEATURES: OrderFeature[] = [
         iconBg: "bg-blue-100",
         iconColor: "text-blue-600",
         count: "80+ layanan",
+        isAvailable: false,
         color: "text-orange-600"
     },
     {
@@ -63,7 +67,8 @@ export const ORDER_FEATURES: OrderFeature[] = [
         iconBg: "bg-emerald-100",
         iconColor: "text-emerald-600",
         badge: "Baru",
-        count: "500+ produk",
+        count: "20+ produk",
+        isAvailable: true,
         color: "text-emerald-600"
     },
     {
@@ -76,6 +81,7 @@ export const ORDER_FEATURES: OrderFeature[] = [
         iconBg: "bg-violet-100",
         iconColor: "text-violet-600",
         count: "SamDay & express",
+        isAvailable: false,
         color: "text-violet-600"
     },
     {
@@ -87,7 +93,8 @@ export const ORDER_FEATURES: OrderFeature[] = [
         gradient: "from-pink-50 to-fuchsia-50",
         iconBg: "bg-pink-100",
         iconColor: "text-pink-600",
-        count: "60+ tempat",
+        count: "0+ tempat",
+        isAvailable: false,
         color: 'text-violet-600'
     },
     {
@@ -99,7 +106,8 @@ export const ORDER_FEATURES: OrderFeature[] = [
         gradient: "from-cyan-50 to-sky-50",
         iconBg: "bg-cyan-100",
         iconColor: "text-cyan-600",
-        count: "30+ armada",
+        count: "0+ armada",
+        isAvailable: false,
         color: 'text-cyan-600'
     },
     {
@@ -113,6 +121,7 @@ export const ORDER_FEATURES: OrderFeature[] = [
         iconColor: "text-indigo-600",
         badge: "Segera",
         count: "Coming soon",
+        isAvailable: false,
         color: 'text-indigo-600'
     },
 ];
