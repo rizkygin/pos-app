@@ -233,7 +233,7 @@ function NavCollapsible({
 
 const courierNavItems: NavItem[] = [
   {
-    name: 'Lobby Order',
+    name: 'Ruang Tunggu Order',
     url: '/dashboard/lobby',
     icon: Bike,
     iconBg: 'bg-blue-100 dark:bg-blue-950',

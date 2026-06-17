@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
+import { Eye, EyeOff } from "lucide-react";
 import { authClient } from "@/lib/auth-client";
 
 export default function Home() {
@@ -10,6 +11,7 @@ export default function Home() {
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(false);
   const [errorMSG, setErrorMSG] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -38,6 +40,7 @@ export default function Home() {
           }
         });
         // Handle successful signup
+        setIsLogin(!isLogin);
       }
     } catch (err: any) {
       setErrorMSG(err.message || "An error occurred");
@@ -61,12 +64,12 @@ export default function Home() {
               layout
               className="text-3xl font-semibold tracking-tight text-white mb-2"
             >
-              {isLogin ? "Welcome back" : "Create an account"}
+              {isLogin ? "Ulun Pesan" : "Buat Akun Hanyar"}
             </motion.h1>
             <motion.p layout className="text-zinc-400 text-sm">
               {isLogin
-                ? "Enter your credentials to access your account"
-                : "Enter your details to get started on your journey"}
+                ? "Masukkan Email Password Pian"
+                : "Masukkan Data Diri Pian biar ulun kenal"}
             </motion.p>
           </div>
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -80,14 +83,14 @@ export default function Home() {
                   transition={{ duration: 0.3 }}
                 >
                   <label className="block text-sm font-medium text-zinc-300 mb-1.5 ml-1">
-                    Full Name
+                    Nama Lengkap
                   </label>
                   <input
                     type="text"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     className="w-full px-4 py-3 rounded-2xl bg-white/5 border border-white/10 text-white placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all font-medium"
-                    placeholder="John Doe"
+                    placeholder="Nama Sampian"
                     required={!isLogin}
                   />
                 </motion.div>
@@ -95,14 +98,14 @@ export default function Home() {
             </AnimatePresence>
             <motion.div layout>
               <label className="block text-sm font-medium text-zinc-300 mb-1.5 ml-1">
-                Email Address
+                Alamat Email
               </label>
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="w-full px-4 py-3 rounded-2xl bg-white/5 border border-white/10 text-white placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all font-medium"
-                placeholder="you@example.com"
+                placeholder="Email Sampian"
                 required
               />
             </motion.div>
@@ -110,14 +113,23 @@ export default function Home() {
               <label className="block text-sm font-medium text-zinc-300 mb-1.5 ml-1">
                 Password
               </label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-4 py-3 rounded-2xl bg-white/5 border border-white/10 text-white placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all font-medium"
-                placeholder="••••••••"
-                required
-              />
+              <div className="relative">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full px-4 py-3 pr-12 rounded-2xl bg-white/5 border border-white/10 text-white placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all font-medium"
+                  placeholder="••••••••"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white transition-colors p-1"
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
             </motion.div>
             {errorMSG && (
               <motion.div
@@ -137,14 +149,14 @@ export default function Home() {
               {loading ? (
                 <div className="w-5 h-5 border-2 border-black/30 border-t-black rounded-full animate-spin" />
               ) : isLogin ? (
-                "Sign In"
+                "Masuk"
               ) : (
-                "Get Started"
+                "Mulai Daftar"
               )}
             </motion.button>
           </form>
           <motion.div layout className="mt-8 text-center text-zinc-400 text-sm">
-            {isLogin ? "Don't have an account? " : "Already have an account? "}
+            {isLogin ? "Belum Punya Akun? " : "Sudah Punya Akun? "}
             <button
               type="button"
               onClick={() => {
@@ -153,7 +165,7 @@ export default function Home() {
               }}
               className="text-white hover:text-indigo-300 font-medium transition-colors"
             >
-              {isLogin ? "Sign up" : "Sign in"}
+              {isLogin ? "Daftar" : "Login"}
             </button>
           </motion.div>
         </div>

@@ -286,7 +286,7 @@ const dashboardPage = async () => {
     const dashboardCurierValue = {
       earningToday: formatCurrency(earningToday || 0),
       rating: String(rating),
-      completion: String((1 - cancelOrderByCourier / completion) * 100) + '%',
+      completion: (completion === 0 ? 100 : Math.round((1 - cancelOrderByCourier / completion) * 100)) + '%',
     };
 
     const { ratingStatus, delaySeconds } = await getCourierRatingInfo(courier.id);

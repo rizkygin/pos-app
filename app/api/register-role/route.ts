@@ -27,7 +27,8 @@ export async function POST(req: Request) {
                 user_id: userId,
                 avatar: data.avatar || 'avatar.png',
                 lat: "-3.3199",
-                lon: " 114.5907"
+                lon: " 114.5907",
+                features: Array.isArray(data.features) ? data.features : [],
             });
         } else if (role === 'courier') {
             await db.insert(couriersTable).values({

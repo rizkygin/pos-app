@@ -131,7 +131,9 @@ export function CategoryClient({ feature }: { feature: string }) {
     const { data: all_products, isLoading, error } = useQuery<Product[]>({
         queryKey: ["products", feature, productSearch],
         queryFn: async () => {
-            const res = await fetch(`/api/get-all-product?name=${productSearch}`);
+            const params = new URLSearchParams({ feature });
+            if (productSearch) params.set('name', productSearch);
+            const res = await fetch(`/api/get-all-product?${params.toString()}`);
             if (!res.ok) {
                 throw new Error('Produk gagal didapatkan')
             }
@@ -161,14 +163,13 @@ export function CategoryClient({ feature }: { feature: string }) {
 
     const recommendedProducts = useMemo(() => {
         if (!all_products) return [];
-        return all_products?.filter((p) => p.features?.includes(feature) && p.isRecommended)
-    }, [all_products, feature])
+        return all_products.filter((p) => p.isRecommended);
+    }, [all_products])
 
     const filteredProducts = useMemo(() => {
-        const base = all_products?.filter((p) => p.features?.includes(feature));
         if (!productSearch) return [];
-        return base;
-    }, [all_products, feature, productSearch]);
+        return all_products ?? [];
+    }, [all_products, productSearch]);
 
     const relevantPromos = useMemo(
         () => MOCK_PROMOS.filter((p) => p.feature.includes(feature) || p.feature.includes("food")),
