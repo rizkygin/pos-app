@@ -17,7 +17,7 @@ CREATE TABLE "promos" (
 	CONSTRAINT "promos_code_unique" UNIQUE("code")
 );
 --> statement-breakpoint
-ALTER TABLE "orderDetails" ALTER COLUMN "note_product" SET DATA TYPE json;--> statement-breakpoint
+ALTER TABLE "orderDetails" ALTER COLUMN "note_product" SET DATA TYPE json USING "note_product"::json;--> statement-breakpoint
 ALTER TABLE "orderDetails" ALTER COLUMN "note_product" DROP NOT NULL;--> statement-breakpoint
 ALTER TABLE "orders" ALTER COLUMN "courier_id" DROP NOT NULL;--> statement-breakpoint
 ALTER TABLE "orders" ADD COLUMN "outlet_id" integer NOT NULL;--> statement-breakpoint

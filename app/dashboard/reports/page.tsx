@@ -6,11 +6,8 @@ import { DataTable } from "./data-table"
 import GraphicOrder from "./graphic-order"
 import HourlyOrderChart from "./hourly-order-chart"
 import { useEffect, useState } from "react"
-export const description = "A simple area chart"
 
-
-
-export function Reports() {
+function Reports() {
     const [data, setData] = useState<[]>([]);
     const [isForbidden, setIsForbidden] = useState(false);
 

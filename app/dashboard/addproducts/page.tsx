@@ -6,7 +6,7 @@ import Forbidden from "@/lib/forbidden";
 import { ProductsManager } from "./products-manager";
 import getOutletID from "@/lib/outlet-id"
 
-export const Page = async () => {
+const Page = async () => {
     const outlet = await getOutletID();
 
     if (!outlet) {

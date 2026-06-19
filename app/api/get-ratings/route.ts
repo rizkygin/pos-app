@@ -17,7 +17,7 @@ export const GET = async () => {
             ratings: ratingsTable.ratings,
             comment: ratingsTable.comment,
             reciepent_as: ratingsTable.reciepent_as,
-            created_at: ratingsTable.created_at,
+            created_at: ratingsTable.createdAt,
             reviewer_name: usersTable.name,
             product_name: productsTable.product_name,
             outlet_id: ratingsTable.outlet_id,
@@ -32,7 +32,7 @@ export const GET = async () => {
                 eq(productsTable.outlet_id, outlet.id)
             )
         )
-        .orderBy(desc(ratingsTable.created_at));
+        .orderBy(desc(ratingsTable.createdAt));
 
     const data = rows.map((r) => ({
         id: r.id,

@@ -10,7 +10,7 @@ import getOutletID from '@/lib/outlet-id';
 import { PromoteManager } from './promote-manager';
 import { DashboardHeader } from '@/components/dashboard-header';
 
-export const Page = async () => {
+const Page = async () => {
   const outlet = await getOutletID();
 
   if (!outlet) {

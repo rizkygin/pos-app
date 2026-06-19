@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { Suspense, useState, useTransition } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { motion } from "motion/react";
 import { Eye, EyeOff, KeyRound, CheckCircle2, AlertTriangle, Loader2 } from "lucide-react";
@@ -38,6 +38,14 @@ function PasswordInput({
 }
 
 export default function ResetPasswordPage() {
+    return (
+        <Suspense>
+            <ResetPasswordForm />
+        </Suspense>
+    );
+}
+
+function ResetPasswordForm() {
     const searchParams = useSearchParams();
     const router = useRouter();
     const token = searchParams?.get("token") ?? "";
