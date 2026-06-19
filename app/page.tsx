@@ -33,7 +33,7 @@ export default function Home() {
           name,
           callbackURL: "/dashboard",
         }, {
-          onError: (error) => {
+          onError: (error :any) => {
             setErrorMSG(error.error.message);
             if (error) throw new Error(error.error.message);
 
