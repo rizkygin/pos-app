@@ -52,6 +52,10 @@ export const auth = betterAuth({
       });
     },
   },
+  trustedOrigins: [
+    "https://ulunpesan.com",
+    "https://www.ulunpesan.com",
+  ],
   plugins: [
     nextCookies()
   ],
