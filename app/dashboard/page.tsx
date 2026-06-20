@@ -441,6 +441,7 @@ const dashboardPage = async () => {
 
     let recommend: {
       outletId: number;
+      outletFeature: string;
       menuName: string;
       rating: string;
       distance: string;
@@ -498,6 +499,7 @@ const dashboardPage = async () => {
     const recommendedMenus = await db
       .select({
         outletId: outletsTable.id,
+        outletFeature: productsTable.features,
         name: productsTable.product_name,
         lat: outletsTable.lat,
         lon: outletsTable.lon,
@@ -507,7 +509,14 @@ const dashboardPage = async () => {
       })
       .from(productsTable)
       .innerJoin(outletsTable, eq(productsTable.outlet_id, outletsTable.id))
-      .where(eq(productsTable.is_recommended, true))
+      .where(
+        and(
+          eq(productsTable.is_recommended, true),
+          eq(productsTable.isAvailable, true),
+          isNull(productsTable.deletedAt),
+          eq(outletsTable.is_open, true),
+        ),
+      )
       .groupBy(outletsTable.id, productsTable.id)
       .orderBy(desc(productsTable.review_count))
       .limit(3);
@@ -535,6 +544,7 @@ const dashboardPage = async () => {
 
       return {
         outletId: r.outletId,
+        outletFeature: r.outletFeature[0] ?? 'food',
         menuName: r.name,
         rating: r.rating ?? '5.00',
         distance,

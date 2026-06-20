@@ -11,6 +11,12 @@ import type { Product } from "@/lib/types";
 
 export type OrderProduct = Product;
 
+function getProductImageSrc(image: string): string {
+    if (!image || image === "avatar.png") return "/avatar.png";
+    if (image.startsWith("http") || image.startsWith("/")) return image;
+    return `/products/${image}`;
+}
+
 export function ProductCard({
     product,
     onAddToCart,
@@ -41,7 +47,7 @@ export function ProductCard({
         >
             <div className="relative aspect-square overflow-hidden">
                 <Image
-                    src={product.image}
+                    src={getProductImageSrc(product.image)}
                     alt={product.product_name}
                     fill
                     className="object-cover group-hover:scale-110 transition-transform duration-500"

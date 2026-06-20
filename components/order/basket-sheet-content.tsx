@@ -22,6 +22,12 @@ export type CartItem = {
     note: string;
 };
 
+function getProductImageSrc(image: string): string {
+    if (!image || image === "avatar.png") return "/avatar.png";
+    if (image.startsWith("http") || image.startsWith("/")) return image;
+    return `/products/${image}`;
+}
+
 export function BasketSheetContent({
     cart,
     onIncrement,
@@ -105,7 +111,7 @@ export function BasketSheetContent({
                                 className="flex gap-3 p-3 rounded-2xl bg-muted/40 border border-border/50"
                             >
                                 <div className="relative h-16 w-16 rounded-xl overflow-hidden flex-shrink-0">
-                                    <Image src={item.product.image} alt={item.product.product_name} fill className="object-cover" />
+                                    <Image src={getProductImageSrc(item.product.image)} alt={item.product.product_name} fill className="object-cover" />
                                 </div>
                                 <div className="flex-1 min-w-0">
                                     <p className="font-bold text-sm leading-tight line-clamp-1">{item.product.product_name}</p>

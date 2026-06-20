@@ -56,6 +56,12 @@ function getAdBannerSrc(image: string): string {
   return `/ads/${image}`;
 }
 
+function getOutletImageSrc(image?: string): string {
+  if (!image) return '/avatar.png';
+  if (image.startsWith('http') || image.startsWith('/')) return image;
+  return `/${image}`;
+}
+
 // ─── Main Component ─────────────────────────────────────────────────────────
 
 export function OrderClient({
@@ -260,7 +266,7 @@ export function OrderClient({
       {outlet && (
         <div className="relative h-56 md:h-72 overflow-hidden mt-3">
           <Image
-            src={outlet?.coverImage}
+            src={getOutletImageSrc(outlet?.coverImage)}
             alt={outlet?.name}
             fill
             className="object-cover"
@@ -272,7 +278,7 @@ export function OrderClient({
             <div className="flex items-end gap-4">
               <div className="relative h-16 w-16 md:h-20 md:w-20 rounded-2xl overflow-hidden ring-4 ring-white/30 flex-shrink-0">
                 <Image
-                  src={outlet?.image}
+                  src={getOutletImageSrc(outlet?.image)}
                   alt={outlet?.name}
                   fill
                   className="object-cover"

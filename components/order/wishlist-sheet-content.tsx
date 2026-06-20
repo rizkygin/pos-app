@@ -11,6 +11,12 @@ import type { CartItem } from "@/components/order/basket-sheet-content";
 
 type Product = OrderProduct;
 
+function getProductImageSrc(image: string): string {
+    if (!image || image === "avatar.png") return "/avatar.png";
+    if (image.startsWith("http") || image.startsWith("/")) return image;
+    return `/products/${image}`;
+}
+
 export function WishlistSheetContent({
     wishlistedProducts,
     onRemove,
@@ -47,7 +53,7 @@ export function WishlistSheetContent({
                             className="flex gap-3 p-3 rounded-2xl bg-muted/40 border border-border/50"
                         >
                             <div className="relative h-16 w-16 rounded-xl overflow-hidden flex-shrink-0">
-                                <Image src={product.image} alt={product.product_name} fill className="object-cover" />
+                                <Image src={getProductImageSrc(product.image)} alt={product.product_name} fill className="object-cover" />
                             </div>
                             <div className="flex-1 min-w-0">
                                 <p className="font-bold text-sm leading-tight line-clamp-1">{product.product_name}</p>

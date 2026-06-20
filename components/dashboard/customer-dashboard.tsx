@@ -43,6 +43,7 @@ type LastOrder = {
 
 type RecommendedMenu = {
     outletId: number;
+    outletFeature: string;
     menuName: string;
     rating: string;
     distance: string;
@@ -273,14 +274,14 @@ export const CustomerDashboard = ({ lastOrders = [], recommend = [], ads = [], h
 
             {/* Recommended Section */}
             {recommend.length > 0 && (
-                <div className="space-y-6">
+                <div className="space-y-6 lg:min-h-50">
                     <div className="flex items-center justify-between">
                         <h3 className="text-2xl font-black tracking-tight">Rekomendasi untuk pian</h3>
                     </div>
 
-                    <div className="grid gap-6 md:grid-cols-3">
+                    <div className="grid gap-6 grid-cols-2 lg:grid-cols-5">
                         {recommend.map((menu, i) => (
-                            <Link key={i} href={`/menu/${menu.outletId}`}>
+                            <Link key={i} href={`/dashboard/order/${menu.outletFeature}/${menu.outletId}`}>
                                 <motion.div
                                     whileHover={{ y: -8 }}
                                     className="group cursor-pointer space-y-4"
