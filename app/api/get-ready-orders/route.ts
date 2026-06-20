@@ -2,8 +2,9 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
 import { db } from "@/src/db";
-import { ordersTable, orderDetailsTable, productsTable, outletsTable, customersTable, usersTable } from "@/src/db/schema";
+import { ordersTable, outletsTable, customersTable, usersTable } from "@/src/db/schema";
 import { eq, and } from "drizzle-orm";
+import { attachOrderItems } from "@/lib/utils/order-items";
 
 export const GET = async () => {
     const session = await auth.api.getSession({ headers: await headers() });
@@ -32,24 +33,7 @@ export const GET = async () => {
         .where(and(eq(ordersTable.outlet_id, outlet.id), eq(ordersTable.status, "ready")))
         .orderBy(ordersTable.createdAt);
 
-    const ordersWithItems = await Promise.all(
-        orders.map(async (order) => {
-            const items = await db
-                .select({
-                    productName: productsTable.product_name,
-                    quantity: orderDetailsTable.quantity,
-                    noteProduct: orderDetailsTable.note_product,
-                    summaryPrice: orderDetailsTable.summary_price,
-                })
-                .from(orderDetailsTable)
-                .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
-                .where(eq(orderDetailsTable.order_id, order.orderId));
-
-            const totalAmount = items.reduce((sum, item) => sum + parseInt(item.summaryPrice || "0"), 0);
-
-            return { ...order, items, totalAmount };
-        })
-    );
+    const ordersWithItems = await attachOrderItems(orders);
 
     return NextResponse.json({ success: true, orders: ordersWithItems });
 };

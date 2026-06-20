@@ -58,21 +58,17 @@ export const OwnerDashboard = ({
 }) => {
   const isPositive = total6monthsSales.percentage >= 0;
   return (
-    <main className="px-4 mx-2 md:mx-6 pb-12">
-      <DashboardHeader
-        title="Dashboard"
-        description="Monitor your sales, inventory, and business performance at a glance."
-      />
+    <main className="px-4 mx-2 md:mx-6 pb-24 lg:pb-12 pt-2">
 
-      <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {/* Stats Card: Total Sales */}
-        <div className="group relative overflow-hidden rounded-2xl border bg-gradient-to-br from-blue-600/10 to-transparent p-6 transition-all hover:shadow-lg hover:border-blue-600/30">
+        <div className="group relative overflow-hidden rounded-xl border bg-linear-to-br from-blue-600/10 to-transparent p-4 transition-all hover:shadow-md hover:border-blue-600/30">
           <div className="flex items-center justify-between">
-            <div className="rounded-xl bg-blue-600 p-2.5 text-white shadow-lg shadow-blue-600/20 transition-transform group-hover:scale-110">
-              <TrendingUp className="h-5 w-5" />
+            <div className="rounded-lg bg-blue-600 p-2 text-white shadow-md shadow-blue-600/20 transition-transform group-hover:scale-110">
+              <TrendingUp className="h-4 w-4" />
             </div>
             <div
-              className={`flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-full ${
+              className={`flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
                 isPositive
                   ? 'text-emerald-600 bg-emerald-50'
                   : 'text-rose-600 bg-rose-50'
@@ -89,82 +85,82 @@ export const OwnerDashboard = ({
               </span>
             </div>
           </div>
-          <div className="mt-4 flex flex-col gap-1">
-            <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
+          <div className="mt-3 flex flex-col gap-0.5">
+            <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
               Sales (6 Months)
             </p>
-            <h2 className="text-3xl font-extrabold tracking-tight">
+            <h2 className="text-lg font-bold tracking-tight">
               {fmtIDR(total6monthsSales.totalSales)}
             </h2>
           </div>
-          <div className="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-blue-600/5 blur-2xl transition-opacity group-hover:opacity-100 opacity-50" />
+          <div className="absolute -right-4 -top-4 h-16 w-16 rounded-full bg-blue-600/5 blur-2xl transition-opacity group-hover:opacity-100 opacity-50" />
         </div>
 
         {/* Stats Card: Active Orders */}
-        <div className="group relative overflow-hidden rounded-2xl border bg-gradient-to-br from-purple-600/10 to-transparent p-6 transition-all hover:shadow-lg hover:border-purple-600/30">
+        <div className="group relative overflow-hidden rounded-xl border bg-linear-to-br from-purple-600/10 to-transparent p-4 transition-all hover:shadow-md hover:border-purple-600/30">
           <div className="flex items-center justify-between">
-            <div className="rounded-xl bg-purple-600 p-2.5 text-white shadow-lg shadow-purple-600/20 transition-transform group-hover:scale-110">
-              <ShoppingBag className="h-5 w-5" />
+            <div className="rounded-lg bg-purple-600 p-2 text-white shadow-md shadow-purple-600/20 transition-transform group-hover:scale-110">
+              <ShoppingBag className="h-4 w-4" />
             </div>
-            <div className="text-xs font-semibold text-muted-foreground bg-muted/50 px-2 py-1 rounded-full">
+            <div className="text-xs font-semibold text-muted-foreground bg-muted/50 px-2 py-0.5 rounded-full">
               Last 24h
             </div>
           </div>
-          <div className="mt-4 flex flex-col gap-1">
-            <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
+          <div className="mt-3 flex flex-col gap-0.5">
+            <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
               Active Orders
             </p>
-            <h2 className="text-3xl font-extrabold tracking-tight">
+            <h2 className="text-lg font-bold tracking-tight">
               {activeOrdersCount}
             </h2>
           </div>
-          <div className="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-purple-600/5 blur-2xl transition-opacity group-hover:opacity-100 opacity-50" />
+          <div className="absolute -right-4 -top-4 h-16 w-16 rounded-full bg-purple-600/5 blur-2xl transition-opacity group-hover:opacity-100 opacity-50" />
         </div>
 
         {/* Stats Card: Top Product */}
-        <div className="group relative overflow-hidden rounded-2xl border bg-gradient-to-br from-amber-600/10 to-transparent p-6 transition-all hover:shadow-lg hover:border-amber-600/30">
+        <div className="group relative overflow-hidden rounded-xl border bg-linear-to-br from-amber-600/10 to-transparent p-4 transition-all hover:shadow-md hover:border-amber-600/30">
           <div className="flex items-center justify-between">
-            <div className="rounded-xl bg-amber-600 p-2.5 text-white shadow-lg shadow-amber-600/20 transition-transform group-hover:scale-110">
-              <Layers className="h-5 w-5" />
+            <div className="rounded-lg bg-amber-600 p-2 text-white shadow-md shadow-amber-600/20 transition-transform group-hover:scale-110">
+              <Layers className="h-4 w-4" />
             </div>
-            <div className="text-xs font-semibold text-amber-600 bg-amber-50 px-2 py-1 rounded-full">
+            <div className="text-xs font-semibold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
               {topProduct ? topProduct.category : 'Popular'}
             </div>
           </div>
-          <div className="mt-4 flex flex-col gap-1">
-            <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
+          <div className="mt-3 flex flex-col gap-0.5">
+            <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
               Top Product
             </p>
-            <h2 className="text-3xl font-extrabold tracking-tight truncate">
+            <h2 className="text-lg font-bold tracking-tight truncate">
               {topProduct ? topProduct.name : '-'}
             </h2>
           </div>
-          <div className="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-amber-600/5 blur-2xl transition-opacity group-hover:opacity-100 opacity-50" />
+          <div className="absolute -right-4 -top-4 h-16 w-16 rounded-full bg-amber-600/5 blur-2xl transition-opacity group-hover:opacity-100 opacity-50" />
         </div>
 
         {/* Stats Card: Order Outlet */}
         <Link
           href="/dashboard/order-outlet"
-          className="group relative overflow-hidden rounded-2xl border bg-gradient-to-br from-rose-600/10 to-transparent p-6 transition-all hover:shadow-lg hover:border-rose-600/30"
+          className="group relative overflow-hidden rounded-xl border bg-linear-to-br from-rose-600/10 to-transparent p-4 transition-all hover:shadow-md hover:border-rose-600/30"
         >
           <div className="flex items-center justify-between">
-            <div className="rounded-xl bg-rose-600 p-2.5 text-white shadow-lg shadow-rose-600/20 transition-transform group-hover:scale-110">
-              <ShoppingCart className="h-5 w-5" />
+            <div className="rounded-lg bg-rose-600 p-2 text-white shadow-md shadow-rose-600/20 transition-transform group-hover:scale-110">
+              <ShoppingCart className="h-4 w-4" />
             </div>
-            <div className="flex items-center gap-1 text-xs font-semibold text-rose-600 bg-rose-50 px-2 py-1 rounded-full">
+            <div className="flex items-center gap-1 text-xs font-semibold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full">
               <span>Manage</span>
               <ArrowUpRight className="h-3 w-3" />
             </div>
           </div>
-          <div className="mt-4 flex flex-col gap-1">
-            <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
+          <div className="mt-3 flex flex-col gap-0.5">
+            <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
               History Pesanan
             </p>
-            <h2 className="text-3xl font-extrabold tracking-tight">
+            <h2 className="text-lg font-bold tracking-tight">
               {activeOrdersCount} Active
             </h2>
           </div>
-          <div className="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-rose-600/5 blur-2xl transition-opacity group-hover:opacity-100 opacity-50" />
+          <div className="absolute -right-4 -top-4 h-16 w-16 rounded-full bg-rose-600/5 blur-2xl transition-opacity group-hover:opacity-100 opacity-50" />
         </Link>
       </div>
 
@@ -251,20 +247,20 @@ export const OwnerDashboard = ({
           )}
         </div>
 
-        {/* Quick Actions Grid */}
-        <div className="rounded-2xl border bg-background/50 p-6 backdrop-blur-sm transition-all hover:bg-background shadow-sm hover:shadow-md">
-          <div className="flex items-center justify-between mb-6">
+        {/* Quick Actions Grid — desktop only */}
+        <div className="hidden lg:block rounded-xl border bg-background/50 p-4 backdrop-blur-sm transition-all hover:bg-background shadow-sm hover:shadow-md">
+          <div className="flex items-center justify-between mb-4">
             <div>
-              <h3 className="text-lg font-bold tracking-tight text-foreground">
+              <h3 className="text-sm font-bold tracking-tight text-foreground">
                 Quick Actions
               </h3>
-              <p className="text-xs text-muted-foreground uppercase tracking-widest font-bold">
+              <p className="text-[10px] text-muted-foreground uppercase tracking-widest font-bold">
                 System Controls
               </p>
             </div>
             <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-3">
             {[
               {
                 name: 'Add Product',
@@ -302,22 +298,43 @@ export const OwnerDashboard = ({
               <Link
                 key={i}
                 href={action.href}
-                className={`flex flex-col items-center justify-center gap-3 p-6 rounded-2xl border ${action.border} bg-background hover:border-blue-600/30 hover:shadow-md transition-all group relative overflow-hidden`}
+                className={`flex flex-col items-center justify-center gap-2 p-3 rounded-xl border ${action.border} bg-background hover:border-blue-600/30 hover:shadow-md transition-all group relative overflow-hidden`}
               >
                 <div
-                  className={`p-3 rounded-xl ${action.bg} ${action.color} group-hover:scale-110 transition-transform relative z-10`}
+                  className={`p-2 rounded-lg ${action.bg} ${action.color} group-hover:scale-110 transition-transform relative z-10`}
                 >
-                  <action.icon className="h-6 w-6" />
+                  <action.icon className="h-4 w-4" />
                 </div>
-                <span className="text-sm font-bold text-muted-foreground group-hover:text-foreground transition-colors relative z-10">
+                <span className="text-xs font-bold text-muted-foreground group-hover:text-foreground transition-colors relative z-10">
                   {action.name}
                 </span>
-                <div className="absolute inset-0 bg-gradient-to-br from-transparent to-muted/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+                <div className="absolute inset-0 bg-linear-to-br from-transparent to-muted/10 opacity-0 group-hover:opacity-100 transition-opacity" />
               </Link>
             ))}
           </div>
         </div>
       </div>
+
+      {/* Mobile Quick Actions Bottom Nav */}
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 border-t bg-background/95 backdrop-blur-sm">
+        <div className="flex items-center justify-around">
+          {[
+            { name: 'Add Product', icon: ShoppingBag, color: 'text-blue-600', href: '/dashboard/addproducts' },
+            { name: 'Reports', icon: TrendingUp, color: 'text-purple-600', href: '/dashboard/reports' },
+            { name: 'Users', icon: User, color: 'text-amber-600', href: '/dashboard/users' },
+            { name: 'Settings', icon: Layers, color: 'text-rose-600', href: '/dashboard/settings' },
+          ].map((action, i) => (
+            <Link
+              key={i}
+              href={action.href}
+              className={`flex flex-col items-center gap-1 py-3 px-4 ${action.color} hover:opacity-70 transition-opacity`}
+            >
+              <action.icon className="h-5 w-5" />
+              <span className="text-[10px] font-semibold text-foreground/70">{action.name}</span>
+            </Link>
+          ))}
+        </div>
+      </nav>
     </main>
   );
 };

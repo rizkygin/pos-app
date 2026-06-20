@@ -155,6 +155,7 @@ export const productsTable = pgTable(
       table.isAvailable,
       table.deletedAt,
     ),
+    index('products_outlet_id_idx').on(table.outlet_id),
   ],
 );
 
@@ -184,6 +185,8 @@ export const ordersTable = pgTable(
     index('costomer_id_idx').on(table.customer_id),
     index('courier_id_idx').on(table.courier_id),
     index('outlet_id_idx').on(table.outlet_id),
+    index('orders_outlet_status_idx').on(table.outlet_id, table.status),
+    index('orders_courier_status_idx').on(table.courier_id, table.status),
   ],
 );
 
@@ -206,25 +209,36 @@ export const orderDetailsTable = pgTable(
       .notNull(),
     status: STATUS('status'),
   },
-  (table) => [index('order_details_created_at_idx').on(table.created_at)],
+  (table) => [
+    index('order_details_created_at_idx').on(table.created_at),
+    index('order_details_order_id_idx').on(table.order_id),
+  ],
 );
 
-export const ratingsTable = pgTable('ratings', {
-  id: text('id').primaryKey(),
-  order_details_id: integer('order_details_id')
-    .notNull()
-    .references(() => orderDetailsTable.id),
-  ratings: numeric('ratings', { precision: 3, scale: 2 }).default('5'),
-  comment: text('comment'),
-  reviewer: text('reviewer_id')
-    .notNull()
-    .references(() => usersTable.id),
-  reciepent: text('reciepent_id').references(() => usersTable.id),
-  outlet_id: integer('outlet_id').references(() => outletsTable.id),
-  product_id: text('product_id').references(() => productsTable.id),
-  reciepent_as: RECIEPENT('reciepent_as'),
-  ...timestamps,
-});
+export const ratingsTable = pgTable(
+  'ratings',
+  {
+    id: text('id').primaryKey(),
+    order_details_id: integer('order_details_id')
+      .notNull()
+      .references(() => orderDetailsTable.id),
+    ratings: numeric('ratings', { precision: 3, scale: 2 }).default('5'),
+    comment: text('comment'),
+    reviewer: text('reviewer_id')
+      .notNull()
+      .references(() => usersTable.id),
+    reciepent: text('reciepent_id').references(() => usersTable.id),
+    outlet_id: integer('outlet_id').references(() => outletsTable.id),
+    product_id: text('product_id').references(() => productsTable.id),
+    reciepent_as: RECIEPENT('reciepent_as'),
+    ...timestamps,
+  },
+  (table) => [
+    index('ratings_outlet_id_idx').on(table.outlet_id),
+    index('ratings_product_id_idx').on(table.product_id),
+    index('ratings_reciepent_idx').on(table.reciepent),
+  ],
+);
 
 export const cashInCategoryTable = pgTable('cashInCategory', {
   id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
@@ -236,28 +250,36 @@ export const cashOutCategoryTable = pgTable('cashOutCategory', {
   category: varchar('category', { length: 50 }),
 });
 
-export const cashInDetailTable = pgTable('cashInDetailTable', {
-  id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
-  category_id: integer('category_id')
-    .notNull()
-    .references(() => cashInCategoryTable.id),
-  money_amount: varchar('money_amount', { length: 15 }).notNull(),
-  type: CASHFLOWS_TRANSACTION_TYPE('type')
-    .$default(() => 'cash')
-    .notNull(),
-  created_at: timestamp('created_at').defaultNow().notNull(),
-});
-export const cashOutDetailTable = pgTable('cashOutDetailTable', {
-  id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
-  category_id: integer('category_id')
-    .notNull()
-    .references(() => cashOutCategoryTable.id),
-  money_amount: varchar('money_amount', { length: 15 }).notNull(),
-  type: CASHFLOWS_TRANSACTION_TYPE('type')
-    .$default(() => 'cash')
-    .notNull(),
-  created_at: timestamp('created_at').defaultNow().notNull(),
-});
+export const cashInDetailTable = pgTable(
+  'cashInDetailTable',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    category_id: integer('category_id')
+      .notNull()
+      .references(() => cashInCategoryTable.id),
+    money_amount: varchar('money_amount', { length: 15 }).notNull(),
+    type: CASHFLOWS_TRANSACTION_TYPE('type')
+      .$default(() => 'cash')
+      .notNull(),
+    created_at: timestamp('created_at').defaultNow().notNull(),
+  },
+  (table) => [index('cash_in_detail_created_at_idx').on(table.created_at)],
+);
+export const cashOutDetailTable = pgTable(
+  'cashOutDetailTable',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    category_id: integer('category_id')
+      .notNull()
+      .references(() => cashOutCategoryTable.id),
+    money_amount: varchar('money_amount', { length: 15 }).notNull(),
+    type: CASHFLOWS_TRANSACTION_TYPE('type')
+      .$default(() => 'cash')
+      .notNull(),
+    created_at: timestamp('created_at').defaultNow().notNull(),
+  },
+  (table) => [index('cash_out_detail_created_at_idx').on(table.created_at)],
+);
 
 export const cashFlows = pgTable('cashFlows', {
   id: integer('id').primaryKey().generatedByDefaultAsIdentity(),

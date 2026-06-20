@@ -268,11 +268,8 @@ export const ProductsManager = ({
           <div className="flex items-center justify-between mb-4 md:mb-8">
             <div>
               <h2 className="text-xl md:text-3xl font-extrabold tracking-tight text-foreground">
-                Your Products
+                Etalase Produk
               </h2>
-              <p className="text-muted-foreground mt-1 text-sm md:text-base">
-                Manage inventory across your outlet.
-              </p>
             </div>
             <div className="flex items-center gap-2">
               <Button
@@ -301,7 +298,7 @@ export const ProductsManager = ({
                 className="bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-lg shadow-blue-600/20 transition-all hover:scale-105"
               >
                 <Plus className="mr-2 h-5 w-5" />
-                Add Product
+                Tambah Produk
               </Button>
             </div>
           </div>

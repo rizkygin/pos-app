@@ -204,6 +204,7 @@ export const PromoteManager = ({ products, ads }: PromoteManagerProps) => {
   };
 
   const startTour = () => {
+    window.scrollTo({ top: 0, behavior: 'instant' });
     const tour = driver({
       showProgress: true,
       progressText: '{{current}} / {{total}}',
@@ -216,21 +217,27 @@ export const PromoteManager = ({ products, ads }: PromoteManagerProps) => {
       popoverClass: 'promo-tour-popover',
       steps: [
         {
+          element: '[data-tour="tour-header"]',
           popover: {
             title: 'Di Mana Iklan Pian Tampil?',
             description: `
               <img src="/images/Screenshot-promo.jpg" alt="Contoh tampilan iklan" style="width:100%;border-radius:8px;margin-bottom:8px;" />
               Begini tampilan iklan pian di halaman pelanggan.
             `,
+            side: 'bottom',
+            align: 'start',
           },
         },
         {
+          element: '[data-tour="tour-header"]',
           popover: {
             title: 'Detail Iklan',
             description: `
               <img src="/images/Screenshot-promo2.jpg" alt="Contoh detail iklan" style="width:100%;border-radius:8px;margin-bottom:8px;" />
               Saat diklik, pelanggan akan melihat detail promo pian seperti ini.
             `,
+            side: 'bottom',
+            align: 'start',
           },
         },
         {
@@ -276,7 +283,7 @@ export const PromoteManager = ({ products, ads }: PromoteManagerProps) => {
       <div className="bg-background border rounded-2xl md:rounded-3xl p-4 md:p-8 shadow-sm relative overflow-hidden">
         <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-rose-500 to-amber-500" />
 
-        <div className="flex items-center gap-4 mb-6">
+        <div className="flex items-center gap-4 mb-6" data-tour="tour-header">
           <div className="p-3 rounded-xl bg-rose-50 text-rose-600">
             <Megaphone className="h-6 w-6" />
           </div>

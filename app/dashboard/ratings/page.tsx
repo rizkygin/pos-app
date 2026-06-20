@@ -386,13 +386,9 @@ export default function RatingsPage() {
 
   return (
     <div className="px-4 mx-2 md:mx-6 pb-12">
-      <DashboardHeader
-        title="Ulasan"
-        description="Semua ulasan pelanggan untuk outlet dan produk kamu."
-      />
 
       {/* Dual summary cards */}
-      <div className="flex flex-col sm:flex-row gap-3 mb-6">
+      <div className="flex flex-col sm:flex-row gap-3 mb-6 mt-3">
         <SummaryCard
           title="Rating Outlet"
           icon={Store}
@@ -410,12 +406,12 @@ export default function RatingsPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2 mb-4">
+      <div className="flex gap-1 mb-4">
         {tabs.map(({ key, label, icon: Icon, count }) => (
           <button
             key={key}
             onClick={() => handleTabChange(key)}
-            className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-bold border transition-all ${
+            className={`flex flex-1 items-center justify-center gap-1.5 px-2 py-1.5 rounded-full text-xs font-bold border transition-all ${
               tab === key
                 ? 'bg-amber-500 text-white border-amber-500 shadow'
                 : 'bg-background text-muted-foreground border-muted hover:border-amber-300'

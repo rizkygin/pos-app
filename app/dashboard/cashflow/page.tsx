@@ -171,10 +171,7 @@ export default function CashflowPage() {
 
   return (
     <div className="flex-1 space-y-6 p-8 pt-6">
-      <div className="flex items-center justify-between space-y-2">
-        <h2 className="text-3xl font-bold tracking-tight">
-          Cashflow Dashboard
-        </h2>
+      <div className="flex items-center justify-between">
         <div className="flex items-center space-x-2">
           <Button
             variant="outline"
@@ -220,23 +217,23 @@ export default function CashflowPage() {
           >
             <ChevronRight className="h-4 w-4" />
           </Button>
-          <Button
-            variant="outline"
-            className="h-8 ml-2"
-            onClick={() =>
-              exportMonthlyPDF({
-                monthlyTransactions,
-                monthlyIn,
-                monthlyOut,
-                monthlyNet,
-                selectedDate,
-              })
-            }
-          >
-            <Download className="mr-2 h-4 w-4" />
-            Export PDF
-          </Button>
         </div>
+        <Button
+          variant="outline"
+          className="h-8"
+          onClick={() =>
+            exportMonthlyPDF({
+              monthlyTransactions,
+              monthlyIn,
+              monthlyOut,
+              monthlyNet,
+              selectedDate,
+            })
+          }
+        >
+          <Download className="mr-2 h-4 w-4" />
+          Export PDF
+        </Button>
       </div>
 
       <SummaryCards
@@ -249,18 +246,18 @@ export default function CashflowPage() {
         formatCurrency={formatCurrency}
       />
 
-      <div className="grid gap-4 md:grid-cols-7 lg:grid-cols-7">
+      <div className="grid lg:gap-4 lg:grid-cols-7">
         {/* Form Section */}
-        <Card className="col-span-3">
+        <Card className="col-span-full lg:col-span-3 mb-5">
           <CardHeader>
-            <CardTitle>Add Transaction</CardTitle>
-            <CardDescription>Record a new cash flow entry</CardDescription>
+            <CardTitle>Tambahkan Arus Kas</CardTitle>
+            <CardDescription>Catat Arus Kas Pian</CardDescription>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleAddTransaction} className="space-y-4">
               <div className="space-y-2">
                 <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
-                  Transaction Type
+                  Tipe Transaksi
                 </label>
                 <div className="grid grid-cols-2 gap-2">
                   <Button
@@ -273,7 +270,7 @@ export default function CashflowPage() {
                     }
                     onClick={() => handleTypeChange('IN')}
                   >
-                    <ArrowUpRight className="mr-2 h-4 w-4" /> Cash In
+                    <ArrowUpRight className="mr-2 h-4 w-4" /> Uang Masuk
                   </Button>
                   <Button
                     type="button"
@@ -285,14 +282,14 @@ export default function CashflowPage() {
                     }
                     onClick={() => handleTypeChange('OUT')}
                   >
-                    <ArrowDownRight className="mr-2 h-4 w-4" /> Cash Out
+                    <ArrowDownRight className="mr-2 h-4 w-4" /> Uang Keluar
                   </Button>
                 </div>
               </div>
 
               <div className="space-y-2">
                 <label className="text-sm font-medium leading-none">
-                  Category
+                  Kategori
                 </label>
                 <select
                   value={category}
@@ -318,7 +315,7 @@ export default function CashflowPage() {
 
               <div className="space-y-2">
                 <label className="text-sm font-medium leading-none">
-                  Amount (IDR)
+                  Jumlah (Rp)
                 </label>
                 <div className="relative">
                   <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm font-medium text-muted-foreground">
@@ -344,7 +341,7 @@ export default function CashflowPage() {
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm font-medium leading-none">Date</label>
+                <label className="text-sm font-medium leading-none">Tanggal</label>
                 <Popover>
                   <PopoverTrigger asChild>
                     <Button
@@ -369,17 +366,17 @@ export default function CashflowPage() {
 
               <Button type="submit" className="w-full mt-2">
                 <PlusCircle className="mr-2 h-4 w-4" />
-                Add Record
+                Catat Arus Kas
               </Button>
             </form>
           </CardContent>
         </Card>
 
         {/* History Section */}
-        <Card className="col-span-4">
+        <Card className="col-span-full lg:col-span-4">
           <CardHeader>
-            <CardTitle>Recent Transactions</CardTitle>
-            <CardDescription>Your latest cashflow records</CardDescription>
+            <CardTitle>Transaksi Terbaru</CardTitle>
+            <CardDescription>Arus kas Pian per </CardDescription>
           </CardHeader>
           <CardContent>
             {isLoading ? (

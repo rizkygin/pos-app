@@ -20,7 +20,7 @@ import { email } from 'zod';
 
 const main = async () => {
   // Load env variables
-  const hashPassword = '12345678';
+  const hashPassword = 'l8=v36P!As@4';
 
   const usersToSeed = [
     {

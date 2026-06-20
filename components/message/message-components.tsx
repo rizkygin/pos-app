@@ -9,7 +9,7 @@ export const MessageChatComponent = () => {
         <motion.div
             drag
             dragMomentum={false}
-            className="fixed bottom-8 right-8 z-50"
+            className="fixed bottom-12 right-8 z-50"
             style={{ touchAction: "none" }}
         >
             <Collapsible className="relative flex flex-row-reverse items-end">

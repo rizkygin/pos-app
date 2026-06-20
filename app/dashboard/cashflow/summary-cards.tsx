@@ -14,7 +14,7 @@ interface SummaryCardsProps {
 
 export function SummaryCards({ dailyIn, dailyOut, monthlyIn, monthlyOut, isToday, selectedDate, formatCurrency }: SummaryCardsProps) {
     return (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
             <Card className="bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-950/20 dark:to-emerald-950/20 border-green-100 dark:border-green-900/50">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                     <CardTitle className="text-sm font-medium text-green-800 dark:text-green-400">Daily In</CardTitle>

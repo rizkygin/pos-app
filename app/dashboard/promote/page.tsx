@@ -80,10 +80,6 @@ const Page = async () => {
 
   return (
     <main className="px-4 mx-2 md:mx-6 pb-12 space-y-4">
-      <DashboardHeader
-        title="Promosi Menu"
-        description="Buat iklan untuk produk pian. Iklan akan tampil di dashboard pelanggan setelah disetujui admin."
-      />
       <PromoteManager
         products={products}
         ads={ads.map((ad) => {

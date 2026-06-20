@@ -140,7 +140,7 @@ function NavRow({ item, isActive }: { item: NavItem; isActive: boolean }) {
         asChild
         isActive={isActive}
         className={cn(
-          'h-8 gap-2.5 rounded-md px-2 text-[13px] font-medium transition-colors',
+          'h-11 gap-2.5 rounded-md px-2 text-[13px] font-medium transition-colors',
           'text-muted-foreground hover:bg-accent hover:text-foreground',
           isActive && 'bg-accent text-foreground',
         )}
@@ -148,11 +148,11 @@ function NavRow({ item, isActive }: { item: NavItem; isActive: boolean }) {
         <Link href={item.url}>
           <span
             className={cn(
-              'flex size-5 shrink-0 items-center justify-center rounded-md',
+              'flex size-7 shrink-0 items-center justify-center rounded-md',
               item.iconBg,
             )}
           >
-            <Icon className={cn('size-3', item.iconColor)} />
+            <Icon className={cn('size-4', item.iconColor)} />
           </span>
           <span>{item.name}</span>
         </Link>
@@ -184,21 +184,21 @@ function NavCollapsible({
           <SidebarMenuButton
             isActive={isActive}
             className={cn(
-              'h-8 gap-2.5 rounded-md px-2 text-[13px] font-medium transition-colors',
+              'h-11 gap-2.5 rounded-md px-2 text-[13px] font-medium transition-colors',
               'text-muted-foreground hover:bg-accent hover:text-foreground',
               isActive && 'bg-accent text-foreground',
             )}
           >
             <span
               className={cn(
-                'flex size-5 shrink-0 items-center justify-center rounded-md',
+                'flex size-7 shrink-0 items-center justify-center rounded-md',
                 iconBg,
               )}
             >
-              <Icon className={cn('size-3', iconColor)} />
+              <Icon className={cn('size-4', iconColor)} />
             </span>
             <span>{label}</span>
-            <ChevronDown className="ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]/collapsible:rotate-180" />
+            <ChevronDown className="ml-auto size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]/collapsible:rotate-180" />
           </SidebarMenuButton>
         </CollapsibleTrigger>
         <CollapsibleContent>
@@ -212,12 +212,12 @@ function NavCollapsible({
                     asChild
                     isActive={subActive}
                     className={cn(
-                      'text-[12px] text-muted-foreground',
+                      'h-10 text-[13px] text-muted-foreground',
                       subActive && 'text-foreground font-medium',
                     )}
                   >
                     <Link href={sub.url}>
-                      <SubIcon className="size-3.5" />
+                      <SubIcon className="size-4" />
                       <span>{sub.name}</span>
                     </Link>
                   </SidebarMenuSubButton>
@@ -412,7 +412,7 @@ export function AppSidebar({
           <SidebarGroupLabel className="px-2 py-1 text-[10px] font-medium uppercase tracking-widest text-muted-foreground/60">
             Overview
           </SidebarGroupLabel>
-          <SidebarMenu className="gap-0.5">
+          <SidebarMenu className="gap-1">
             {isAdmin ? (
               <>
                 <NavRow
@@ -495,7 +495,7 @@ export function AppSidebar({
               <SidebarGroupLabel className="px-2 py-1 text-[10px] font-medium uppercase tracking-widest text-muted-foreground/60">
                 Management
               </SidebarGroupLabel>
-              <SidebarMenu className="gap-0.5">
+              <SidebarMenu className="gap-1">
                 {/* User collapsible item */}
                 {!isOwner && (
                   <NavCollapsible
@@ -525,7 +525,7 @@ export function AppSidebar({
         <SidebarSeparator className="mx-0 mb-2" />
         <Popover>
           <PopoverTrigger asChild>
-            <button className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent group-data-[collapsible=icon]:justify-center">
+            <button className="flex w-full items-center gap-2.5 rounded-md px-2 py-3 text-left transition-colors hover:bg-accent group-data-[collapsible=icon]:justify-center">
               <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-linear-to-br from-indigo-500 to-violet-600 text-white text-[11px] font-semibold shadow-sm">
                 {initials}
               </div>

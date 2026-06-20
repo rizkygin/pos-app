@@ -37,13 +37,16 @@ const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
             <AppShell variant="sidebar">
                 <AppSidebar isOwner={isOwner} isCourier={isCourier} isCustomer={isCustomer} isAdmin={isAdmin} />
 
-                <AppContent variant="sidebar" className="overflow-x-hidden">
-                    <header className="sticky top-0 z-10 flex h-10 shrink-0 items-center border-b bg-background px-3">
-                        <SidebarTrigger />
+                <AppContent variant="sidebar" className="h-svh overflow-x-hidden overflow-y-auto">
+                    <header className="sticky top-0 z-30 flex h-12 shrink-0 items-center gap-2 border-b bg-background px-3 md:h-10">
+                        <SidebarTrigger className="size-11 md:size-7" />
+                        <span className="text-sm font-semibold text-foreground">
+                            {isAdmin ? 'Hello Admin' : isOwner ? 'Dashboard' : isCourier ? 'Kurir' : 'Dashboard'}
+                        </span>
                     </header>
 
                     {children}
-                    <MessageChatComponent />
+                    <div className="hidden md:block"><MessageChatComponent /></div>
                 </AppContent>
             </AppShell>
         </>
