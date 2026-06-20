@@ -17,10 +17,17 @@ function deliveryFeeFromDistance(km: number): number {
   if (km > 30)
     throw new Error('Jarak pengiriman melebihi batas maksimum (30 km)');
   if (km <= 5) return 10_000;
-  if (km <= 10) return 20_000;
-  if (km <= 15) return 30_000;
-  if (km <= 20) return 40_000;
-  if (km <= 25) return 50_000;
+  if (km <= 6) return 11_000;
+  if (km <= 7) return 13_000;
+  if (km <= 8) return 16_000;
+  if (km <= 9) return 17_000;
+  if (km <= 10) return 19_000;
+  if (km <= 12) return 23_000;
+  if (km <= 14) return 25_000;
+  if (km <= 15) return 28_000;
+  if (km <= 17) return 30_000;
+  if (km <= 20) return 38_000;
+  if (km <= 25) return 45_000;
   return 60_000;
 }
 
