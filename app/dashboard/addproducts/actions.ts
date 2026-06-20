@@ -8,6 +8,17 @@ import path from 'path';
 import sharp from 'sharp';
 import { eq } from 'drizzle-orm';
 
+// Uploaded files physically live under public/uploads/products (persistent
+// volume), but stored/public URLs keep the legacy /products/... shape via a
+// rewrite in next.config.ts. This maps a public URL back to its real path.
+function imagePublicPathToFsPath(imageUrl: string): string {
+  return path.join(
+    process.cwd(),
+    'public',
+    imageUrl.replace(/^\/products\//, '/uploads/products/'),
+  );
+}
+
 export type AddProductInput = {
   product_name: string;
   price: string;
@@ -60,7 +71,8 @@ export async function uploadImage(formData: FormData) {
     // Generate a unique filename
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
     const filename = `product-${uniqueSuffix}.webp`;
-    const uploadDir = path.join(process.cwd(), 'public', 'products');
+    const uploadDir = path.join(process.cwd(), 'public', 'uploads', 'products');
+    await fs.mkdir(uploadDir, { recursive: true });
 
     // Resize and save image
     await sharp(buffer)
@@ -88,7 +100,7 @@ export async function removeImage(imageUrl: string) {
     if (imageUrl === '/products/avatar.png') {
       return { success: false, message: 'Default image cannot be removed.' };
     }
-    const filePath = path.join(process.cwd(), 'public', imageUrl);
+    const filePath = imagePublicPathToFsPath(imageUrl);
     await fs.unlink(filePath);
     revalidatePath('/dashboard/addproducts');
     return { success: true, message: 'Image removed successfully.' };
@@ -103,7 +115,7 @@ export async function checkImageUrlAccessable(imageUrl: string){
     return;
   }
   try{
-    await fs.access(path.join(process.cwd(), 'public', imageUrl));
+    await fs.access(imagePublicPathToFsPath(imageUrl));
     return {success: true, message: "Image is accessable", path: imageUrl}
   }catch (error: any){
     return {success: false, message: error.message}
@@ -134,7 +146,7 @@ export async function deleteProductAction(productId: string) {
       .limit(1);
 
     if (product && product.image && product.image.startsWith('/products/')) {
-      const filePath = path.join(process.cwd(), 'public', product.image);
+      const filePath = imagePublicPathToFsPath(product.image);
       try {
         await fs.unlink(filePath);
       } catch (err) {

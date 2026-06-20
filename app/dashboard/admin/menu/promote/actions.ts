@@ -65,7 +65,11 @@ export async function deleteAdAction(adId: number) {
     }
 
     if (ad.banner_image.startsWith('/ads/')) {
-      const filePath = path.join(process.cwd(), 'public', ad.banner_image);
+      const filePath = path.join(
+        process.cwd(),
+        'public',
+        ad.banner_image.replace(/^\/ads\//, '/uploads/ads/'),
+      );
       try {
         await fs.unlink(filePath);
       } catch (err) {

@@ -79,7 +79,7 @@ export async function uploadOutletAvatar(formData: FormData) {
 
         const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
         const filename = `avatar-${uniqueSuffix}.webp`;
-        const uploadDir = path.join(process.cwd(), "public", "avatars");
+        const uploadDir = path.join(process.cwd(), "public", "uploads", "avatars");
 
         await fs.mkdir(uploadDir, { recursive: true });
 
