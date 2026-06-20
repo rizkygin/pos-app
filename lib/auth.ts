@@ -1,7 +1,9 @@
 import { betterAuth, type Session, type User } from "better-auth";
+import { APIError } from "better-auth/api";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { db } from "@/src/db";
 import { usersTable, session, account, verification } from "@/src/db/schema";
+import { eq } from "drizzle-orm";
 import { cache } from "react";
 import { headers } from "next/headers";
 import { nextCookies } from "better-auth/next-js";
@@ -56,6 +58,26 @@ export const auth = betterAuth({
     "https://ulunpesan.com",
     "https://www.ulunpesan.com",
   ],
+  databaseHooks: {
+    session: {
+      create: {
+        before: async (session) => {
+          const [user] = await db
+            .select({ deletedAt: usersTable.deletedAt })
+            .from(usersTable)
+            .where(eq(usersTable.id, session.userId))
+            .limit(1);
+
+          if (user?.deletedAt) {
+            throw new APIError("FORBIDDEN", {
+              message: "Akun ini telah dihapus dan tidak dapat digunakan lagi.",
+              code: "ACCOUNT_DELETED",
+            });
+          }
+        },
+      },
+    },
+  },
   plugins: [
     nextCookies()
   ],

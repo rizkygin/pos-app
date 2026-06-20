@@ -1,6 +1,6 @@
 import { getSession } from "../auth";
 import { db } from "@/src/db";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { adminsTable, customersTable, couriersTable, outletsTable } from "@/src/db/schema";
 import { count } from "drizzle-orm";
 
@@ -21,9 +21,12 @@ export const getRole = async () => {
     }
 
     const customer = db.query.customersTable.findFirst({
-        where: eq(customersTable.user_id, session.user.id),
+        where: and(eq(customersTable.user_id, session.user.id), isNull(customersTable.deletedAt)),
     })
-    const totalCustomer = await db.$count(customersTable, eq(customersTable.user_id, session.user.id));
+    const totalCustomer = await db.$count(
+        customersTable,
+        and(eq(customersTable.user_id, session.user.id), isNull(customersTable.deletedAt)),
+    );
 
     if (totalCustomer > 0) {
         return {
@@ -33,9 +36,12 @@ export const getRole = async () => {
     }
 
     const courier = db.query.couriersTable.findFirst({
-        where: eq(couriersTable.user_id, session.user.id),
+        where: and(eq(couriersTable.user_id, session.user.id), isNull(couriersTable.deletedAt)),
     })
-    const totalCourier = await db.$count(couriersTable, eq(couriersTable.user_id, session.user.id));
+    const totalCourier = await db.$count(
+        couriersTable,
+        and(eq(couriersTable.user_id, session.user.id), isNull(couriersTable.deletedAt)),
+    );
 
     if (totalCourier > 0) {
         return {

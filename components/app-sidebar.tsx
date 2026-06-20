@@ -42,6 +42,7 @@ import {
   CreditCard,
   Users,
   Calculator,
+  Receipt,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -310,6 +311,13 @@ const adminOutletSubItems = [
 
 const adminManageNavItems: NavItem[] = [
   {
+    name: 'Order',
+    url: '/dashboard/admin/order',
+    icon: Receipt,
+    iconBg: 'bg-sky-100 dark:bg-sky-950',
+    iconColor: 'text-sky-600 dark:text-sky-400',
+  },
+  {
     name: 'Manage Courier',
     url: '/dashboard/admin/courier',
     icon: Bike,
@@ -353,7 +361,7 @@ export function AppSidebar({
   const router = useRouter();
   const currentUrl = useCurrentUrl();
   const { data: session } = useSession();
-  const ownerOnlyNames = new Set(['Product', 'Laporan', 'Cashier', 'Buku Kas']);
+  const ownerOnlyNames = new Set(['Product', 'Laporan', 'Kasir', 'Buku Kas']);
   const visibleNavMain = isOwner
     ? navMain.filter((item) => item.url !== '/dashboard/order')
     : isCourier
