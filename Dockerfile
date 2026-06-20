@@ -28,8 +28,12 @@ RUN npm install --omit=dev
 
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
+COPY --from=builder /app/public/uploads /app/seed-uploads
 COPY --from=builder /app/next.config.ts ./next.config.ts
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
 
 EXPOSE 3000
 
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["npm", "start"]
