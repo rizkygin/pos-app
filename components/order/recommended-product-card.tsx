@@ -32,7 +32,7 @@ export function RecommendedProductCard({ product, feature }: { product: Product;
                     </span>
                 </div>
                 <div className="p-3 space-y-1">
-                    <p className="font-black text-xs leading-tight line-clamp-2 group-hover:text-rose-600 transition-colors">{product.product_name}</p>
+                    <p className="font-black text-xs leading-tight line-clamp-2 group-hover:text-rose-600 transition-colors min-h-12">{product.product_name}</p>
                     <p className="text-[10px] text-muted-foreground line-clamp-1">{product.outlet}</p>
                     <div className="flex items-center gap-1">
                         <StarRating rating={product.ratings} size="sm" />

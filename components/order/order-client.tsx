@@ -336,6 +336,27 @@ export function OrderClient({
         </div>
       </div>
 
+      {/* ── Closed State ─────────────────────────────────────────── */}
+      {outlet && !outlet.isOpen ? (
+        <div className="px-4 md:px-8 pt-10 pb-16">
+          <div className="flex flex-col items-center text-center gap-3 max-w-sm mx-auto">
+            <div className="h-16 w-16 rounded-2xl bg-red-50 flex items-center justify-center">
+              <Store className="h-8 w-8 text-red-500" />
+            </div>
+            <h2 className="font-black text-xl">Outlet Sedang Tutup</h2>
+            <p className="text-sm text-muted-foreground">
+              {outlet.name} sedang tidak menerima pesanan saat ini. Coba lagi nanti atau pilih
+              outlet lain yang sedang buka.
+            </p>
+            <Link
+              href={backHref}
+              className="mt-2 inline-flex items-center gap-1.5 px-5 py-2.5 rounded-full bg-rose-500 hover:bg-rose-600 text-white font-bold text-sm transition-colors"
+            >
+              Lihat Outlet Lain
+            </Link>
+          </div>
+        </div>
+      ) : (
       <div className="px-4 md:px-8 space-y-8 pt-6">
         {/* ── Promo Section ──────────────────────────────────────── */}
         {ads && ads.length > 0 && (
@@ -474,8 +495,10 @@ export function OrderClient({
           )}
         </section>
       </div>
+      )}
 
       {/* ── Floating Action Bar ───────────────────────────────────── */}
+      {outlet && !outlet.isOpen ? null : (
       <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3">
         {/* Wishlist button */}
         <Sheet open={wishlistOpen} onOpenChange={setWishlistOpen}>
@@ -579,6 +602,7 @@ export function OrderClient({
           </SheetContent>
         </Sheet>
       </div>
+      )}
     </div>
   );
 }

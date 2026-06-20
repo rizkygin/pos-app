@@ -40,9 +40,9 @@ export function OutletCard({ outlet, feature }: { outlet: Outlet; feature: strin
             </div>
 
             <div className="p-4 space-y-2">
-                <h3 className="font-black text-base leading-tight group-hover:text-rose-600 transition-colors">{outlet.name}</h3>
+                <h3 className="font-black text-base leading-tight group-hover:text-rose-600 transition-colors min-h-12 lg:min-h-10">{outlet.name}</h3>
 
-                <div className="flex flex-wrap gap-1.5">
+                <div className="flex flex-wrap gap-1.5 min-h-5">
                     {outlet.tags.map((tag) => (
                         <span key={tag} className="px-2 py-0.5 rounded-full bg-muted text-[10px] font-bold text-muted-foreground">
                             {tag}
@@ -50,13 +50,12 @@ export function OutletCard({ outlet, feature }: { outlet: Outlet; feature: strin
                     ))}
                 </div>
 
-                <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                    <div className="flex items-center gap-1">
-                        <MapPin className="h-3 w-3" />
-                        <span>{outlet.address}</span>
+                <div className="flex items-start flex-col gap-3 text-xs text-muted-foreground min-h-18 lg:min-h-24">
+                    <div className="flex items-start gap-1">
+                        <MapPin className="h-3 w-3 mt-0.5 shrink-0" />
+                        <span className="line-clamp-2">{outlet.address}</span>
                     </div>
-                    <div className="h-1 w-1 rounded-full bg-muted-foreground/30" />
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1 shrink-0">
                         <Phone className="h-3 w-3" />
                         <span>{outlet.phone}</span>
                     </div>

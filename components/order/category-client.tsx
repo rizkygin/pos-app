@@ -15,19 +15,17 @@ import {
     PackageOpen,
     Scissors,
     Bike,
-    BadgePercent,
     Store,
     X,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { ProductSearchCard } from "./product-search-card";
-import { PromoCodeCard } from "./promo-code-card";
 import { RecommendedProductCard } from "./recommended-product-card";
 import { OutletCard } from "./outlet-card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import type { Outlet, Product, Promo } from "@/lib/types";
+import type { Outlet, Product } from "@/lib/types";
 import { OutletSchema, ProductSchema } from "@/lib/types";
 
 // ─── Feature metadata ────────────────────────────────────────────────────────
@@ -108,16 +106,6 @@ const DEFAULT_META = {
 };
 
 
-
-const MOCK_PROMOS: Promo[] = [
-    { id: "promo1", code: "MAKAN20", title: "Diskon Makan Siang", description: "Hemat 20% untuk semua menu makanan berat", discountPercent: 20, minOrder: 50000, maxDiscount: 25000, validUntil: "31 Mei 2026", gradient: "from-rose-500 to-pink-600", feature: ["food"] },
-    { id: "promo2", code: "KOPI15", title: "Promo Kopi Pagi", description: "15% off semua minuman kopi & teh berlaku mulai pukul 06.00–10.00", discountPercent: 15, minOrder: 20000, validUntil: "31 Mei 2026", gradient: "from-amber-500 to-orange-600", feature: ["drink"] },
-    { id: "promo3", code: "NEWBIE30", title: "Pelanggan Baru", description: "30% off untuk pesanan pertama kamu di semua kategori", discountPercent: 30, minOrder: 30000, maxDiscount: 50000, validUntil: "15 Jun 2026", gradient: "from-violet-500 to-purple-600", feature: ["food", "drink", "service", "mart", "beauty", "ride", "delivery"] },
-    { id: "promo4", code: "JASA25", title: "Diskon Layanan Jasa", description: "Hemat 25% untuk servis pertama di Bengkel rekanan", discountPercent: 25, minOrder: 100000, validUntil: "30 Jun 2026", gradient: "from-blue-500 to-sky-600", feature: ["service"] },
-    { id: "promo5", code: "BEAUTY20", title: "Glow Up Deal", description: "Diskon 20% untuk semua treatment kecantikan", discountPercent: 20, minOrder: 150000, validUntil: "20 Mei 2026", gradient: "from-pink-500 to-fuchsia-600", feature: ["beauty"] },
-    { id: "promo6", code: "MART10", title: "Belanja Hemat", description: "Potongan 10% untuk belanja sembako & kebutuhan rumah", discountPercent: 10, minOrder: 75000, validUntil: "31 Mei 2026", gradient: "from-emerald-500 to-teal-600", feature: ["mart"] },
-];
-
 // ─── Main ────────────────────────────────────────────────────────────────────
 
 export function CategoryClient({ feature }: { feature: string }) {
@@ -128,11 +116,10 @@ export function CategoryClient({ feature }: { feature: string }) {
     const [productSearch, setProductSearch] = useState("");
 
 
-    const { data: all_products, isLoading, error } = useQuery<Product[]>({
-        queryKey: ["products", feature, productSearch],
+    const { data: recommended_products } = useQuery<Product[]>({
+        queryKey: ["products", feature],
         queryFn: async () => {
             const params = new URLSearchParams({ feature });
-            if (productSearch) params.set('name', productSearch);
             const res = await fetch(`/api/get-all-product?${params.toString()}`);
             if (!res.ok) {
                 throw new Error('Produk gagal didapatkan')
@@ -140,6 +127,20 @@ export function CategoryClient({ feature }: { feature: string }) {
             const { data } = await res.json();
             return ProductSchema.array().parse(data);
         },
+    });
+
+    const { data: searched_products, isLoading, error } = useQuery<Product[]>({
+        queryKey: ["products", feature, "search", productSearch],
+        queryFn: async () => {
+            const params = new URLSearchParams({ feature, name: productSearch });
+            const res = await fetch(`/api/get-all-product?${params.toString()}`);
+            if (!res.ok) {
+                throw new Error('Produk gagal didapatkan')
+            }
+            const { data } = await res.json();
+            return ProductSchema.array().parse(data);
+        },
+        enabled: productSearch.length > 0,
     });
 
 
@@ -162,19 +163,15 @@ export function CategoryClient({ feature }: { feature: string }) {
     console.log("[outlets] data:", all_outlets, "filtered:", filteredOutlets)
 
     const recommendedProducts = useMemo(() => {
-        if (!all_products) return [];
-        return all_products.filter((p) => p.isRecommended);
-    }, [all_products])
+        if (!recommended_products) return [];
+        return recommended_products.filter((p) => p.isRecommended);
+    }, [recommended_products])
 
     const filteredProducts = useMemo(() => {
         if (!productSearch) return [];
-        return all_products ?? [];
-    }, [all_products, productSearch]);
+        return searched_products ?? [];
+    }, [searched_products, productSearch]);
 
-    const relevantPromos = useMemo(
-        () => MOCK_PROMOS.filter((p) => p.feature.includes(feature) || p.feature.includes("food")),
-        [feature]
-    );
 
     return (
         <div className="min-h-screen bg-background pb-12">
@@ -229,62 +226,6 @@ export function CategoryClient({ feature }: { feature: string }) {
 
                 <Separator />
 
-                {/* ── Outlet Search ─────────────────────────────────────── */}
-                <section className="space-y-5">
-                    <div className="flex items-center gap-2">
-                        <Store className="h-5 w-5 text-muted-foreground" />
-                        <h2 className="font-black text-xl">Cari Outlet</h2>
-                    </div>
-
-                    <div className="relative">
-                        <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
-                        <Input
-                            value={outletSearch}
-                            onChange={(e) => setOutletSearch(e.target.value)}
-                            placeholder="Nama outlet, tag, atau lokasi..."
-                            className="pl-12 pr-10 py-6 rounded-2xl text-base shadow-sm border-border/60 bg-card"
-                        />
-                        {outletSearch && (
-                            <button
-                                onClick={() => setOutletSearch("")}
-                                className="absolute right-4 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                            >
-                                <X className="h-4 w-4" />
-                            </button>
-                        )}
-                    </div>
-
-                    {outletsError ? (
-                        <div className="flex flex-col items-center gap-3 py-12 text-muted-foreground">
-                            <Store className="h-12 w-12 opacity-20" />
-                            <p className="font-bold">Gagal memuat outlet</p>
-                            <p className="text-sm">Coba refresh halaman</p>
-                        </div>
-                    ) : outletsLoading ? (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                            {Array.from({ length: 3 }).map((_, i) => (
-                                <div key={i} className="h-64 rounded-[1.75rem] bg-muted animate-pulse" />
-                            ))}
-                        </div>
-                    ) : filteredOutlets?.length === 0 ? (
-                        <div className="flex flex-col items-center gap-3 py-12 text-muted-foreground">
-                            <Store className="h-12 w-12 opacity-20" />
-                            <p className="font-bold">Outlet tidak ditemukan</p>
-                            <p className="text-sm">Coba kata kunci lain</p>
-                        </div>
-                    ) : (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                            <AnimatePresence>
-                                {filteredOutlets?.map((outlet) => (
-                                    <OutletCard key={outlet.id} outlet={outlet} feature={feature} />
-                                ))}
-                            </AnimatePresence>
-                        </div>
-                    )}
-                </section>
-
-                <Separator />
-
                 {/* ── Product / Service Search ──────────────────────────── */}
                 <section className="space-y-5">
                     <div className="flex items-center gap-2">
@@ -334,36 +275,70 @@ export function CategoryClient({ feature }: { feature: string }) {
                     </AnimatePresence>
 
                     {!productSearch && (
-                        <p className="text-sm text-muted-foreground text-center py-4">
-                            Ketik nama produk atau layanan untuk mencari
-                        </p>
+                        <div className="space-y-3 py-2">
+                            <p className="text-sm text-muted-foreground text-center">
+                                Cari apa na Pian?
+                            </p>
+                        </div>
                     )}
                 </section>
 
                 <Separator />
 
-                {/* ── Promo Codes ───────────────────────────────────────── */}
-                <section className="space-y-5 pb-4">
-                    <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                            <BadgePercent className="h-5 w-5 text-rose-500" />
-                            <h2 className="font-black text-xl">Kode Promo</h2>
+                {/* ── Outlet Search ─────────────────────────────────────── */}
+                <section className="space-y-5">
+                    <div className="flex items-center gap-2">
+                        <Store className="h-5 w-5 text-muted-foreground" />
+                        <h2 className="font-black text-xl">Cari Outlet</h2>
+                    </div>
+
+                    <div className="relative">
+                        <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
+                        <Input
+                            value={outletSearch}
+                            onChange={(e) => setOutletSearch(e.target.value)}
+                            placeholder="Nama outlet, tag, atau lokasi..."
+                            className="pl-12 pr-10 py-6 rounded-2xl text-base shadow-sm border-border/60 bg-card"
+                        />
+                        {outletSearch && (
+                            <button
+                                onClick={() => setOutletSearch("")}
+                                className="absolute right-4 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                            >
+                                <X className="h-4 w-4" />
+                            </button>
+                        )}
+                    </div>
+
+                    {outletsError ? (
+                        <div className="flex flex-col items-center gap-3 py-12 text-muted-foreground">
+                            <Store className="h-12 w-12 opacity-20" />
+                            <p className="font-bold">Gagal memuat outlet</p>
+                            <p className="text-sm">Coba refresh halaman</p>
                         </div>
-                        <span className="text-sm text-muted-foreground font-semibold">
-                            {relevantPromos.length} promo aktif
-                        </span>
-                    </div>
-
-                    <div className="flex gap-4 overflow-x-auto pb-3 no-scrollbar">
-                        {relevantPromos.map((promo) => (
-                            <PromoCodeCard key={promo.id} promo={promo} />
-                        ))}
-                    </div>
-
-                    <p className="text-xs text-center text-muted-foreground">
-                        Tap kode promo untuk menyalin. Gunakan saat checkout.
-                    </p>
+                    ) : outletsLoading ? (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                            {Array.from({ length: 3 }).map((_, i) => (
+                                <div key={i} className="h-64 rounded-[1.75rem] bg-muted animate-pulse" />
+                            ))}
+                        </div>
+                    ) : filteredOutlets?.length === 0 ? (
+                        <div className="flex flex-col items-center gap-3 py-12 text-muted-foreground">
+                            <Store className="h-12 w-12 opacity-20" />
+                            <p className="font-bold">Outlet tidak ditemukan</p>
+                            <p className="text-sm">Coba kata kunci lain</p>
+                        </div>
+                    ) : (
+                        <div className="grid grid-cols-2 lg:grid-cols-5 gap-5">
+                            <AnimatePresence>
+                                {filteredOutlets?.map((outlet) => (
+                                    <OutletCard key={outlet.id} outlet={outlet} feature={feature} />
+                                ))}
+                            </AnimatePresence>
+                        </div>
+                    )}
                 </section>
+
             </div>
         </div>
     );

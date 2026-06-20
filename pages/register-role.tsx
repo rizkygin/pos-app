@@ -300,6 +300,7 @@ const RegistrationForm = ({ role, onCancel }: { role: string; onCancel: () => vo
         }
         setLoading(true);
         try {
+            
             const res = await fetch("/api/register-role", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },

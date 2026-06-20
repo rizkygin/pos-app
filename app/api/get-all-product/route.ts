@@ -1,5 +1,5 @@
 import { db } from "@/src/db";
-import { eq, and, isNull, desc, like, sql, or } from "drizzle-orm"
+import { eq, and, isNull, desc, ilike, sql, or } from "drizzle-orm"
 import { productsTable, outletsTable } from "@/src/db/schema";
 
 type JoinRow = {
@@ -37,7 +37,7 @@ export async function GET(request: Request) {
     const outletId = id ? Number(id) : NaN;
 
     const nameFilter = name
-        ? or(like(productsTable.product_name, `%${name}%`), like(outletsTable.name, `%${name}%`))
+        ? or(ilike(productsTable.product_name, `%${name}%`), ilike(outletsTable.name, `%${name}%`))
         : sql`true`;
 
     // Filter by outlet's features array when a feature/category is requested
@@ -50,6 +50,7 @@ export async function GET(request: Request) {
         isNull(productsTable.deletedAt),
         nameFilter,
         featureFilter,
+        eq(outletsTable.is_open, true)
     );
 
     if (!isNaN(outletId) && outletId > 0) {
@@ -63,7 +64,7 @@ export async function GET(request: Request) {
         .innerJoin(outletsTable, eq(productsTable.outlet_id, outletsTable.id))
         .where(baseWhere)
         .orderBy(desc(productsTable.ratings))
-        .limit(100);
+        .limit(25);
 
     return Response.json({ data: rows.map(mapRow) });
 }
