@@ -233,8 +233,8 @@ export const ProductsManager = ({
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size >= 1000000) {
-        alert('Image size must be less than 1MB.');
+      if (file.size >=  5000000) {
+        alert('Image size must be less than 5MB.');
         setImageUrl('');
         return;
       }
@@ -480,10 +480,10 @@ export const ProductsManager = ({
               </div>
               <div>
                 <h2 className="text-2xl font-bold tracking-tight">
-                  {editingProductId ? 'Edit' : 'Add New'} {selectedCategory}
+                  {editingProductId ? 'Edit' : 'Tambah'} {selectedCategory}
                 </h2>
                 <p className="text-muted-foreground text-sm font-medium">
-                  Fill in the details below to{' '}
+                  Tambahkan data produk dengan form ini{' '}
                   {editingProductId ? 'update' : 'add to'} your inventory.
                 </p>
               </div>
@@ -493,7 +493,7 @@ export const ProductsManager = ({
               <div className="space-y-2">
                 <label className="text-sm font-bold flex items-center gap-2">
                   <Tag className="h-4 w-4 text-muted-foreground" />
-                  Product Name
+                  Nama Produk
                 </label>
                 <input
                   required
@@ -584,7 +584,7 @@ export const ProductsManager = ({
               <div className="space-y-2">
                 <label className="text-sm font-bold flex items-center gap-2">
                   <Layers className="h-4 w-4 text-muted-foreground" />
-                  Description
+                  Deskripsi
                 </label>
                 <textarea
                   name="description"
@@ -642,10 +642,10 @@ export const ProductsManager = ({
               <div className="space-y-2">
                 <label className="text-sm font-bold flex items-center gap-2">
                   <ImageIcon className="h-4 w-4 text-muted-foreground" />
-                  Product Image
+                  Gambar Produk
                 </label>
                 <span className="text-xs text-muted-foreground">
-                  Ukuran File Maksimal 1 MB
+                  Ukuran File Maksimal 5 MB
                 </span>
                 {imageUrl ? (
                   <div className="relative w-full h-48 rounded-xl overflow-hidden border">
@@ -689,9 +689,9 @@ export const ProductsManager = ({
                       Saving...
                     </>
                   ) : editingProductId ? (
-                    'Update Product'
+                    'Update Produk'
                   ) : (
-                    'Publish Product'
+                    'Tambahkan'
                   )}
                 </Button>
               </div>

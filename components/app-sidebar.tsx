@@ -66,43 +66,43 @@ const navMain: NavItem[] = [
     name: 'Dashboard',
     url: '/dashboard',
     icon: LayoutDashboard,
-    iconBg: 'bg-blue-100 dark:bg-blue-950',
-    iconColor: 'text-blue-600 dark:text-blue-400',
+    iconBg: 'bg-blue-100',
+    iconColor: 'text-blue-600',
   },
   {
     name: 'Order',
     url: '/dashboard/order',
     icon: ShoppingCart,
-    iconBg: 'bg-orange-100 dark:bg-orange-950',
-    iconColor: 'text-orange-600 dark:text-orange-400',
+    iconBg: 'bg-orange-100',
+    iconColor: 'text-orange-600',
   },
   {
     name: 'Product',
     url: '/dashboard/addproducts',
     icon: LayoutGrid,
-    iconBg: 'bg-green-100 dark:bg-green-950',
-    iconColor: 'text-green-600 dark:text-green-400',
+    iconBg: 'bg-green-100',
+    iconColor: 'text-green-600',
   },
   {
     name: 'Laporan',
     url: '/dashboard/reports',
     icon: LetterText,
-    iconBg: 'bg-violet-100 dark:bg-violet-950',
-    iconColor: 'text-violet-600 dark:text-violet-400',
+    iconBg: 'bg-violet-100',
+    iconColor: 'text-violet-600',
   },
   {
     name: 'Kasir',
     url: '/dashboard/cashier',
     icon: Building2,
-    iconBg: 'bg-cyan-100 dark:bg-cyan-950',
-    iconColor: 'text-cyan-600 dark:text-cyan-400',
+    iconBg: 'bg-cyan-100',
+    iconColor: 'text-cyan-600',
   },
   {
     name: 'Buku Kas',
     url: '/dashboard/cashflow',
     icon: Book,
-    iconBg: 'bg-rose-100 dark:bg-rose-950',
-    iconColor: 'text-rose-600 dark:text-rose-400',
+    iconBg: 'bg-rose-100',
+    iconColor: 'text-rose-600',
   },
   
 ];
@@ -121,8 +121,8 @@ const navManagement: NavItem[] = [
     name: 'Pengaturan',
     url: '/dashboard/setting',
     icon: SunDim,
-    iconBg: 'bg-slate-100 dark:bg-slate-800',
-    iconColor: 'text-slate-600 dark:text-slate-400',
+    iconBg: 'bg-slate-100',
+    iconColor: 'text-slate-600',
   },
 ];
 
@@ -237,15 +237,15 @@ const courierNavItems: NavItem[] = [
     name: 'Ruang Tunggu Order',
     url: '/dashboard/lobby',
     icon: Bike,
-    iconBg: 'bg-blue-100 dark:bg-blue-950',
-    iconColor: 'text-blue-600 dark:text-blue-400',
+    iconBg: 'bg-blue-100',
+    iconColor: 'text-blue-600',
   },
   {
     name: 'Ratings',
     url: '/dashboard/courier-ratings',
     icon: Star,
-    iconBg: 'bg-amber-100 dark:bg-amber-950',
-    iconColor: 'text-amber-600 dark:text-amber-400',
+    iconBg: 'bg-amber-100',
+    iconColor: 'text-amber-600',
   },
 ];
 
@@ -254,22 +254,22 @@ const ownerNavItems: NavItem[] = [
     name: 'Pesanan Aktif',
     url: '/dashboard/activeorder',
     icon: ClipboardList,
-    iconBg: 'bg-emerald-100 dark:bg-emerald-950',
-    iconColor: 'text-emerald-600 dark:text-emerald-400',
+    iconBg: 'bg-emerald-100',
+    iconColor: 'text-emerald-600',
   },
   {
     name: 'Pasang Iklan',
     url: '/dashboard/promote',
     icon: Megaphone,
-    iconBg: 'bg-rose-100 dark:bg-rose-950',
-    iconColor: 'text-rose-600 dark:text-rose-400',
+    iconBg: 'bg-rose-100',
+    iconColor: 'text-rose-600',
   },
   {
     name: 'Kalkulator HPP',
     url: '/dashboard/hpp-calculator',
     icon: Calculator,
-    iconBg: 'bg-amber-100 dark:bg-amber-950',
-    iconColor: 'text-amber-600 dark:text-amber-400',
+    iconBg: 'bg-amber-100',
+    iconColor: 'text-amber-600',
   },
 ];
 
@@ -277,8 +277,8 @@ const ratingNavItem: NavItem = {
   name: 'Ratings',
   url: '/dashboard/ratings',
   icon: Star,
-  iconBg: 'bg-amber-100 dark:bg-amber-950',
-  iconColor: 'text-amber-600 dark:text-amber-400',
+  iconBg: 'bg-amber-100',
+  iconColor: 'text-amber-600',
 };
 
 const customerNavItems: NavItem[] = [
@@ -286,8 +286,8 @@ const customerNavItems: NavItem[] = [
     name: 'History Order',
     url: '/dashboard/history-order',
     icon: History,
-    iconBg: 'bg-indigo-100 dark:bg-indigo-950',
-    iconColor: 'text-indigo-600 dark:text-indigo-400',
+    iconBg: 'bg-indigo-100',
+    iconColor: 'text-indigo-600',
   },
 ];
 
@@ -295,8 +295,8 @@ const adminDashboardNavItem: NavItem = {
   name: 'Dashboard',
   url: '/dashboard/admin',
   icon: LayoutDashboard,
-  iconBg: 'bg-blue-100 dark:bg-blue-950',
-  iconColor: 'text-blue-600 dark:text-blue-400',
+  iconBg: 'bg-blue-100',
+  iconColor: 'text-blue-600',
 };
 
 const adminMenuSubItems = [
@@ -314,36 +314,36 @@ const adminManageNavItems: NavItem[] = [
     name: 'Order',
     url: '/dashboard/admin/order',
     icon: Receipt,
-    iconBg: 'bg-sky-100 dark:bg-sky-950',
-    iconColor: 'text-sky-600 dark:text-sky-400',
+    iconBg: 'bg-sky-100',
+    iconColor: 'text-sky-600',
   },
   {
     name: 'Manage Courier',
     url: '/dashboard/admin/courier',
     icon: Bike,
-    iconBg: 'bg-orange-100 dark:bg-orange-950',
-    iconColor: 'text-orange-600 dark:text-orange-400',
+    iconBg: 'bg-orange-100',
+    iconColor: 'text-orange-600',
   },
   {
     name: 'Manage Customer',
     url: '/dashboard/admin/customer',
     icon: Users,
-    iconBg: 'bg-emerald-100 dark:bg-emerald-950',
-    iconColor: 'text-emerald-600 dark:text-emerald-400',
+    iconBg: 'bg-emerald-100',
+    iconColor: 'text-emerald-600',
   },
   {
     name: 'Manage User',
     url: '/dashboard/admin/user',
     icon: IdCard,
-    iconBg: 'bg-amber-100 dark:bg-amber-950',
-    iconColor: 'text-amber-600 dark:text-amber-400',
+    iconBg: 'bg-amber-100',
+    iconColor: 'text-amber-600',
   },
   {
     name: 'Manage Rating',
     url: '/dashboard/admin/rating',
     icon: Star,
-    iconBg: 'bg-violet-100 dark:bg-violet-950',
-    iconColor: 'text-violet-600 dark:text-violet-400',
+    iconBg: 'bg-violet-100',
+    iconColor: 'text-violet-600',
   },
 ];
 
@@ -430,16 +430,16 @@ export function AppSidebar({
                 <NavCollapsible
                   label="Menu"
                   icon={LayoutGrid}
-                  iconBg="bg-green-100 dark:bg-green-950"
-                  iconColor="text-green-600 dark:text-green-400"
+                  iconBg="bg-green-100"
+                  iconColor="text-green-600"
                   items={adminMenuSubItems}
                   currentUrl={currentUrl}
                 />
                 <NavCollapsible
                   label="Outlet"
                   icon={Building2}
-                  iconBg="bg-cyan-100 dark:bg-cyan-950"
-                  iconColor="text-cyan-600 dark:text-cyan-400"
+                  iconBg="bg-cyan-100"
+                  iconColor="text-cyan-600"
                   items={adminOutletSubItems}
                   currentUrl={currentUrl}
                 />
@@ -509,8 +509,8 @@ export function AppSidebar({
                   <NavCollapsible
                     label="User"
                     icon={IdCard}
-                    iconBg="bg-amber-100 dark:bg-amber-950"
-                    iconColor="text-amber-600 dark:text-amber-400"
+                    iconBg="bg-amber-100"
+                    iconColor="text-amber-600"
                     items={userSubItems}
                     currentUrl={currentUrl}
                   />
@@ -565,7 +565,7 @@ export function AppSidebar({
             <div className="h-px bg-border mb-1" />
             <button
               onClick={signOut}
-              className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-[13px] text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors"
+              className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-[13px] text-red-600 hover:bg-red-50 transition-colors"
             >
               <LogOut className="size-3.5" />
               Sign out

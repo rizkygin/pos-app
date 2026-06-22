@@ -6,6 +6,11 @@ const nextConfig: NextConfig = {
   },
   allowedDevOrigins: ['192.168.1.7', 'breeder-enduring-manpower.ngrok-free.dev'],
   devIndicators: false,
+  experimental: {
+    serverActions: {
+      bodySizeLimit: '6mb',
+    },
+  },
   // User-uploaded files live on a persistent volume mounted at public/uploads
   // (see Railway volume "pos-app-volume"); existing URLs/DB rows still
   // reference the old /products, /avatars, /ads paths, so route them through.

@@ -336,8 +336,8 @@ const RegistrationForm = ({ role, onCancel }: { role: string; onCancel: () => vo
                         {currentRole?.illustration}
                     </div>
                     <div>
-                        <h2 className="text-2xl font-bold">Register as {currentRole?.title}</h2>
-                        <p className="text-sm text-muted-foreground">Please fill in your details</p>
+                        <h2 className="text-2xl font-bold">Daftar Sebagai {currentRole?.title}</h2>
+                        <p className="text-sm text-muted-foreground">Isikan Form di bawah ini</p>
                     </div>
                 </div>
                 <Button variant="ghost" size="icon" onClick={onCancel} className="rounded-full">
@@ -349,16 +349,16 @@ const RegistrationForm = ({ role, onCancel }: { role: string; onCancel: () => vo
                 {role === "owner" && (
                     <>
                         <div className="space-y-2">
-                            <label className="text-sm font-medium">Outlet Name</label>
+                            <label className="text-sm font-medium">Nama Outlet</label>
                             <Input name="name" onChange={handleChange} required placeholder="My Awesome Store" className="rounded-xl" />
                         </div>
                         <div className="space-y-2">
-                            <label className="text-sm font-medium">Address</label>
+                            <label className="text-sm font-medium">Alamat Outlet</label>
                             <Input name="address" onChange={handleChange} required placeholder="123 Street Name" className="rounded-xl" />
                         </div>
                         <div className="grid grid-cols-2 gap-4">
                             <div className="space-y-2">
-                                <label className="text-sm font-medium">Phone</label>
+                                <label className="text-sm font-medium">Whatsapp</label>
                                 <Input name="phone" onChange={handleChange} required placeholder="08..." className="rounded-xl" />
                             </div>
                             <div className="space-y-2">
@@ -470,29 +470,29 @@ const RoleCard = ({ role, index, onSelect }: { role: Role; index: number; onSele
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, delay: index * 0.15 }}
             whileHover={{ y: -10, transition: { duration: 0.2 } }}
-            className="group relative flex flex-col items-center p-8 rounded-[2.5rem] bg-card border border-border/50 shadow-xl hover:shadow-2xl transition-all duration-300 w-full max-w-90 overflow-hidden cursor-default"
+            className="group relative flex flex-col items-center p-2.5 sm:p-8 rounded-2xl sm:rounded-[2.5rem] bg-card border border-border/50 shadow-xl hover:shadow-2xl transition-all duration-300 w-full max-w-90 mx-auto overflow-hidden cursor-default"
         >
             <div className="absolute inset-0 bg-linear-to-b from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
 
-            <div className="relative z-10 w-full aspect-square mb-8 overflow-hidden rounded-2xl bg-muted/30 pointer-events-none">
+            <div className="relative z-10 w-full aspect-square mb-2 sm:mb-8 overflow-hidden rounded-lg sm:rounded-2xl bg-muted/30 pointer-events-none">
                 {role.illustration}
             </div>
 
-            <div className="relative z-10 text-center space-y-4 grow pointer-events-none">
-                <h3 className="text-2xl font-bold tracking-tight">{role.title}</h3>
-                <p className="text-sm text-muted-foreground leading-relaxed">{role.description}</p>
+            <div className="relative z-10 text-center space-y-1 sm:space-y-4 grow pointer-events-none">
+                <h3 className="text-xs sm:text-2xl font-bold tracking-tight leading-tight">{role.title}</h3>
+                <p className="hidden sm:block text-sm text-muted-foreground leading-relaxed">{role.description}</p>
             </div>
 
-            <div className="relative z-20 w-full mt-8">
+            <div className="relative z-20 w-full mt-2 sm:mt-8">
                 <Button
                     onClick={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
                         onSelect();
                     }}
-                    className="w-full rounded-2xl py-6 text-base font-semibold group-hover:scale-[1.02] transition-transform relative z-30"
+                    className="w-full rounded-lg sm:rounded-2xl py-1.5 sm:py-6 text-[10px] sm:text-base font-semibold group-hover:scale-[1.02] transition-transform relative z-30"
                 >
-                    Register as {role.title.split(" ").pop()}
+                    {role.title.split(" ").pop()}
                 </Button>
             </div>
         </motion.div>
@@ -530,7 +530,7 @@ export const RegisterRolePage = () => {
                                 </p>
                             </div>
 
-                            <div className="flex flex-col lg:flex-row items-stretch justify-center gap-8 w-full max-w-7xl">
+                            <div className="grid grid-cols-3 items-stretch justify-center gap-3 sm:gap-6 lg:gap-8 w-full max-w-7xl">
                                 {roles.map((role, index) => (
                                     <RoleCard key={role.id} role={role} index={index} onSelect={() => setSelectedRole(role.id)} />
                                 ))}
