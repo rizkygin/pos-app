@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { DashboardHeader } from "@/components/dashboard-header";
+import { API_URL } from "@/lib/api-url";
 import {
     ChevronLeft,
     ShoppingCart,
@@ -42,7 +43,7 @@ export default function OrderOutletPage() {
                     ...(dateFrom && { dateFrom }),
                     ...(dateTo && { dateTo }),
                 });
-                const res = await fetch(`/api/get-outlet-orders?${params}`);
+                const res = await fetch(`${API_URL}/api/get-outlet-orders?${params}`, { credentials: 'include' });
                 if (res.status === 401 || res.status === 403) { setForbidden(true); return; }
                 const result = await res.json();
                 if (result.success) {

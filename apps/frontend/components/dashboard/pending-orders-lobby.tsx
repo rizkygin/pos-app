@@ -24,6 +24,7 @@ import {
   markOrderReady,
   confirmPickup,
 } from '@/app/dashboard/activeorder/actions';
+import { API_URL } from '@/lib/api-url';
 import {
   AlertDialog,
   AlertDialogContent,
@@ -834,7 +835,7 @@ function useOrdersPolling(endpoint: string) {
 
   const fetch_ = useCallback(async () => {
     try {
-      const res = await fetch(endpoint, { cache: 'no-store' });
+      const res = await fetch(endpoint, { cache: 'no-store', credentials: 'include' });
       const data = await res.json();
       if (data.success) {
         setOrders(data.orders);
@@ -865,9 +866,9 @@ const TAB_CONFIG: { id: Tab; label: string; badgeColor: string }[] = [
 export function PendingOrdersLobby() {
   const [activeTab, setActiveTab] = useState<Tab>('pending');
 
-  const pending = useOrdersPolling('/api/get-pending-orders');
-  const preparing = useOrdersPolling('/api/get-preparing-orders');
-  const ready = useOrdersPolling('/api/get-ready-orders');
+  const pending = useOrdersPolling(`${API_URL}/api/get-pending-orders`);
+  const preparing = useOrdersPolling(`${API_URL}/api/get-preparing-orders`);
+  const ready = useOrdersPolling(`${API_URL}/api/get-ready-orders`);
 
   const handleConfirm = useCallback(
     async (orderId: string) => {

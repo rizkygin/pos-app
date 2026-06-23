@@ -5,6 +5,7 @@ import { Area, AreaChart, CartesianGrid, XAxis } from "recharts"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle, } from "@/components/ui/card"
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig, } from "@/components/ui/chart"
 import { TrendingUp, TrendingDown } from "lucide-react"
+import { API_URL } from "@/lib/api-url"
 
 type chartDataType = [{
     month: string;
@@ -30,7 +31,7 @@ export default function GraphicOrder() {
 
 
     const getChartData = async () => {
-        const response = await fetch("/api/get-data-chart");
+        const response = await fetch(`${API_URL}/api/get-data-chart`, { credentials: 'include' });
         const data = await response.json();
         setChartData(data.data);
     }

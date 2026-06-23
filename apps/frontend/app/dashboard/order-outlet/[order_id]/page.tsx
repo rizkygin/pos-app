@@ -6,6 +6,7 @@ import Link from "next/link";
 import { format } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
 import { DashboardHeader } from "@/components/dashboard-header";
+import { API_URL } from "@/lib/api-url";
 import {
     ChevronLeft,
     ShoppingCart,
@@ -83,7 +84,7 @@ export default function OrderDetailPage() {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        fetch(`/api/get-outlet-order-detail?order_id=${order_id}`)
+        fetch(`${API_URL}/api/get-outlet-order-detail?order_id=${order_id}`, { credentials: 'include' })
             .then((r) => r.json())
             .then((res: ApiResponse) => {
                 if (!res.success) { router.push("/dashboard/order-outlet"); return; }

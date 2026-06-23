@@ -10,6 +10,7 @@ import {
   Store,
 } from 'lucide-react';
 import { DashboardHeader } from '@/components/dashboard-header';
+import { API_URL } from '@/lib/api-url';
 
 type ReviewType = 'outlet' | 'product';
 
@@ -347,7 +348,7 @@ export default function RatingsPage() {
     let cancelled = false;
     setListLoading(true);
 
-    fetch(`/api/get-owner-ratings?type=${tab}&page=${page}`)
+    fetch(`${API_URL}/api/get-owner-ratings?filter=${tab}&page=${page}`, { credentials: 'include' })
       .then((r) => r.json())
       .then((json: ApiResponse) => {
         if (cancelled) return;
