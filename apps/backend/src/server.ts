@@ -10,6 +10,7 @@ import { customerRoutes } from "./routes/customer";
 import { ownerRoutes } from "./routes/owner";
 import { adminRoutes } from "./routes/admin";
 import { mutationRoutes } from "./routes/mutations";
+import { courierRoutes } from "./routes/courier";
 
 const PORT = Number(process.env.PORT ?? 4000);
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN ?? "http://localhost:3000";
@@ -55,6 +56,7 @@ async function main() {
   await app.register(ownerRoutes);
   await app.register(adminRoutes);
   await app.register(mutationRoutes);
+  await app.register(courierRoutes);
 
   app.get("/health", async () => ({ ok: true }));
 
