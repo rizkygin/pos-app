@@ -45,6 +45,7 @@ import {
   formatDateInput,
 } from '@/lib/date-calender';
 import { formatCurrency } from '@/lib/utils/format';
+import { API_URL } from '@/lib/api-url';
 import { exportMonthlyPDF, type Transaction } from './export-pdf';
 import { SummaryCards } from './summary-cards';
 
@@ -64,7 +65,10 @@ export default function CashflowPage() {
   };
 
   const handleDelete = async (id: string) => {
-    await fetch(`/api/cashflow?id=${id}`, { method: 'DELETE' });
+    await fetch(`${API_URL}/api/cashflow?id=${id}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    });
     setTransactions((prev) => prev.filter((t) => t.id !== id));
   };
 
@@ -73,8 +77,9 @@ export default function CashflowPage() {
     if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) return;
 
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const res = await fetch('/api/cashflow', {
+    const res = await fetch(`${API_URL}/api/cashflow`, {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         type,
@@ -99,7 +104,8 @@ export default function CashflowPage() {
 
     setIsLoading(true);
     fetch(
-      `/api/cashflow?month=${month}&timezone=${encodeURIComponent(timezone)}`,
+      `${API_URL}/api/cashflow?month=${month}&timezone=${encodeURIComponent(timezone)}`,
+      { credentials: 'include' },
     )
       .then((r) => r.json())
       .then((j) => setTransactions(j.data ?? []))

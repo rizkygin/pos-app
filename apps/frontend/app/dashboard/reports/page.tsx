@@ -6,6 +6,7 @@ import { DataTable } from "./data-table"
 import GraphicOrder from "./graphic-order"
 import HourlyOrderChart from "./hourly-order-chart"
 import { useEffect, useState } from "react"
+import { API_URL } from "@/lib/api-url"
 
 function Reports() {
     const [data, setData] = useState<[]>([]);
@@ -19,8 +20,9 @@ function Reports() {
     useEffect(() => {
         const fetchOrders = async () => {
             try {
-                const res = await fetch(`/api/get-data-order?page=${page}&limit=${limit}&search=${search}`, {
+                const res = await fetch(`${API_URL}/api/get-data-order?page=${page}&limit=${limit}&search=${search}`, {
                     method: "GET",
+                    credentials: "include",
                     headers: {
                         "Content-Type": "application/json"
                     }
