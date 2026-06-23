@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useRouter } from "next/navigation";
 import { ORDER_FEATURES } from "@/lib/order-features";
+import { API_URL } from "@/lib/api-url";
 
 /* ─── Syariah-friendly SVG illustrations ────────────────────────────────────
    Each character has glasses frames but NO eyes drawn inside them.
@@ -300,9 +301,10 @@ const RegistrationForm = ({ role, onCancel }: { role: string; onCancel: () => vo
         }
         setLoading(true);
         try {
-            const res = await fetch("/api/register-role", {
+            const res = await fetch(`${API_URL}/api/register-role`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
+                credentials: "include",
                 body: JSON.stringify({ role, data: { ...formData, features: selectedFeatures } }),
             });
             if (res.ok) {

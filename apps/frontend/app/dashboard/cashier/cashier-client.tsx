@@ -210,9 +210,10 @@ export const CashierClient = ({
         : snapshotFinalTotal;
     const snapshotChangeDue = Math.max(0, snapshotAmountPaid - snapshotFinalTotal);
     try {
-      const response = await fetch('/api/add-order-detail', {
+      const response = await fetch(`${API_URL}/api/add-order-detail`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           outletId,
           cart: snapshot,
