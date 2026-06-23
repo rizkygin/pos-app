@@ -1,9 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../db";
-import { couriersTable, courierSessionsTable } from "../db/schema";
+import { couriersTable, courierSessionsTable, ordersTable } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
+import { getCourierAvailability } from "../lib/utils/courier-availability";
 
 async function getCourierId(userId: string) {
   const [courier] = await db
@@ -49,6 +50,45 @@ export async function courierRoutes(app: FastifyInstance) {
     if (!courierId) return reply.status(403).send({ success: false, error: "Not a courier" });
 
     await closeOpenSessions(courierId);
+
+    return reply.send({ success: true });
+  });
+
+  app.post("/api/courier/accept-order", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
+
+    const courierId = await getCourierId(session.user.id);
+    if (!courierId) return reply.status(403).send({ success: false, error: "Not a courier" });
+
+    const { orderId } = (request.body as { orderId?: string }) ?? {};
+    if (!orderId) return reply.status(400).send({ success: false, error: "orderId wajib diisi" });
+
+    const availability = await getCourierAvailability(courierId);
+    if (!availability.isOnline) {
+      return reply.status(400).send({ success: false, error: "Kamu harus online untuk menerima order" });
+    }
+    if (availability.hasActiveOrder) {
+      return reply
+        .status(400)
+        .send({ success: false, error: "Selesaikan pesanan aktif kamu sebelum menerima order baru" });
+    }
+
+    const updated = await db
+      .update(ordersTable)
+      .set({ courier_id: courierId, status: "preparing", updatedAt: new Date() })
+      .where(
+        and(
+          eq(ordersTable.id, orderId),
+          eq(ordersTable.status, "confirmed"),
+          isNull(ordersTable.courier_id),
+        ),
+      )
+      .returning({ id: ordersTable.id });
+
+    if (updated.length === 0) {
+      return reply.status(409).send({ success: false, error: "Order sudah diambil kurir lain" });
+    }
 
     return reply.send({ success: true });
   });
