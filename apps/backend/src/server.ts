@@ -7,6 +7,7 @@ import { outletRoutes } from "./routes/outlet";
 import { uploadRoutes } from "./routes/uploads";
 import { publicRoutes } from "./routes/public";
 import { customerRoutes } from "./routes/customer";
+import { ownerRoutes } from "./routes/owner";
 
 const PORT = Number(process.env.PORT ?? 4000);
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN ?? "http://localhost:3000";
@@ -49,6 +50,7 @@ async function main() {
   await app.register(uploadRoutes);
   await app.register(publicRoutes);
   await app.register(customerRoutes);
+  await app.register(ownerRoutes);
 
   app.get("/health", async () => ({ ok: true }));
 
