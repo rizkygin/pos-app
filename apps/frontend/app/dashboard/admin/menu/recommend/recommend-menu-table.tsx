@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { DataTable } from '@/app/dashboard/reports/data-table';
 import { AdminProduct, getColumns } from './columns';
 import { adminUpdateProductAction, setRecommendedAction } from './actions';
+import { API_URL } from '@/lib/api-url';
 
 type Outlet = { id: number; name: string };
 
@@ -63,7 +64,7 @@ export const RecommendMenuTable = () => {
       if (minPrice) params.set('minPrice', minPrice);
       if (maxPrice) params.set('maxPrice', maxPrice);
 
-      const res = await fetch(`/api/admin/products?${params.toString()}`);
+      const res = await fetch(`${API_URL}/api/admin/products?${params.toString()}`, { credentials: 'include' });
       const result = await res.json();
       if (result.success) {
         setData(result.data);
@@ -135,7 +136,7 @@ export const RecommendMenuTable = () => {
     setRatingProduct(product);
     setRatingLoading(true);
     try {
-      const res = await fetch(`/api/admin/product-ratings?productId=${product.id}`);
+      const res = await fetch(`${API_URL}/api/admin/product-ratings?productId=${product.id}`, { credentials: 'include' });
       const result = await res.json();
       if (result.success) {
         setRatingData(result);

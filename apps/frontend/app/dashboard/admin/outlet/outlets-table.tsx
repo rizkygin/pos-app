@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { DataTable } from '@/app/dashboard/reports/data-table';
 import { ORDER_FEATURES } from '@/lib/order-features';
 import { AdminOutlet, columns } from './columns';
+import { API_URL } from '@/lib/api-url';
 
 export const OutletsTable = () => {
   const [data, setData] = useState<AdminOutlet[]>([]);
@@ -31,7 +32,7 @@ export const OutletsTable = () => {
       if (minRating) params.set('minRating', minRating);
       if (features) params.set('features', features);
 
-      const res = await fetch(`/api/admin/outlets?${params.toString()}`);
+      const res = await fetch(`${API_URL}/api/admin/outlets?${params.toString()}`, { credentials: 'include' });
       const result = await res.json();
       if (result.success) {
         setData(result.data);

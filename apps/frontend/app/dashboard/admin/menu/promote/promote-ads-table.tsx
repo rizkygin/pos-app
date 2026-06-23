@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { DataTable } from '@/app/dashboard/reports/data-table';
 import { AdminAd, getColumns } from './columns';
 import { approveAdAction, deleteAdAction, rejectAdAction } from './actions';
+import { API_URL } from '@/lib/api-url';
 
 export const PromoteAdsTable = () => {
   const [data, setData] = useState<AdminAd[]>([]);
@@ -28,7 +29,7 @@ export const PromoteAdsTable = () => {
       });
       if (status) params.set('status', status);
 
-      const res = await fetch(`/api/admin/ads?${params.toString()}`);
+      const res = await fetch(`${API_URL}/api/admin/ads?${params.toString()}`, { credentials: 'include' });
       const result = await res.json();
       if (result.success) {
         setData(result.data);
