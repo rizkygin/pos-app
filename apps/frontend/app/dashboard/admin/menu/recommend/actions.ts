@@ -1,30 +1,14 @@
-'use server';
-
-import { db } from '@/src/db';
-import { adminsTable, productsTable } from '@/src/db/schema';
-import { getSession } from '@/lib/auth';
-import { eq } from 'drizzle-orm';
-import { revalidatePath } from 'next/cache';
-
-const requireAdmin = async () => {
-  const session = await getSession();
-  const totalAdmin = await db.$count(adminsTable, eq(adminsTable.user_id, session.user.id));
-  if (totalAdmin === 0) {
-    throw new Error('Forbidden');
-  }
-};
+import { API_URL } from '@/lib/api-url';
 
 export async function setRecommendedAction(productId: string, isRecommended: boolean) {
   try {
-    await requireAdmin();
-
-    await db
-      .update(productsTable)
-      .set({ is_recommended: isRecommended })
-      .where(eq(productsTable.id, productId));
-
-    revalidatePath('/dashboard/admin/menu/recommend');
-    return { success: true };
+    const res = await fetch(`${API_URL}/api/admin/set-recommended`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ productId, isRecommended }),
+    });
+    return (await res.json()) as { success: boolean; message?: string };
   } catch (error) {
     console.error('Failed to update recommended status:', error);
     return { success: false, message: 'Failed to update recommended status.' };
@@ -44,21 +28,13 @@ export async function adminUpdateProductAction(
   data: AdminEditProductInput,
 ) {
   try {
-    await requireAdmin();
-
-    await db
-      .update(productsTable)
-      .set({
-        product_name: data.product_name,
-        price: data.price,
-        price_mark_down: data.price_mark_down,
-        category: data.category,
-        description: data.description,
-      })
-      .where(eq(productsTable.id, productId));
-
-    revalidatePath('/dashboard/admin/menu/recommend');
-    return { success: true, message: 'Product updated successfully.' };
+    const res = await fetch(`${API_URL}/api/admin/update-product`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ productId, data }),
+    });
+    return (await res.json()) as { success: boolean; message?: string };
   } catch (error) {
     console.error('Failed to update product:', error);
     return { success: false, message: 'Failed to update product.' };

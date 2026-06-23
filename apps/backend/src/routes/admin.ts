@@ -338,4 +338,72 @@ export async function adminRoutes(app: FastifyInstance) {
       average,
     };
   });
+
+  // Toggle a product's recommended flag
+  app.post("/api/admin/set-recommended", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false, message: "Unauthorized" });
+
+    const isAdmin = await requireAdmin(session.user.id);
+    if (!isAdmin) return reply.status(403).send({ success: false, message: "Forbidden" });
+
+    try {
+      const { productId, isRecommended } = (request.body as {
+        productId?: string;
+        isRecommended?: boolean;
+      }) ?? {};
+      if (!productId) return reply.status(400).send({ success: false, message: "productId is required" });
+
+      await db
+        .update(productsTable)
+        .set({ is_recommended: !!isRecommended })
+        .where(eq(productsTable.id, productId));
+
+      return reply.send({ success: true });
+    } catch (error) {
+      app.log.error(error, "Failed to update recommended status");
+      return reply.status(500).send({ success: false, message: "Failed to update recommended status." });
+    }
+  });
+
+  // Admin edits a product's core fields
+  app.post("/api/admin/update-product", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false, message: "Unauthorized" });
+
+    const isAdmin = await requireAdmin(session.user.id);
+    if (!isAdmin) return reply.status(403).send({ success: false, message: "Forbidden" });
+
+    try {
+      const { productId, data } = (request.body as {
+        productId?: string;
+        data?: {
+          product_name: string;
+          price: string;
+          price_mark_down: string;
+          category: string;
+          description: string;
+        };
+      }) ?? {};
+      if (!productId || !data) {
+        return reply.status(400).send({ success: false, message: "productId and data are required" });
+      }
+
+      await db
+        .update(productsTable)
+        .set({
+          product_name: data.product_name,
+          price: data.price,
+          price_mark_down: data.price_mark_down,
+          category: data.category,
+          description: data.description,
+        })
+        .where(eq(productsTable.id, productId));
+
+      return reply.send({ success: true, message: "Product updated successfully." });
+    } catch (error) {
+      app.log.error(error, "Failed to update product");
+      return reply.status(500).send({ success: false, message: "Failed to update product." });
+    }
+  });
 }
