@@ -536,7 +536,12 @@ export function ActiveOrderAnimation({
         {/* Cancel button — only on pending/confirmed */}
         {(liveStatus === 'pending' || liveStatus === 'confirmed') && (
           <motion.form
-            action={() => startTransition(() => cancelOrderbyCustomer(orderId))}
+            action={() =>
+              startTransition(async () => {
+                await cancelOrderbyCustomer(orderId);
+                router.push('/dashboard/order');
+              })
+            }
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ delay: 0.3 }}
