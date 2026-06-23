@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",
+    "@fastify/multipart": "^10.0.0",
     "better-auth": "^1.6.4",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",

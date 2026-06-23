@@ -1,5 +1,4 @@
 import { getRole } from "@/lib/utils/get-role";
-import { getOutletAction } from "./actions";
 import { OwnerSetting } from "@/components/dashboard/owner-setting";
 import { CourierSetting } from "@/components/dashboard/courier-setting";
 import { CustomerSetting } from "@/components/dashboard/customer-setting";
@@ -10,8 +9,7 @@ export default async function SettingPage() {
     if (!role) return null;
 
     if (role.role === 'owner') {
-        const outlet = await getOutletAction();
-        return <OwnerSetting outlet={outlet} />;
+        return <OwnerSetting />;
     }
 
     if (role.role === 'courier') {

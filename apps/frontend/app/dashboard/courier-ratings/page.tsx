@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Star, MessageSquare } from "lucide-react";
 import { DashboardHeader } from "@/components/dashboard-header";
+import { API_URL } from "@/lib/api-url";
 
 type Review = {
     id: string;
@@ -111,7 +112,7 @@ export default function CourierRatingsPage() {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        fetch("/api/get-courier-ratings")
+        fetch(`${API_URL}/api/get-courier-ratings`, { credentials: 'include' })
             .then((r) => r.json())
             .then((json) => setReviews(json.data ?? []))
             .finally(() => setLoading(false));

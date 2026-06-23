@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { fmtIDR, discountedPrice } from "@/lib/utils/format";
 import { customerMakingOrder } from "@/app/dashboard/order/[feature]/[outletId]/action";
+import { API_URL } from "@/lib/api-url";
 import type { CartItem } from "@/components/order/basket-sheet-content";
 import type { OutletPromo } from "@/components/order/outlet-promo-card";
 
@@ -43,7 +44,7 @@ export default function InvoicePage() {
         const parsed: InvoiceDraft = JSON.parse(raw);
         setDraft(parsed);
 
-        fetch(`/api/get-order-locations?outlet_id=${parsed.outlet_id}`)
+        fetch(`${API_URL}/api/get-order-locations?outlet_id=${parsed.outlet_id}`, { credentials: 'include' })
             .then((r) => r.json())
             .then((data) => { if (data.success) setLocations(data); });
     }, [router]);

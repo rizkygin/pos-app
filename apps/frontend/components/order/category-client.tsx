@@ -29,6 +29,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import type { Outlet, Product, Promo } from "@/lib/types";
 import { OutletSchema, ProductSchema } from "@/lib/types";
+import { API_URL } from "@/lib/api-url";
 
 // ─── Feature metadata ────────────────────────────────────────────────────────
 
@@ -133,7 +134,7 @@ export function CategoryClient({ feature }: { feature: string }) {
         queryFn: async () => {
             const params = new URLSearchParams({ feature });
             if (productSearch) params.set('name', productSearch);
-            const res = await fetch(`/api/get-all-product?${params.toString()}`);
+            const res = await fetch(`${API_URL}/api/get-all-product?${params.toString()}`);
             if (!res.ok) {
                 throw new Error('Produk gagal didapatkan')
             }
@@ -147,7 +148,7 @@ export function CategoryClient({ feature }: { feature: string }) {
     const { data: all_outlets, isLoading: outletsLoading, isError: outletsError, error: outletsQueryError } = useQuery<Outlet[]>({
         queryKey: ["outlets", feature, outletSearch],
         queryFn: async () => {
-            const res = await fetch(`/api/get-all-outlet?search=${outletSearch}`);
+            const res = await fetch(`${API_URL}/api/get-all-outlet?search=${outletSearch}`);
             if (!res.ok) throw new Error("Gagal memuat outlet");
             const { data } = await res.json();
             return OutletSchema.array().parse(data);

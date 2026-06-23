@@ -25,6 +25,7 @@ import QRCode from 'react-qr-code';
 import { acceptOrder } from '@/app/dashboard/lobby/actions';
 import { markOrderDelivered } from '@/app/dashboard/activeorder/actions';
 import { goOnline } from '@/app/dashboard/courier-sessions/actions';
+import { API_URL } from '@/lib/api-url';
 
 type OrderItem = {
   productName: string;
@@ -783,7 +784,7 @@ function useOrdersPolling(endpoint: string) {
 
   const fetch_ = useCallback(async () => {
     try {
-      const res = await fetch(endpoint, { cache: 'no-store' });
+      const res = await fetch(endpoint, { cache: 'no-store', credentials: 'include' });
       const data = await res.json();
       if (data.success) {
         setOrders(data.orders);
@@ -878,8 +879,8 @@ function ProbationBanner({ delaySeconds }: { delaySeconds: number }) {
 export function CourierLobby({ courierId }: { courierId: number }) {
   const [activeTab, setActiveTab] = useState<Tab>('available');
 
-  const available = useOrdersPolling('/api/get-available-orders');
-  const mine = useOrdersPolling('/api/get-courier-orders');
+  const available = useOrdersPolling(`${API_URL}/api/get-available-orders`);
+  const mine = useOrdersPolling(`${API_URL}/api/get-courier-orders`);
 
   const handleAccept = useCallback(
     async (orderId: string) => {

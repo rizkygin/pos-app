@@ -24,6 +24,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Button } from '@/components/ui/button';
 import { DashboardHeader } from '@/components/dashboard-header';
 import { goOnline, goOffline } from '@/app/dashboard/courier-sessions/actions';
+import { API_URL } from '@/lib/api-url';
 
 type Props = {
   dashboardValue: {
@@ -123,7 +124,7 @@ export const CourierDashboard = ({
   const [history, setHistory] = useState<HistoryItem[]>([]);
 
   useEffect(() => {
-    fetch('/api/get-courier-history')
+    fetch(`${API_URL}/api/get-courier-history`, { credentials: 'include' })
       .then((r) => r.json())
       .then((data) => { if (data.success) setHistory(data.history); });
   }, []);

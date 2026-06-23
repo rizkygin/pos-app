@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatCurrency } from '@/lib/utils/format';
+import { API_URL } from '@/lib/api-url';
 
 type Product = {
   id: string;
@@ -85,7 +86,7 @@ export const CashierClient = ({
   const fetchCategories = async () => {
     try {
       // GET requests cannot have a body, so we pass outletId as a query parameter
-      const res = await fetch(`/api/get-categories?outletId=${outletId}`);
+      const res = await fetch(`${API_URL}/api/get-categories?outletId=${outletId}`, { credentials: 'include' });
       if (!res.ok) {
         throw new Error('Failed to fetch categories');
       }

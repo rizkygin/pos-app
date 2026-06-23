@@ -1,6 +1,12 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import multipart from "@fastify/multipart";
 import { auth } from "./auth";
+import { toWebHeaders } from "./lib/web-headers";
+import { outletRoutes } from "./routes/outlet";
+import { uploadRoutes } from "./routes/uploads";
+import { publicRoutes } from "./routes/public";
+import { customerRoutes } from "./routes/customer";
 
 const PORT = Number(process.env.PORT ?? 4000);
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN ?? "http://localhost:3000";
@@ -11,7 +17,10 @@ async function main() {
   await app.register(cors, {
     origin: FRONTEND_ORIGIN,
     credentials: true,
+    methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
   });
+
+  await app.register(multipart);
 
   // better-auth expects a Web standard Request/Response. Fastify already parses
   // the body off the socket, so we rebuild a Request from request.body instead
@@ -21,15 +30,10 @@ async function main() {
     url: "/api/auth/*",
     handler: async (request, reply) => {
       const url = new URL(request.url, `http://${request.headers.host}`);
-      const headers = new Headers();
-      for (const [key, value] of Object.entries(request.headers)) {
-        if (value) headers.append(key, Array.isArray(value) ? value.join(", ") : value);
-      }
-
       const hasBody = request.method !== "GET" && request.method !== "HEAD" && request.body != null;
       const webRequest = new Request(url, {
         method: request.method,
-        headers,
+        headers: toWebHeaders(request.headers),
         body: hasBody ? JSON.stringify(request.body) : undefined,
       });
 
@@ -40,6 +44,11 @@ async function main() {
       reply.send(response.body ? await response.text() : null);
     },
   });
+
+  await app.register(outletRoutes);
+  await app.register(uploadRoutes);
+  await app.register(publicRoutes);
+  await app.register(customerRoutes);
 
   app.get("/health", async () => ({ ok: true }));
 

@@ -1,15 +1,15 @@
 "use client";
 
-import { useState, useRef, useTransition } from "react";
+import { useState, useRef, useEffect, useTransition } from "react";
 import dynamic from "next/dynamic";
 import Image from "next/image";
 import { motion } from "motion/react";
 import { MapPin, Loader2, Camera, Store, Phone, Navigation, Utensils, Coffee, Wrench, ShoppingBag, PackageOpen, Scissors, Bike, Sparkles, Popcorn, Tag, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { updateOutletAction, uploadOutletAvatar } from "@/app/dashboard/setting/actions";
 import { FEATURES } from "@/lib/feature-categories";
 import { ORDER_FEATURES } from "@/lib/order-features";
+import { API_URL } from "@/lib/api-url";
 
 const FEATURE_META = ORDER_FEATURES;
 
@@ -49,17 +49,18 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     );
 }
 
-export function OwnerSetting({ outlet }: { outlet: Outlet | null }) {
+export function OwnerSetting() {
     const [bgImage] = useState(() => BG_IMAGES[Math.floor(Math.random() * BG_IMAGES.length)]);
-    const [isOpen, setIsOpen] = useState(outlet?.is_open ?? true);
-    const [name, setName] = useState(outlet?.name ?? "");
-    const [phone, setPhone] = useState(outlet?.phone ?? "");
-    const [address, setAddress] = useState(outlet?.address ?? "");
-    const [lat, setLat] = useState(parseFloat(outlet?.lat ?? "-6.2088"));
-    const [lon, setLon] = useState(parseFloat(outlet?.lon ?? "106.8456"));
-    const [avatar, setAvatar] = useState(outlet?.avatar ?? "avatar.png");
-    const [features, setFeatures] = useState<string[]>(outlet?.features ?? []);
-    const [tags, setTags] = useState<string[]>(outlet?.tags ?? []);
+    const [loading, setLoading] = useState(true);
+    const [isOpen, setIsOpen] = useState(true);
+    const [name, setName] = useState("");
+    const [phone, setPhone] = useState("");
+    const [address, setAddress] = useState("");
+    const [lat, setLat] = useState(-6.2088);
+    const [lon, setLon] = useState(106.8456);
+    const [avatar, setAvatar] = useState("avatar.png");
+    const [features, setFeatures] = useState<string[]>([]);
+    const [tags, setTags] = useState<string[]>([]);
     const [tagInput, setTagInput] = useState("");
     const [locating, setLocating] = useState(false);
     const [uploading, setUploading] = useState(false);
@@ -67,7 +68,30 @@ export function OwnerSetting({ outlet }: { outlet: Outlet | null }) {
     const [isPending, startTransition] = useTransition();
     const fileRef = useRef<HTMLInputElement>(null);
 
-    const avatarSrc = avatar.startsWith("http") || avatar.startsWith("/") ? avatar : `/${avatar}`;
+    useEffect(() => {
+        fetch(`${API_URL}/api/outlet/me`, { credentials: "include" })
+            .then((res) => res.json())
+            .then((data: { success: boolean; outlet: Outlet | null }) => {
+                const outlet = data.outlet;
+                if (!outlet) return;
+                setIsOpen(outlet.is_open);
+                setName(outlet.name);
+                setPhone(outlet.phone);
+                setAddress(outlet.address);
+                setLat(parseFloat(outlet.lat));
+                setLon(parseFloat(outlet.lon));
+                setAvatar(outlet.avatar);
+                setFeatures(outlet.features);
+                setTags(outlet.tags);
+            })
+            .finally(() => setLoading(false));
+    }, []);
+
+    const avatarSrc = avatar.startsWith("http")
+        ? avatar
+        : avatar.startsWith("/uploads/")
+            ? `${API_URL}${avatar}`
+            : `/${avatar.replace(/^\//, "")}`;
 
     function handleGetLocation() {
         setLocating(true);
@@ -90,7 +114,11 @@ export function OwnerSetting({ outlet }: { outlet: Outlet | null }) {
         setUploading(true);
         const fd = new FormData();
         fd.append("image", file);
-        const res = await uploadOutletAvatar(fd);
+        const res = await fetch(`${API_URL}/api/outlet/me/avatar`, {
+            method: "POST",
+            credentials: "include",
+            body: fd,
+        }).then((r) => r.json());
         if (res.success && res.imageUrl) setAvatar(res.imageUrl);
         setUploading(false);
     }
@@ -105,17 +133,22 @@ export function OwnerSetting({ outlet }: { outlet: Outlet | null }) {
     function handleSave() {
         setMessage(null);
         startTransition(async () => {
-            const res = await updateOutletAction({
-                name,
-                phone,
-                address,
-                lat: String(lat),
-                lon: String(lon),
-                is_open: isOpen,
-                features,
-                tags,
-                avatar,
-            });
+            const res = await fetch(`${API_URL}/api/outlet/me`, {
+                method: "PATCH",
+                credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    name,
+                    phone,
+                    address,
+                    lat: String(lat),
+                    lon: String(lon),
+                    is_open: isOpen,
+                    features,
+                    tags,
+                    avatar,
+                }),
+            }).then((r) => r.json());
             setMessage({ ok: res.success, text: res.message });
         });
     }
@@ -159,7 +192,13 @@ export function OwnerSetting({ outlet }: { outlet: Outlet | null }) {
                 {/* ── Avatar ────────────────────────────────────────────── */}
                 <div className="flex items-center gap-5 p-5 rounded-2xl border border-border/60 bg-card shadow-sm">
                     <div className="relative h-20 w-20 rounded-2xl overflow-hidden flex-shrink-0 ring-2 ring-border">
-                        <Image src={avatarSrc} alt="Avatar outlet" fill className="object-cover" />
+                        <Image
+                            src={avatarSrc}
+                            alt="Avatar outlet"
+                            fill
+                            className="object-cover"
+                            unoptimized={avatar.startsWith("/uploads/")}
+                        />
                         {uploading && (
                             <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
                                 <Loader2 className="h-5 w-5 text-white animate-spin" />

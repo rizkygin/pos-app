@@ -6,6 +6,7 @@ import { useTransition, useState, useEffect, useCallback } from 'react';
 import QRCode from 'react-qr-code';
 import { QrCode, X, Lock, MapPin } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import { API_URL } from '@/lib/api-url';
 
 type OrderStatus =
   | 'pending'
@@ -439,7 +440,7 @@ export function ActiveOrderAnimation({
 
   const poll = useCallback(async () => {
     try {
-      const res = await fetch('/api/get-active-order', { cache: 'no-store' });
+      const res = await fetch(`${API_URL}/api/get-active-order`, { cache: 'no-store', credentials: 'include' });
       const data = await res.json();
       if (!data.success) return;
       const next = data.order.status as OrderStatus;

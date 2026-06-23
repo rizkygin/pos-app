@@ -39,6 +39,7 @@ import {
 } from '@/components/ui/sheet';
 import { useQuery } from '@tanstack/react-query';
 import { OutletSchema, ProductSchema, type Product } from '@/lib/types';
+import { API_URL } from '@/lib/api-url';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -84,7 +85,7 @@ export function OrderClient({
   const { data: ads } = useQuery<ProductAd[]>({
     queryKey: ['outlet-ads', _outletId],
     queryFn: async () => {
-      const res = await fetch(`/api/get-outlet-ads?outletId=${_outletId}`);
+      const res = await fetch(`${API_URL}/api/get-outlet-ads?outletId=${_outletId}`);
       if (!res.ok) throw new Error('Failed to fetch ads');
       const json = await res.json();
       return json.data;
@@ -95,7 +96,7 @@ export function OrderClient({
   const { data: categoriesData } = useQuery<string[]>({
     queryKey: ['categories', _outletId],
     queryFn: async () => {
-      const rest = await fetch(`/api/get-categories?outletId=${_outletId}`);
+      const rest = await fetch(`${API_URL}/api/get-categories?outletId=${_outletId}`);
       if (!rest.ok) throw new Error('Failed to fetch categories');
       const json = await rest.json();
       console.log(json.data);
@@ -109,7 +110,7 @@ export function OrderClient({
     queryKey: ['outlets', _outletId],
 
     queryFn: async () => {
-      const res = await fetch('/api/get-outlet-id?outletId=' + _outletId);
+      const res = await fetch(`${API_URL}/api/get-outlet-id?outletId=` + _outletId);
       if (!res.ok) {
         throw new Error('Failed to fetch outlet');
       }
@@ -146,7 +147,7 @@ export function OrderClient({
   const { data: products } = useQuery<Product[]>({
     queryKey: ['products', _outletId],
     queryFn: async () => {
-      const rest = await fetch(`/api/get-all-product?id=${_outletId}`);
+      const rest = await fetch(`${API_URL}/api/get-all-product?id=${_outletId}`);
       if (!rest.ok) throw new Error('Failed to fetch products');
       const json = await rest.json();
       return ProductSchema.array().parse(json.data);
