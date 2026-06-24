@@ -37,6 +37,7 @@ import {
 import Image from 'next/image';
 import { DashboardHeader } from '@/components/dashboard-header';
 import { ORDER_FEATURES } from '@/lib/order-features';
+import { resolveProductImage } from '@/lib/image-src';
 
 type Product = {
   id: string;
@@ -355,7 +356,7 @@ export const ProductsManager = ({
                   <div className="relative aspect-[4/3] md:aspect-square rounded-lg md:rounded-xl bg-muted/30 mb-2 md:mb-4 flex items-center justify-center overflow-hidden border">
                     {product.image && product.image !== 'avatar.png' ? (
                       <Image
-                        src={product.image}
+                        src={resolveProductImage(product.image)}
                         fill
                         className="object-cover group-hover:scale-110 transition-transform duration-500"
                         alt={product.product_name}
@@ -650,7 +651,7 @@ export const ProductsManager = ({
                 {imageUrl ? (
                   <div className="relative w-full h-48 rounded-xl overflow-hidden border">
                     <Image
-                      src={imageUrl}
+                      src={resolveProductImage(imageUrl)}
                       fill
                       className="object-cover"
                       alt="Product Image Preview"

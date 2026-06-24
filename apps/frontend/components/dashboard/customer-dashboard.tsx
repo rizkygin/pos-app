@@ -29,6 +29,7 @@ import { DashboardHeader } from "@/components/dashboard-header";
 import Image from "next/image";
 import Link from "next/link";
 import { formatCurrency } from "@/lib/utils/format";
+import { resolveProductImage, resolveBannerImage } from "@/lib/image-src";
 
 type LastOrder = {
     orderId: string;
@@ -66,15 +67,11 @@ function getOutletAvatarSrc(avatar: string): string {
 }
 
 function getProductImageSrc(image: string): string {
-    if (!image || image === "avatar.png") return "/avatar.png";
-    if (image.startsWith("http") || image.startsWith("/")) return image;
-    return `/products/${image}`;
+    return resolveProductImage(image);
 }
 
 function getAdBannerSrc(image: string): string {
-    if (!image) return "/avatar.png";
-    if (image.startsWith("http") || image.startsWith("/")) return image;
-    return `/ads/${image}`;
+    return resolveBannerImage(image);
 }
 
 type CustomerDashboardProps = {

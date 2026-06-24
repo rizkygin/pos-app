@@ -1,12 +1,4 @@
-'use server';
-
-import { db } from '@/src/db';
-import { productsTable } from '@/src/db/schema';
-import { revalidatePath } from 'next/cache';
-import fs from 'fs/promises';
-import path from 'path';
-import sharp from 'sharp';
-import { eq } from 'drizzle-orm';
+import { API_URL } from '@/lib/api-url';
 
 export type AddProductInput = {
   product_name: string;
@@ -21,160 +13,71 @@ export type AddProductInput = {
   features?: string[];
 };
 
-export async function addProductAction(data: AddProductInput) {
+type ActionResult = { success: boolean; message?: string };
+
+async function postJson(path: string, body: unknown): Promise<ActionResult> {
   try {
-    const id = crypto.randomUUID();
-
-    await db.insert(productsTable).values({
-      id,
-      product_name: data.product_name,
-      price: data.price,
-      price_mark_down: data.price_mark_down,
-      buying_price: data.buying_price,
-      outlet_id: data.outlet_id,
-      category: data.category,
-      description: data.description || '',
-      unit: data.unit || 'pcs',
-      image: data.image || 'avatar.png',
-      features: data.features ?? [],
+    const res = await fetch(`${API_URL}${path}`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
     });
-
-    revalidatePath('/dashboard/addproducts');
-    return { success: true, message: 'Product added successfully.' };
-  } catch (error) {
-    console.error('Failed to add product:', error);
-    return { success: false, message: 'Failed to add product.' };
+    return (await res.json()) as ActionResult;
+  } catch {
+    return { success: false, message: 'Terjadi kesalahan jaringan.' };
   }
 }
 
-export async function uploadImage(formData: FormData) {
+export async function addProductAction(data: AddProductInput) {
+  return postJson('/api/products', data);
+}
+
+export async function uploadImage(
+  formData: FormData,
+): Promise<{ success: boolean; imageUrl?: string; message?: string }> {
   try {
-    const file = formData.get('image') as File | null;
-    if (!file) {
-      return { success: false, message: 'No image file provided.' };
-    }
-
-    const bytes = await file.arrayBuffer();
-    const buffer = Buffer.from(bytes);
-
-    // Generate a unique filename
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    const filename = `product-${uniqueSuffix}.webp`;
-    const uploadDir = path.join(process.cwd(), 'public', 'products');
-
-    // Resize and save image
-    await sharp(buffer)
-      .resize(400, 600, {
-        fit: 'cover',
-        position: 'center',
-      })
-      .webp({ quality: 80 })
-      .toFile(path.join(uploadDir, filename));
-
-    const imageUrl = `/products/${filename}`;
-
-    return { success: true, imageUrl };
-  } catch (error) {
-    console.error('Failed to upload image:', error);
+    const res = await fetch(`${API_URL}/api/products/upload-image`, {
+      method: 'POST',
+      credentials: 'include',
+      body: formData,
+    });
+    return await res.json();
+  } catch {
     return { success: false, message: 'Failed to process and upload image.' };
   }
 }
 
 export async function removeImage(imageUrl: string) {
-  try {
-    if (!imageUrl.startsWith('/products/')) {
-      return { success: false, message: 'Invalid image URL.' };
-    }
-    if (imageUrl === '/products/avatar.png') {
-      return { success: false, message: 'Default image cannot be removed.' };
-    }
-    const filePath = path.join(process.cwd(), 'public', imageUrl);
-    await fs.unlink(filePath);
-    revalidatePath('/dashboard/addproducts');
-    return { success: true, message: 'Image removed successfully.' };
-  } catch (error) {
-    console.error('Failed to remove image:', error);
-    return { success: false, message: 'Failed to remove image.' };
-  }
+  return postJson('/api/products/remove-image', { imageUrl });
 }
 
-export async function checkImageUrlAccessable(imageUrl: string){
-  if(imageUrl === ''){
+export async function checkImageUrlAccessable(imageUrl: string) {
+  if (imageUrl === '') {
     return;
   }
-  try{
-    await fs.access(path.join(process.cwd(), 'public', imageUrl));
-    return {success: true, message: "Image is accessable", path: imageUrl}
-  }catch (error: any){
-    return {success: false, message: error.message}
+  try {
+    const res = await fetch(
+      `${API_URL}/api/products/check-image?url=${encodeURIComponent(imageUrl)}`,
+      { credentials: 'include' },
+    );
+    return (await res.json()) as { success: boolean; message: string; path?: string };
+  } catch (error: any) {
+    return { success: false, message: error.message };
   }
 }
 
 export async function removeOnDatabase(imageUrl: string) {
-  try {
-    await db
-      .update(productsTable)
-      .set({
-        image: 'avatar.png',
-      })
-      .where(eq(productsTable.image, imageUrl));
-    return { success: true, message: 'Image removed successfully.' };
-  } catch (error) {
-    console.error('Failed to remove image:', error);
-    return { success: false, message: 'Failed to remove image.' };
-  }
+  return postJson('/api/products/remove-image-db', { imageUrl });
 }
 
 export async function deleteProductAction(productId: string) {
-  try {
-    const [product] = await db
-      .select()
-      .from(productsTable)
-      .where(eq(productsTable.id, productId))
-      .limit(1);
-
-    if (product && product.image && product.image.startsWith('/products/')) {
-      const filePath = path.join(process.cwd(), 'public', product.image);
-      try {
-        await fs.unlink(filePath);
-      } catch (err) {
-        console.error('Failed to delete image file:', err);
-      }
-    }
-
-    await db.delete(productsTable).where(eq(productsTable.id, productId));
-    revalidatePath('/dashboard/addproducts');
-    return { success: true, message: 'Product deleted successfully.' };
-  } catch (error) {
-    console.error('Failed to delete product:', error);
-    return { success: false, message: 'Failed to delete product.' };
-  }
+  return postJson('/api/products/delete', { productId });
 }
 
 export async function updateProductAction(
   productId: string,
   data: Partial<AddProductInput>,
 ) {
-  try {
-    await db
-      .update(productsTable)
-      .set({
-        product_name: data.product_name,
-        price: data.price,
-        price_mark_down: data.price_mark_down,
-        buying_price: data.buying_price,
-        category: data.category,
-        description: data.description,
-        unit: data.unit,
-        ...(data.image && { image: data.image }),
-        ...(data.features !== undefined && { features: data.features }),
-      })
-      .where(eq(productsTable.id, productId));
-
-    revalidatePath('/dashboard/addproducts');
-    return { success: true, message: 'Product updated successfully.' };
-  } catch (error) {
-    console.error('Failed to update product:', error);
-    return { success: false, message: 'Failed to update product.' };
-  }
+  return postJson('/api/products/update', { productId, data });
 }

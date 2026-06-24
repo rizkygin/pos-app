@@ -6,6 +6,7 @@ import Image from "next/image";
 import QRCode from "react-qr-code";
 import { MapPin, Phone, Star, Share2, X, Copy, Check, MessageCircle, Navigation } from "lucide-react";
 import { fmtIDR } from "@/lib/utils/format";
+import { resolveProductImage } from "@/lib/image-src";
 
 type Outlet = {
     id: number;
@@ -43,9 +44,7 @@ type Props = {
 };
 
 function getImageSrc(image: string): string {
-    if (!image || image === "avatar.png") return "/avatar.png";
-    if (image.startsWith("http") || image.startsWith("/")) return image;
-    return `/products/${image}`;
+    return resolveProductImage(image);
 }
 
 function StarRating({ value, count, size = "sm" }: { value: number; count?: number; size?: "xs" | "sm" }) {

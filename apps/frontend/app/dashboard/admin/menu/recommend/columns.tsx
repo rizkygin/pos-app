@@ -4,6 +4,7 @@ import { Column, ColumnDef } from '@tanstack/react-table';
 import { ArrowUpDown, Pencil, Star } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
+import { resolveProductImage } from '@/lib/image-src';
 
 export type AdminProduct = {
   id: string;
@@ -23,9 +24,7 @@ export type AdminProduct = {
 };
 
 function getProductImageSrc(image: string): string {
-  if (!image || image === 'avatar.png') return '/avatar.png';
-  if (image.startsWith('http') || image.startsWith('/')) return image;
-  return `/products/${image}`;
+  return resolveProductImage(image);
 }
 
 const formatCurrency = (value: string) =>

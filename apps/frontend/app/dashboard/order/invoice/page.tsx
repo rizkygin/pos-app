@@ -7,6 +7,7 @@ import { ArrowLeft, Tag, Truck, ShoppingBasket, MessageSquare } from "lucide-rea
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { fmtIDR, discountedPrice } from "@/lib/utils/format";
+import { resolveProductImage } from "@/lib/image-src";
 import { customerMakingOrder } from "@/app/dashboard/order/[feature]/[outletId]/action";
 import { API_URL } from "@/lib/api-url";
 import type { CartItem } from "@/components/order/basket-sheet-content";
@@ -115,7 +116,7 @@ export default function InvoicePage() {
                                 <div key={item.product.id} className="flex items-center gap-3">
                                     <div className="relative h-12 w-12 rounded-xl overflow-hidden flex-shrink-0">
                                         <Image
-                                            src={item.product.image}
+                                            src={resolveProductImage(item.product.image)}
                                             alt={item.product.product_name}
                                             fill
                                             className="object-cover"

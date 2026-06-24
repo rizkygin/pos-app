@@ -20,6 +20,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { formatCurrency } from '@/lib/utils/format';
 import { API_URL } from '@/lib/api-url';
+import { resolveProductImage } from '@/lib/image-src';
 
 type Product = {
   id: string;
@@ -393,7 +394,7 @@ export const CashierClient = ({
                     <div className="relative aspect-[4/3] md:aspect-square w-full bg-muted/20 overflow-hidden">
                       {product.image && product.image !== 'avatar.png' ? (
                         <Image
-                          src={product.image}
+                          src={resolveProductImage(product.image)}
                           fill
                           className="object-cover transition-transform duration-700 group-hover:scale-110"
                           alt={product.product_name}
@@ -532,7 +533,7 @@ export const CashierClient = ({
                     {item.product.image &&
                     item.product.image !== 'avatar.png' ? (
                       <Image
-                        src={item.product.image}
+                        src={resolveProductImage(item.product.image)}
                         fill
                         className="object-cover"
                         alt={item.product.product_name}
