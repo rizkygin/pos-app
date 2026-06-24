@@ -4,6 +4,7 @@ import { ColumnDef } from '@tanstack/react-table';
 import { Check, Trash2, X } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
+import { resolveBannerImage } from '@/lib/image-src';
 
 export type AdminAd = {
   id: number;
@@ -44,9 +45,7 @@ const STATUS_CLASS: Record<AdminAd['status'], string> = {
 };
 
 function getBannerSrc(image: string): string {
-  if (!image) return '/avatar.png';
-  if (image.startsWith('http') || image.startsWith('/')) return image;
-  return `/ads/${image}`;
+  return resolveBannerImage(image);
 }
 
 export type AdminAdHandlers = {

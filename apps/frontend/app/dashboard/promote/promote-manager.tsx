@@ -6,6 +6,7 @@ import { driver } from 'driver.js';
 import 'driver.js/dist/driver.css';
 import { Loader2, Megaphone, Image as ImageIcon, Trash2, HelpCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { resolveBannerImage } from '@/lib/image-src';
 import {
   createAdAction,
   deleteAdAction,
@@ -41,9 +42,7 @@ type PromoteManagerProps = {
 };
 
 function getBannerSrc(image: string): string {
-  if (!image) return '/avatar.png';
-  if (image.startsWith('http') || image.startsWith('/')) return image;
-  return `/ads/${image}`;
+  return resolveBannerImage(image);
 }
 
 const STATUS_LABEL: Record<Ad['status'], string> = {
