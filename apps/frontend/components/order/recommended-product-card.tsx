@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import Image from "next/image";
+import { resolveProductImage, isBackendImage } from "@/lib/image-src";
 import { motion } from "motion/react";
 import { Sparkles } from "lucide-react";
 import { StarRating } from "@/components/star-rating";
@@ -21,7 +22,7 @@ export function RecommendedProductCard({ product, feature }: { product: Product;
             >
                 <div className="relative h-28 overflow-hidden">
 
-                    <Image src={product.image.startsWith('http') || product.image.startsWith('/') ? product.image : `/${product.image}`} alt={product.product_name} fill className="object-cover group-hover:scale-110 transition-transform duration-500" />
+                    <Image src={resolveProductImage(product.image)} unoptimized={isBackendImage(product.image)} alt={product.product_name} fill className="object-cover group-hover:scale-110 transition-transform duration-500" />
                     {product.discountPercent && (
                         <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-rose-500/90 backdrop-blur-sm text-[9px] font-black text-white">
                             -{product.discountPercent}%

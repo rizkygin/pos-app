@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import Image from "next/image";
+import { resolveOutletImage, isBackendImage } from "@/lib/image-src";
 import { motion } from "motion/react";
 import { Star, MapPin, Clock, ArrowRight, Phone } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -16,7 +17,7 @@ export function OutletCard({ outlet, feature }: { outlet: Outlet; feature: strin
             className="group bg-card border border-border/60 rounded-[1.75rem] overflow-hidden shadow-sm hover:shadow-xl transition-all duration-300"
         >
             <div className="relative h-44 overflow-hidden">
-                <Image src={outlet.image.startsWith('http') || outlet.image.startsWith('/') ? outlet.image : `/${outlet.image}`} alt={outlet.name} fill className="object-cover group-hover:scale-110 transition-transform duration-500" />
+                <Image src={resolveOutletImage(outlet.image)} unoptimized={isBackendImage(outlet.image)} alt={outlet.name} fill className="object-cover group-hover:scale-110 transition-transform duration-500" />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
                 <div className="absolute top-3 left-3 flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/95 backdrop-blur-sm shadow-sm">
                     <Star className="h-3 w-3 fill-amber-400 text-amber-400" />

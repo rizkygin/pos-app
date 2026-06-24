@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import { resolveProductImage, isBackendImage } from "@/lib/image-src";
 import { motion, AnimatePresence } from "motion/react";
 import { Minus, Plus, Trash2, Tag, X, ArrowRight, ShoppingBasket } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -105,7 +106,7 @@ export function BasketSheetContent({
                                 className="flex gap-3 p-3 rounded-2xl bg-muted/40 border border-border/50"
                             >
                                 <div className="relative h-16 w-16 rounded-xl overflow-hidden flex-shrink-0">
-                                    <Image src={item.product.image} alt={item.product.product_name} fill className="object-cover" />
+                                    <Image src={resolveProductImage(item.product.image)} unoptimized={isBackendImage(item.product.image)} alt={item.product.product_name} fill className="object-cover" />
                                 </div>
                                 <div className="flex-1 min-w-0">
                                     <p className="font-bold text-sm leading-tight line-clamp-1">{item.product.product_name}</p>

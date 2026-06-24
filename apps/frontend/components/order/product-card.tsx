@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import { resolveProductImage, isBackendImage } from "@/lib/image-src";
 import { motion } from "motion/react";
 import { Heart, Plus, Minus, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -41,7 +42,8 @@ export function ProductCard({
         >
             <div className="relative aspect-square overflow-hidden">
                 <Image
-                    src={product.image}
+                    src={resolveProductImage(product.image)}
+                    unoptimized={isBackendImage(product.image)}
                     alt={product.product_name}
                     fill
                     className="object-cover group-hover:scale-110 transition-transform duration-500"

@@ -4,6 +4,7 @@ import { Column, ColumnDef } from '@tanstack/react-table';
 import { ArrowUpDown, Star } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
+import { resolveOutletImage, isBackendImage } from '@/lib/image-src';
 
 export type AdminOutlet = {
   id: number;
@@ -21,9 +22,7 @@ export type AdminOutlet = {
 };
 
 function getAvatarSrc(avatar: string): string {
-  if (!avatar || avatar === 'avatar.png') return '/avatar.png';
-  if (avatar.startsWith('http') || avatar.startsWith('/')) return avatar;
-  return `/${avatar}`;
+  return resolveOutletImage(avatar);
 }
 
 const sortableHeader = (label: string) =>
@@ -47,6 +46,7 @@ export const columns: ColumnDef<AdminOutlet>[] = [
       <div className="relative h-10 w-10 rounded-lg overflow-hidden border bg-muted shrink-0">
         <Image
           src={getAvatarSrc(row.original.avatar)}
+          unoptimized={isBackendImage(row.original.avatar)}
           alt={row.original.name}
           fill
           className="object-cover"

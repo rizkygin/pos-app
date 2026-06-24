@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import Image from "next/image";
+import { resolveProductImage, isBackendImage } from "@/lib/image-src";
 import { motion } from "motion/react";
 import { ArrowRight } from "lucide-react";
 import { StarRating } from "@/components/star-rating";
@@ -22,7 +23,7 @@ export function ProductSearchCard({ product, feature }: { product: Product; feat
                 className="group flex gap-3 p-3 bg-card border border-border/60 rounded-2xl shadow-sm hover:shadow-md transition-all cursor-pointer"
             >
                 <div className="relative h-20 w-20 rounded-xl overflow-hidden flex-shrink-0">
-                    <Image src={product.image.startsWith('http') || product.image.startsWith('/') ? product.image : `/${product.image}`} alt={product.product_name} fill className="object-cover group-hover:scale-110 transition-transform duration-300" />
+                    <Image src={resolveProductImage(product.image)} unoptimized={isBackendImage(product.image)} alt={product.product_name} fill className="object-cover group-hover:scale-110 transition-transform duration-300" />
                     {product.discountPercent && (
                         <span className="absolute top-1 left-1 px-1.5 py-0.5 rounded-full bg-rose-500/90 text-[8px] font-black text-white">
                             -{product.discountPercent}%

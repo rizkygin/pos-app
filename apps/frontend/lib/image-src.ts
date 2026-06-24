@@ -17,6 +17,16 @@ export function resolveProductImage(image?: string | null): string {
   return `/products/${image}`;
 }
 
+// Outlet avatar / cover images. Legacy bare names live at the public root
+// ("/<name>"), matching the existing outlet-card / admin outlet helpers.
+export function resolveOutletImage(image?: string | null): string {
+  if (!image || image === "avatar.png") return DEFAULT_IMAGE;
+  if (image.startsWith("http")) return image;
+  if (image.startsWith("/uploads/")) return `${API_URL}${image}`;
+  if (image.startsWith("/")) return image;
+  return `/${image}`;
+}
+
 // True when the stored value points at a backend-served upload (/uploads/...).
 // Next's image optimizer can't proxy these, so such <Image>s must set
 // `unoptimized` (matches the outlet-avatar precedent in owner-setting.tsx).
