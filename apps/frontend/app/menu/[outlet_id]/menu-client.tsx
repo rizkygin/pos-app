@@ -6,7 +6,7 @@ import Image from "next/image";
 import QRCode from "react-qr-code";
 import { MapPin, Phone, Star, Share2, X, Copy, Check, MessageCircle, Navigation } from "lucide-react";
 import { fmtIDR } from "@/lib/utils/format";
-import { resolveProductImage } from "@/lib/image-src";
+import { resolveProductImage, isBackendImage } from "@/lib/image-src";
 
 type Outlet = {
     id: number;
@@ -122,6 +122,7 @@ function ProductCard({ product, index }: { product: Product; index: number }) {
                     <div className="relative aspect-[4/3] w-full overflow-hidden">
                         <Image
                             src={imgError ? "/avatar.png" : getImageSrc(product.image)}
+                            unoptimized={isBackendImage(product.image)}
                             alt={product.product_name}
                             fill
                             className="object-cover transition-transform duration-500"
@@ -255,6 +256,7 @@ export function MenuClient({ outlet, products }: Props) {
                             <div className="h-28 w-28 md:h-36 md:w-36 rounded-2xl overflow-hidden shadow-2xl ring-2 ring-white/25 ring-offset-2 ring-offset-transparent">
                                 <Image
                                     src={avatarSrc}
+                                    unoptimized={isBackendImage(outlet.avatar)}
                                     alt={outlet.name}
                                     width={144}
                                     height={144}

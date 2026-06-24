@@ -4,7 +4,7 @@ import { Column, ColumnDef } from '@tanstack/react-table';
 import { ArrowUpDown, Pencil, Star } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
-import { resolveProductImage } from '@/lib/image-src';
+import { resolveProductImage, isBackendImage } from '@/lib/image-src';
 
 export type AdminProduct = {
   id: string;
@@ -63,6 +63,7 @@ export const getColumns = (
       <div className="relative h-10 w-10 rounded-lg overflow-hidden border bg-muted shrink-0">
         <Image
           src={getProductImageSrc(row.original.image)}
+          unoptimized={isBackendImage(row.original.image)}
           alt={row.original.product_name}
           fill
           className="object-cover"

@@ -29,7 +29,7 @@ import { DashboardHeader } from "@/components/dashboard-header";
 import Image from "next/image";
 import Link from "next/link";
 import { formatCurrency } from "@/lib/utils/format";
-import { resolveProductImage, resolveBannerImage } from "@/lib/image-src";
+import { resolveProductImage, resolveBannerImage, isBackendImage } from "@/lib/image-src";
 
 type LastOrder = {
     orderId: string;
@@ -132,6 +132,7 @@ export const CustomerDashboard = ({ lastOrders = [], recommend = [], ads = [], h
                         >
                             <Image
                                 src={getAdBannerSrc(ads[adIndex].bannerImage)}
+                                unoptimized={isBackendImage(ads[adIndex].bannerImage)}
                                 alt={ads[adIndex].title}
                                 fill
                                 className="object-cover"
@@ -285,6 +286,7 @@ export const CustomerDashboard = ({ lastOrders = [], recommend = [], ads = [], h
                                     <div className="relative aspect-[4/3] rounded-[2rem] overflow-hidden shadow-lg border border-border/50">
                                         <Image
                                             src={getProductImageSrc(menu.image)}
+                                            unoptimized={isBackendImage(menu.image)}
                                             alt={menu.menuName}
                                             fill
                                             className="object-cover group-hover:scale-110 transition-transform duration-500"

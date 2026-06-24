@@ -17,6 +17,13 @@ export function resolveProductImage(image?: string | null): string {
   return `/products/${image}`;
 }
 
+// True when the stored value points at a backend-served upload (/uploads/...).
+// Next's image optimizer can't proxy these, so such <Image>s must set
+// `unoptimized` (matches the outlet-avatar precedent in owner-setting.tsx).
+export function isBackendImage(image?: string | null): boolean {
+  return !!image && image.startsWith("/uploads/");
+}
+
 // Same idea for ad banner images (legacy bare names live under /ads/).
 export function resolveBannerImage(image?: string | null): string {
   if (!image) return DEFAULT_IMAGE;

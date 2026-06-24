@@ -4,7 +4,7 @@ import { ColumnDef } from '@tanstack/react-table';
 import { Check, Trash2, X } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
-import { resolveBannerImage } from '@/lib/image-src';
+import { resolveBannerImage, isBackendImage } from '@/lib/image-src';
 
 export type AdminAd = {
   id: number;
@@ -60,7 +60,7 @@ export const getColumns = (handlers: AdminAdHandlers): ColumnDef<AdminAd>[] => [
     header: 'Banner',
     cell: ({ row }) => (
       <div className="relative h-12 w-28 rounded-lg overflow-hidden border bg-muted shrink-0">
-        <Image src={getBannerSrc(row.original.banner_image)} alt={row.original.title} fill className="object-cover" />
+        <Image src={getBannerSrc(row.original.banner_image)} unoptimized={isBackendImage(row.original.banner_image)} alt={row.original.title} fill className="object-cover" />
       </div>
     ),
   },

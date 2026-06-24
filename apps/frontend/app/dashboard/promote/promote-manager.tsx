@@ -6,7 +6,7 @@ import { driver } from 'driver.js';
 import 'driver.js/dist/driver.css';
 import { Loader2, Megaphone, Image as ImageIcon, Trash2, HelpCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { resolveBannerImage } from '@/lib/image-src';
+import { resolveBannerImage, isBackendImage } from '@/lib/image-src';
 import {
   createAdAction,
   deleteAdAction,
@@ -437,7 +437,7 @@ export const PromoteManager = ({ products, ads }: PromoteManagerProps) => {
             </span>
             {bannerUrl ? (
               <div className="relative w-full aspect-[12/5] rounded-xl overflow-hidden border">
-                <Image src={getBannerSrc(bannerUrl)} fill className="object-cover" alt="Banner Preview" />
+                <Image src={getBannerSrc(bannerUrl)} unoptimized={isBackendImage(bannerUrl)} fill className="object-cover" alt="Banner Preview" />
                 <Button
                   type="button"
                   variant="destructive"
@@ -495,7 +495,7 @@ export const PromoteManager = ({ products, ads }: PromoteManagerProps) => {
             {ads.map((ad) => (
               <div key={ad.id} className="rounded-2xl border bg-background overflow-hidden">
                 <div className="relative w-full aspect-[12/5]">
-                  <Image src={getBannerSrc(ad.banner_image)} fill className="object-cover" alt={ad.title} />
+                  <Image src={getBannerSrc(ad.banner_image)} unoptimized={isBackendImage(ad.banner_image)} fill className="object-cover" alt={ad.title} />
                 </div>
                 <div className="p-4 space-y-2">
                   <div className="flex items-center justify-between gap-2">

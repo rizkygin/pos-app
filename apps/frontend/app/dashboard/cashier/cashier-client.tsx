@@ -20,7 +20,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { formatCurrency } from '@/lib/utils/format';
 import { API_URL } from '@/lib/api-url';
-import { resolveProductImage } from '@/lib/image-src';
+import { resolveProductImage, isBackendImage } from '@/lib/image-src';
 
 type Product = {
   id: string;
@@ -395,6 +395,7 @@ export const CashierClient = ({
                       {product.image && product.image !== 'avatar.png' ? (
                         <Image
                           src={resolveProductImage(product.image)}
+                          unoptimized={isBackendImage(product.image)}
                           fill
                           className="object-cover transition-transform duration-700 group-hover:scale-110"
                           alt={product.product_name}
@@ -534,6 +535,7 @@ export const CashierClient = ({
                     item.product.image !== 'avatar.png' ? (
                       <Image
                         src={resolveProductImage(item.product.image)}
+                        unoptimized={isBackendImage(item.product.image)}
                         fill
                         className="object-cover"
                         alt={item.product.product_name}
