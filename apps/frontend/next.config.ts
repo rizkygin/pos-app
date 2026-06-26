@@ -1,6 +1,12 @@
 import type { NextConfig } from "next";
+import path from "node:path";
 
 const nextConfig: NextConfig = {
+  // Emit a self-contained .next/standalone server with only the traced
+  // node_modules, so the Docker runtime stage needs no `npm install`.
+  output: "standalone",
+  // Trace from the monorepo root so hoisted workspace deps are included.
+  outputFileTracingRoot: path.join(__dirname, "../../"),
   images: {
     remotePatterns: [
       { hostname: "images.unsplash.com", pathname: "/**" },
