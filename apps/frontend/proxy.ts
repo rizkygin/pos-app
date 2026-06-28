@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { API_URL } from '@/lib/api-url';
+import { SERVER_API_URL } from '@/lib/api-url';
 
 // Admin gate for /dashboard/admin/*. Decoupled from the DB: the role check goes
 // through the backend /api/me endpoint (cookie forwarded — middleware fetches
@@ -8,7 +8,7 @@ import { API_URL } from '@/lib/api-url';
 // non-admin role => the regular dashboard.
 export async function proxy(request: NextRequest) {
   const cookie = request.headers.get('cookie') ?? '';
-  const res = await fetch(`${API_URL}/api/me`, {
+  const res = await fetch(`${SERVER_API_URL}/api/me`, {
     headers: { cookie },
     cache: 'no-store',
   });

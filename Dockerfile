@@ -19,7 +19,6 @@ RUN rm -f package-lock.json && npm install
 # Copy the rest of the source
 COPY . .
 
-ARG DATABASE_URL
 ARG REDIS_URL
 ARG BETTER_AUTH_SECRET
 ARG BETTER_AUTH_URL

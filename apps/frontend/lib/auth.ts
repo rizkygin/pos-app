@@ -2,7 +2,7 @@ import type { Session, User } from "better-auth";
 import { cache } from "react";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { API_URL } from "@/lib/api-url";
+import { SERVER_API_URL } from "@/lib/api-url";
 
 // The frontend no longer runs its own betterAuth/drizzle adapter — session
 // validation lives entirely on the backend. RSC fetches don't carry
@@ -13,7 +13,7 @@ import { API_URL } from "@/lib/api-url";
 // redirects to `/` when there is no session (preserved contract).
 export const getSession = cache(async (): Promise<{ session: Session; user: User }> => {
   const cookie = (await headers()).get("cookie") ?? "";
-  const res = await fetch(`${API_URL}/api/auth/get-session`, {
+  const res = await fetch(`${SERVER_API_URL}/api/auth/get-session`, {
     headers: { cookie },
     cache: "no-store",
   });

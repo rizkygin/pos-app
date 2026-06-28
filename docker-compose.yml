@@ -4,13 +4,10 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        # NEXT_PUBLIC_* are inlined at build time. localhost:4000 is the backend's
-        # published port, reachable from the host browser (image URLs + client
-        # fetches). NOTE: server-side RSC fetches from inside this container can't
-        # reach the host's localhost — in real deploys the backend has a public
-        # URL reachable from both browser and server, so this is a local-only quirk.
+        # NEXT_PUBLIC_API_URL is inlined at build time as the BROWSER-facing URL
+        # (localhost:4000 = the backend's published host port). Server-side RSC /
+        # middleware fetches use API_URL_INTERNAL at runtime instead (see below).
         - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
-        - DATABASE_URL=postgresql://${DATABASE_USER}:${DATABASE_PASSWORD}@db:5432/${DATABASE_NAME}
         - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
         - BETTER_AUTH_URL=${BETTER_AUTH_URL}
         - RESEND_API_KEY=${RESEND_API_KEY}
@@ -23,9 +20,10 @@ services:
       # frontend server reads process.env.PORT and must listen on 3000.
       - PORT=3000
       - HOSTNAME=0.0.0.0
-      # proxy.ts (Next middleware) hits the DB directly at runtime; reach it over
-      # the compose network, not localhost.
-      - DATABASE_URL=postgresql://${DATABASE_USER}:${DATABASE_PASSWORD}@db:5432/${DATABASE_NAME}
+      # Server-side fetches (RSC + proxy.ts middleware) reach the backend over the
+      # compose network, since the browser-facing localhost:4000 won't resolve
+      # inside this container. The frontend no longer needs DATABASE_URL.
+      - API_URL_INTERNAL=http://backend:4000
     ports:
       # Standalone server listens on 3000 (Dockerfile EXPOSE 3000).
       - "3000:3000"
