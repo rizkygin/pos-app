@@ -174,6 +174,7 @@ export async function mutationRoutes(app: FastifyInstance) {
           lat: "-3.3199",
           lon: "114.5907",
           features: Array.isArray(data.features) ? data.features : [],
+          is_open: false,
         });
       } else if (role === "courier") {
         await db.insert(couriersTable).values({

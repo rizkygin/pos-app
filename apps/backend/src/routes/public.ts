@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq, isNull, desc, sql, like, or, gte, lte } from "drizzle-orm";
+import { and, eq, isNull, desc, sql, like, ilike, or, gte, lte } from "drizzle-orm";
 import { db } from "../db";
 import { outletsTable, productsTable, productAdsTable, productAdsSchedule, scheduleProductAdsTable } from "../db/schema";
 import { getCurrentAdSlot } from "../lib/utils/ad-schedule";
@@ -124,7 +124,7 @@ export async function publicRoutes(app: FastifyInstance) {
     const outletId = id ? Number(id) : NaN;
 
     const nameFilter = name
-      ? or(like(productsTable.product_name, `%${name}%`), like(outletsTable.name, `%${name}%`))
+      ? or(ilike(productsTable.product_name, `%${name}%`), ilike(outletsTable.name, `%${name}%`))
       : sql`true`;
 
     const featureFilter = feature
@@ -136,6 +136,7 @@ export async function publicRoutes(app: FastifyInstance) {
       isNull(productsTable.deletedAt),
       nameFilter,
       featureFilter,
+      eq(outletsTable.is_open, true),
     );
 
     if (!isNaN(outletId) && outletId > 0) {
@@ -149,7 +150,7 @@ export async function publicRoutes(app: FastifyInstance) {
       .innerJoin(outletsTable, eq(productsTable.outlet_id, outletsTable.id))
       .where(baseWhere)
       .orderBy(desc(productsTable.ratings))
-      .limit(100);
+      .limit(25);
 
     return { data: rows.map(mapProductRow) };
   });
