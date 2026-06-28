@@ -1,6 +1,7 @@
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 import { MessageCircle } from "lucide-react"
 import { getSession } from "@/lib/auth"
+import { getRole } from "@/lib/utils/get-role"
 import Forbidden from "@/lib/forbidden"
 import { AppSidebar } from "@/components/app-sidebar"
 import MessageChatComponent from "@/components/message/message-components"
@@ -8,9 +9,6 @@ import MessageChatComponent from "@/components/message/message-components"
 import { AppContent } from '@/components/app-content';
 import { AppShell } from '@/components/app-shell';
 import { AppSidebarHeader } from "@/components/app-sidebar-header"
-import { db } from "@/src/db";
-import { outletsTable, couriersTable, adminsTable } from "@/src/db/schema";
-import { eq } from "drizzle-orm";
 
 
 const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
@@ -21,15 +19,10 @@ const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
         return <Forbidden />
     }
 
-    const [[outlet], [courier], [admin]] = await Promise.all([
-        db.select({ id: outletsTable.id }).from(outletsTable).where(eq(outletsTable.user_id, session.user.id)).limit(1),
-        db.select({ id: couriersTable.id }).from(couriersTable).where(eq(couriersTable.user_id, session.user.id)).limit(1),
-        db.select({ id: adminsTable.id }).from(adminsTable).where(eq(adminsTable.user_id, session.user.id)).limit(1),
-    ]);
-
-    const isOwner = !!outlet;
-    const isCourier = !!courier;
-    const isAdmin = !!admin;
+    const role = await getRole();
+    const isOwner = role && role.role === 'owner';
+    const isCourier = role && role.role === 'courier';
+    const isAdmin = role && role.role === 'admin';
     const isCustomer = !isOwner && !isCourier && !isAdmin;
 
     return (

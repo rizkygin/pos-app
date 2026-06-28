@@ -1,49 +1,25 @@
 import { redirect } from 'next/navigation';
-import { getSession } from '@/lib/auth';
-import { db } from '@/src/db';
-import {
-  customersTable,
-  couriersTable,
-  ordersTable,
-  outletsTable,
-} from '@/src/db/schema';
-import { and, eq, notInArray, desc } from 'drizzle-orm';
+import { getRole } from '@/lib/utils/get-role';
+import { serverFetch } from '@/lib/server-fetch';
 
 export default async function OrderLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const session = await getSession();
+  const role = await getRole();
 
-  const [[outlet], [courier]] = await Promise.all([
-    db
-      .select({ id: outletsTable.id })
-      .from(outletsTable)
-      .where(eq(outletsTable.user_id, session.user.id))
-      .limit(1),
-    db
-      .select({ id: couriersTable.id })
-      .from(couriersTable)
-      .where(eq(couriersTable.user_id, session.user.id))
-      .limit(1),
-  ]);
+  // Owners and couriers don't place orders — send them to their dashboard.
+  if (role && (role.role === 'owner' || role.role === 'courier')) {
+    redirect('/dashboard');
+  }
 
-  if (outlet || courier) redirect('/dashboard');
-
-  const [activeOrder] = await db
-    .select({ id: ordersTable.id })
-    .from(ordersTable)
-    .innerJoin(customersTable, eq(ordersTable.customer_id, customersTable.id))
-    .where(
-      and(
-        eq(customersTable.user_id, session.user.id),
-        notInArray(ordersTable.status, ['delivered', 'cancelled']),
-      ),
-    )
-    .limit(1);
-
-  if (activeOrder) redirect('/dashboard/activeorder/');
+  // Customers with an in-progress order (not delivered/cancelled) resume it.
+  const res = await serverFetch('/api/get-active-order');
+  const data = res.ok ? await res.json() : null;
+  if (data?.success && data.order && data.order.status !== 'delivered') {
+    redirect('/dashboard/activeorder/');
+  }
 
   return <>{children}</>;
 }
