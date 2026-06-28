@@ -1,7 +1,5 @@
 import { getSession } from "@/lib/auth";
-import { db } from "@/src/db";
-import { outletsTable, productsTable } from "@/src/db/schema";
-import { eq } from "drizzle-orm";
+import { serverFetch } from "@/lib/server-fetch";
 import Forbidden from "@/lib/forbidden";
 import { CashierClient } from "./cashier-client";
 
@@ -12,9 +10,9 @@ export default async function CashierPage() {
         return <Forbidden />;
     }
 
-    // Find the outlet belonging to this user
-    const outletRes = await db.select().from(outletsTable).where(eq(outletsTable.user_id, session.user.id)).limit(1);
-    const outlet = outletRes[0];
+    // Outlet + its products in one backend call.
+    const res = await serverFetch("/api/products/mine");
+    const { outlet, products } = res.ok ? await res.json() : { outlet: null, products: [] };
 
     if (!outlet) {
         return (
@@ -26,9 +24,6 @@ export default async function CashierPage() {
             </main>
         );
     }
-
-    // Fetch products for this outlet
-    const products = await db.select().from(productsTable).where(eq(productsTable.outlet_id, outlet.id));
 
     return (
         <main className="flex flex-col h-[calc(100vh-2.5rem)] bg-muted/30">

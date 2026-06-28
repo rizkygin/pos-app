@@ -4,7 +4,7 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import sharp from "sharp";
 import { db } from "../db";
-import { productsTable } from "../db/schema";
+import { productsTable, outletsTable } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 
@@ -35,6 +35,28 @@ async function requireUser(request: any, reply: any) {
 }
 
 export async function productRoutes(app: FastifyInstance) {
+  // The caller's outlet + its products, in one call. Backs the cashier and
+  // product-manager pages (both need outlet info + the outlet's product list).
+  app.get("/api/products/mine", async (request, reply) => {
+    const session = await requireUser(request, reply);
+    if (!session) return;
+
+    const [outlet] = await db
+      .select()
+      .from(outletsTable)
+      .where(eq(outletsTable.user_id, session.user.id))
+      .limit(1);
+
+    if (!outlet) return reply.send({ outlet: null, products: [] });
+
+    const products = await db
+      .select()
+      .from(productsTable)
+      .where(eq(productsTable.outlet_id, outlet.id));
+
+    return reply.send({ outlet, products });
+  });
+
   app.post("/api/products", async (request, reply) => {
     if (!(await requireUser(request, reply))) return;
     try {
