@@ -12,8 +12,9 @@ services:
         - BETTER_AUTH_URL=${BETTER_AUTH_URL}
         - RESEND_API_KEY=${RESEND_API_KEY}
     container_name: pos-frontend
-    env_file:
-      - .env
+    # No env_file: the frontend needs nothing from .env at runtime — NEXT_PUBLIC_*
+    # are inlined at build, and DB creds / auth secret / Resend key now live only
+    # on the backend. Everything it needs is listed explicitly below.
     environment:
       - NODE_ENV=production
       # Override PORT=4000 from .env (that's the backend's port) — the standalone
