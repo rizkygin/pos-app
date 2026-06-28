@@ -1,9 +1,10 @@
 import type { FastifyInstance } from "fastify";
-import { and, desc, eq, isNull, notInArray, or } from "drizzle-orm";
+import { and, desc, eq, isNull, notInArray, or, sql, sum } from "drizzle-orm";
 import { db } from "../db";
 import {
   customersTable,
   ordersTable,
+  orderDetailsTable,
   outletsTable,
   couriersTable,
   usersTable,
@@ -18,6 +19,41 @@ import { getCourierAvailability } from "../lib/utils/courier-availability";
 import { getOutletByUserId } from "../lib/outlet-id";
 
 export async function customerRoutes(app: FastifyInstance) {
+  // The caller's full order history with per-order item count + total. Backs the
+  // customer history-order page. { success: false } when the user isn't a customer.
+  app.get("/api/get-customer-history", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false });
+
+    const [customer] = await db
+      .select({ id: customersTable.id })
+      .from(customersTable)
+      .where(eq(customersTable.user_id, session.user.id))
+      .limit(1);
+
+    if (!customer) return reply.send({ success: false, orders: [] });
+
+    const orders = await db
+      .select({
+        id: ordersTable.id,
+        status: ordersTable.status,
+        createdAt: ordersTable.createdAt,
+        outletName: outletsTable.name,
+        itemCount: sql<number>`COUNT(${orderDetailsTable.id})`.mapWith(Number),
+        totalAmount: sum(
+          sql<number>`CAST(${orderDetailsTable.summary_price} AS NUMERIC)`,
+        ).mapWith(Number),
+      })
+      .from(ordersTable)
+      .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))
+      .leftJoin(orderDetailsTable, eq(orderDetailsTable.order_id, ordersTable.id))
+      .where(eq(ordersTable.customer_id, customer.id))
+      .groupBy(ordersTable.id, outletsTable.name)
+      .orderBy(desc(ordersTable.createdAt));
+
+    return reply.send({ success: true, orders });
+  });
+
   app.get("/api/get-active-order", async (request, reply) => {
     const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
     if (!session?.user) return reply.status(401).send({ success: false });

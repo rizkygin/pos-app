@@ -1,12 +1,4 @@
-import { getSession } from '@/lib/auth';
-import { db } from '@/src/db';
-import {
-  customersTable,
-  ordersTable,
-  orderDetailsTable,
-  outletsTable,
-} from '@/src/db/schema';
-import { and, desc, eq, sql, sum } from 'drizzle-orm';
+import { serverFetch } from '@/lib/server-fetch';
 import { format } from 'date-fns';
 import { id as idLocale } from 'date-fns/locale';
 import { ShoppingBag, CheckCircle2, XCircle, Clock, Bike, Package } from 'lucide-react';
@@ -60,15 +52,10 @@ const STATUS_CONFIG = {
 } as const;
 
 export default async function HistoryOrderPage() {
-  const session = await getSession();
+  const res = await serverFetch('/api/get-customer-history');
+  const data = res.ok ? await res.json() : { success: false, orders: [] };
 
-  const [customer] = await db
-    .select({ id: customersTable.id })
-    .from(customersTable)
-    .where(eq(customersTable.user_id, session.user.id))
-    .limit(1);
-
-  if (!customer) {
+  if (!data.success) {
     return (
       <main className="px-4 md:px-6 pb-12 flex flex-col items-center justify-center min-h-[40vh] gap-3">
         <ShoppingBag className="size-10 text-muted-foreground/40" />
@@ -77,23 +64,14 @@ export default async function HistoryOrderPage() {
     );
   }
 
-  const orders = await db
-    .select({
-      id: ordersTable.id,
-      status: ordersTable.status,
-      createdAt: ordersTable.createdAt,
-      outletName: outletsTable.name,
-      itemCount: sql<number>`COUNT(${orderDetailsTable.id})`.mapWith(Number),
-      totalAmount: sum(
-        sql<number>`CAST(${orderDetailsTable.summary_price} AS NUMERIC)`,
-      ).mapWith(Number),
-    })
-    .from(ordersTable)
-    .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))
-    .leftJoin(orderDetailsTable, eq(orderDetailsTable.order_id, ordersTable.id))
-    .where(eq(ordersTable.customer_id, customer.id))
-    .groupBy(ordersTable.id, outletsTable.name)
-    .orderBy(desc(ordersTable.createdAt));
+  const orders = data.orders as {
+    id: string;
+    status: keyof typeof STATUS_CONFIG;
+    createdAt: string;
+    outletName: string;
+    itemCount: number;
+    totalAmount: number;
+  }[];
 
   return (
     <main className="px-4 md:px-6 pb-12 space-y-6">

@@ -1,11 +1,12 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import path from "node:path";
 import fs from "node:fs/promises";
 import sharp from "sharp";
 import { db } from "../db";
 import {
   adminsTable,
+  productsTable,
   productAdsTable,
   productAdsSchedule,
   scheduleProductAdsTable,
@@ -98,6 +99,78 @@ async function unlinkBanner(app: FastifyInstance, banner_image: string | null | 
 
 export async function adRoutes(app: FastifyInstance) {
   // --- Owner endpoints ---
+
+  // Composed payload for the promote page: the outlet's promotable products +
+  // its ads, each with their schedule days/hours aggregated. { outlet: null }
+  // when the caller has no outlet.
+  app.get("/api/ads/mine", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false });
+
+    const outlet = await getOutletByUserId(session.user.id);
+    if (!outlet) return reply.send({ outlet: null, products: [], ads: [] });
+
+    const products = await db
+      .select({
+        id: productsTable.id,
+        product_name: productsTable.product_name,
+        image: productsTable.image,
+      })
+      .from(productsTable)
+      .where(and(eq(productsTable.outlet_id, outlet.id), isNull(productsTable.deletedAt)));
+
+    const ads = await db
+      .select({
+        id: productAdsTable.id,
+        product_id: productAdsTable.product_id,
+        product_name: productsTable.product_name,
+        title: productAdsTable.title,
+        description: productAdsTable.description,
+        banner_image: productAdsTable.banner_image,
+        status: productAdsTable.status,
+        is_active: productAdsTable.is_active,
+        rejection_reason: productAdsTable.rejection_reason,
+        ends_at: productAdsTable.ends_at,
+      })
+      .from(productAdsTable)
+      .innerJoin(productsTable, eq(productAdsTable.product_id, productsTable.id))
+      .where(eq(productAdsTable.outlet_id, outlet.id))
+      .orderBy(desc(productAdsTable.createdAt));
+
+    const schedules = await db
+      .select({
+        ad_id: productAdsSchedule.productAdsSchedule_id,
+        time: scheduleProductAdsTable.time,
+      })
+      .from(productAdsSchedule)
+      .innerJoin(
+        scheduleProductAdsTable,
+        eq(productAdsSchedule.scheduleProductAdsTable_id, scheduleProductAdsTable.id),
+      );
+
+    const scheduleByAdId = new Map<number, { days: Set<string>; hours: Set<string> }>();
+    for (const { ad_id, time } of schedules) {
+      if (!time) continue;
+      const entry = scheduleByAdId.get(ad_id) ?? { days: new Set(), hours: new Set() };
+      entry.days.add(time.day);
+      entry.hours.add(time.hour);
+      scheduleByAdId.set(ad_id, entry);
+    }
+
+    const adsOut = ads.map((ad) => {
+      const schedule = scheduleByAdId.get(ad.id);
+      return {
+        ...ad,
+        description: ad.description ?? "",
+        rejection_reason: ad.rejection_reason ?? null,
+        ends_at: ad.ends_at ? ad.ends_at.toISOString() : null,
+        schedule_days: schedule ? Array.from(schedule.days) : [],
+        schedule_hours: schedule ? Array.from(schedule.hours).sort() : [],
+      };
+    });
+
+    return reply.send({ outlet: outlet.id, products, ads: adsOut });
+  });
 
   app.post("/api/ads/upload-banner", async (request, reply) => {
     const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
