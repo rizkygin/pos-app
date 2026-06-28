@@ -3,6 +3,8 @@ import { and, asc, count, desc, eq, gte, ilike, inArray, isNull, or, sql, type S
 import { db } from "../db";
 import {
   adminsTable,
+  couriersTable,
+  customersTable,
   outletsTable,
   productsTable,
   productAdsTable,
@@ -405,5 +407,255 @@ export async function adminRoutes(app: FastifyInstance) {
       app.log.error(error, "Failed to update product");
       return reply.status(500).send({ success: false, message: "Failed to update product." });
     }
+  });
+
+  // ---- Manage Courier ----
+  app.get("/api/admin/couriers", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
+    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+
+    const { page = "1", limit = "10", search = "", sortBy = "", sortOrder = "desc" } = request.query as Record<string, string>;
+    const pageNum = Math.max(1, Number(page) || 1);
+    const limitNum = Math.max(1, Number(limit) || 10);
+    const offset = (pageNum - 1) * limitNum;
+
+    const conditions = [isNull(couriersTable.deletedAt)];
+    if (search) {
+      conditions.push(
+        or(
+          ilike(usersTable.name, `%${search}%`),
+          ilike(usersTable.email, `%${search}%`),
+          ilike(couriersTable.vehicle_plate, `%${search}%`),
+        )!,
+      );
+    }
+    const where = and(...conditions);
+
+    const sortMap: Record<string, SQL | any> = {
+      ratings: sql`CAST(${couriersTable.ratings} AS NUMERIC)`,
+      review_count: couriersTable.review_count,
+      created_at: couriersTable.createdAt,
+    };
+    const orderByCol = sortMap[sortBy];
+    const isSortAsc = sortOrder === "asc";
+
+    const [data, countRows] = await Promise.all([
+      db
+        .select({
+          id: couriersTable.id,
+          user_id: couriersTable.user_id,
+          name: usersTable.name,
+          email: usersTable.email,
+          phone: usersTable.phone,
+          avatar: couriersTable.avatar,
+          vehicle_plate: couriersTable.vehicle_plate,
+          vehicle_type: couriersTable.vehicle_type,
+          ratings: couriersTable.ratings,
+          review_count: couriersTable.review_count,
+          created_at: couriersTable.createdAt,
+        })
+        .from(couriersTable)
+        .innerJoin(usersTable, eq(couriersTable.user_id, usersTable.id))
+        .where(where)
+        .orderBy(orderByCol ? (isSortAsc ? asc(orderByCol) : desc(orderByCol)) : desc(couriersTable.createdAt))
+        .limit(limitNum)
+        .offset(offset),
+      db.select({ total: count() }).from(couriersTable).innerJoin(usersTable, eq(couriersTable.user_id, usersTable.id)).where(where),
+    ]);
+
+    return { success: true, data, count: (countRows as any[])[0]?.total ?? 0 };
+  });
+
+  app.post("/api/admin/couriers/update", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
+    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+
+    const { id, vehicle_plate, vehicle_type } = request.body as { id?: number; vehicle_plate?: string; vehicle_type?: "car" | "motorcycle" };
+    if (!id) return reply.status(400).send({ success: false, message: "id is required" });
+
+    await db
+      .update(couriersTable)
+      .set({
+        ...(vehicle_plate !== undefined && { vehicle_plate }),
+        ...(vehicle_type !== undefined && { vehicle_type }),
+      })
+      .where(eq(couriersTable.id, id));
+
+    return reply.send({ success: true, message: "Courier updated." });
+  });
+
+  app.post("/api/admin/couriers/delete", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
+    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+
+    const { id } = request.body as { id?: number };
+    if (!id) return reply.status(400).send({ success: false, message: "id is required" });
+
+    await db.update(couriersTable).set({ deletedAt: new Date() }).where(eq(couriersTable.id, id));
+    return reply.send({ success: true, message: "Courier removed." });
+  });
+
+  // ---- Manage Customer ----
+  app.get("/api/admin/customers", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
+    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+
+    const { page = "1", limit = "10", search = "", sortBy = "", sortOrder = "desc" } = request.query as Record<string, string>;
+    const pageNum = Math.max(1, Number(page) || 1);
+    const limitNum = Math.max(1, Number(limit) || 10);
+    const offset = (pageNum - 1) * limitNum;
+
+    const conditions = [isNull(customersTable.deletedAt)];
+    if (search) {
+      conditions.push(or(ilike(usersTable.name, `%${search}%`), ilike(usersTable.email, `%${search}%`))!);
+    }
+    const where = and(...conditions);
+
+    const sortMap: Record<string, SQL | any> = {
+      ratings: sql`CAST(${customersTable.ratings} AS NUMERIC)`,
+      review_count: customersTable.review_count,
+      created_at: customersTable.createdAt,
+    };
+    const orderByCol = sortMap[sortBy];
+    const isSortAsc = sortOrder === "asc";
+
+    const [data, countRows] = await Promise.all([
+      db
+        .select({
+          id: customersTable.id,
+          user_id: customersTable.user_id,
+          name: usersTable.name,
+          email: usersTable.email,
+          phone: usersTable.phone,
+          image: usersTable.image,
+          ratings: customersTable.ratings,
+          review_count: customersTable.review_count,
+          created_at: customersTable.createdAt,
+        })
+        .from(customersTable)
+        .innerJoin(usersTable, eq(customersTable.user_id, usersTable.id))
+        .where(where)
+        .orderBy(orderByCol ? (isSortAsc ? asc(orderByCol) : desc(orderByCol)) : desc(customersTable.createdAt))
+        .limit(limitNum)
+        .offset(offset),
+      db.select({ total: count() }).from(customersTable).innerJoin(usersTable, eq(customersTable.user_id, usersTable.id)).where(where),
+    ]);
+
+    return { success: true, data, count: (countRows as any[])[0]?.total ?? 0 };
+  });
+
+  app.post("/api/admin/customers/delete", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
+    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+
+    const { id } = request.body as { id?: number };
+    if (!id) return reply.status(400).send({ success: false, message: "id is required" });
+
+    await db.update(customersTable).set({ deletedAt: new Date() }).where(eq(customersTable.id, id));
+    return reply.send({ success: true, message: "Customer removed." });
+  });
+
+  // ---- Manage User ----
+  app.get("/api/admin/users", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
+    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+
+    const { page = "1", limit = "10", search = "", sortBy = "", sortOrder = "desc" } = request.query as Record<string, string>;
+    const pageNum = Math.max(1, Number(page) || 1);
+    const limitNum = Math.max(1, Number(limit) || 10);
+    const offset = (pageNum - 1) * limitNum;
+
+    const conditions = [isNull(usersTable.deletedAt)];
+    if (search) {
+      conditions.push(
+        or(
+          ilike(usersTable.name, `%${search}%`),
+          ilike(usersTable.email, `%${search}%`),
+          ilike(usersTable.phone, `%${search}%`),
+        )!,
+      );
+    }
+    const where = and(...conditions);
+
+    const sortMap: Record<string, SQL | any> = {
+      name: usersTable.name,
+      email: usersTable.email,
+      created_at: usersTable.createdAt,
+    };
+    const orderByCol = sortMap[sortBy];
+    const isSortAsc = sortOrder === "asc";
+
+    // Derived role via correlated existence subqueries on the role tables.
+    // Use the qualified "users"."id" so it isn't shadowed by the subquery tables.
+    const roleExpr = sql<string>`
+      CASE
+        WHEN EXISTS (SELECT 1 FROM admins a WHERE a.user_id = "users"."id") THEN 'admin'
+        WHEN EXISTS (SELECT 1 FROM outlets o WHERE o.user_id = "users"."id") THEN 'owner'
+        WHEN EXISTS (SELECT 1 FROM couriers c WHERE c.user_id = "users"."id") THEN 'courier'
+        WHEN EXISTS (SELECT 1 FROM customers cu WHERE cu.user_id = "users"."id") THEN 'customer'
+        ELSE 'none'
+      END
+    `;
+
+    const [data, countRows] = await Promise.all([
+      db
+        .select({
+          id: usersTable.id,
+          name: usersTable.name,
+          email: usersTable.email,
+          phone: usersTable.phone,
+          address: usersTable.address,
+          image: usersTable.image,
+          emailVerified: usersTable.emailVerified,
+          role: roleExpr,
+          created_at: usersTable.createdAt,
+        })
+        .from(usersTable)
+        .where(where)
+        .orderBy(orderByCol ? (isSortAsc ? asc(orderByCol) : desc(orderByCol)) : desc(usersTable.createdAt))
+        .limit(limitNum)
+        .offset(offset),
+      db.select({ total: count() }).from(usersTable).where(where),
+    ]);
+
+    return { success: true, data, count: (countRows as any[])[0]?.total ?? 0 };
+  });
+
+  app.post("/api/admin/users/update", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
+    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+
+    const { id, name, phone, address } = request.body as { id?: string; name?: string; phone?: string; address?: string };
+    if (!id) return reply.status(400).send({ success: false, message: "id is required" });
+
+    await db
+      .update(usersTable)
+      .set({
+        ...(name !== undefined && { name }),
+        ...(phone !== undefined && { phone }),
+        ...(address !== undefined && { address }),
+      })
+      .where(eq(usersTable.id, id));
+
+    return reply.send({ success: true, message: "User updated." });
+  });
+
+  app.post("/api/admin/users/delete", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
+    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+
+    const { id } = request.body as { id?: string };
+    if (!id) return reply.status(400).send({ success: false, message: "id is required" });
+
+    await db.update(usersTable).set({ deletedAt: new Date() }).where(eq(usersTable.id, id));
+    return reply.send({ success: true, message: "User removed." });
   });
 }
