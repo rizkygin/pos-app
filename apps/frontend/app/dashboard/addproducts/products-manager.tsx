@@ -234,8 +234,8 @@ export const ProductsManager = ({
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size >= 1000000) {
-        alert('Image size must be less than 1MB.');
+      if (file.size >= 5000000) {
+        alert('Image size must be less than 5MB.');
         setImageUrl('');
         return;
       }
@@ -647,7 +647,7 @@ export const ProductsManager = ({
                   Product Image
                 </label>
                 <span className="text-xs text-muted-foreground">
-                  Ukuran File Maksimal 1 MB
+                  Ukuran File Maksimal 5 MB
                 </span>
                 {imageUrl ? (
                   <div className="relative w-full h-48 rounded-xl overflow-hidden border">

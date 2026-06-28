@@ -31,7 +31,8 @@ async function main() {
     methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
   });
 
-  await app.register(multipart);
+  // 6MB cap gives headroom over the 5MB client-side image check.
+  await app.register(multipart, { limits: { fileSize: 6 * 1024 * 1024 } });
 
   // better-auth expects a Web standard Request/Response. Fastify already parses
   // the body off the socket, so we rebuild a Request from request.body instead

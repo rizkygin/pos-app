@@ -15,6 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://ulunpesan.com"),
   title: "POS Gratis",
   description: "Point of Sale Application",
   appleWebApp: {
@@ -22,7 +23,21 @@ export const metadata: Metadata = {
     statusBarStyle: "default",
   },
   icons: {
+    icon: "/icons/icon-512x512.png",
     apple: "/icons/apple-touch-icon.png",
+  },
+  openGraph: {
+    title: "Ulun Pesan",
+    description: "Point of Sale Application",
+    url: "https://ulunpesan.com",
+    siteName: "Ulun Pesan",
+    images: ["/og-image.png"],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Ulun Pesan",
+    description: "Point of Sale Application",
+    images: ["/og-image.png"],
   },
 };
 
