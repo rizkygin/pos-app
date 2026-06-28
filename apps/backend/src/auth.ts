@@ -8,6 +8,16 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 const FROM = "POS App <noreply@yourdomain.com>";
 const isProduction = process.env.NODE_ENV === "production";
 
+// Cookie attributes are env-driven so a production build can still be run over
+// plain HTTP locally (e.g. docker-compose). Defaults preserve prod behaviour.
+// Local override: COOKIE_SECURE=false and COOKIE_DOMAIN= (empty) -> host-only,
+// non-secure cookie that browsers accept on http://localhost.
+const cookieSecure = process.env.COOKIE_SECURE
+  ? process.env.COOKIE_SECURE === "true"
+  : isProduction;
+const cookieDomain =
+  process.env.COOKIE_DOMAIN ?? (isProduction ? ".ulunpesan.com" : undefined);
+
 export const auth = betterAuth({
   database: drizzleAdapter(db, {
     provider: "pg",
@@ -60,11 +70,11 @@ export const auth = betterAuth({
         name: "auth_session",
         attributes: {
           sameSite: "lax",
-          secure: isProduction,
+          secure: cookieSecure,
           path: "/",
           // Same parent domain in prod (frontend on ulunpesan.com, backend on
           // api.ulunpesan.com) so the session cookie is readable by both.
-          ...(isProduction ? { domain: ".ulunpesan.com" } : {}),
+          ...(cookieDomain ? { domain: cookieDomain } : {}),
         },
       },
     },

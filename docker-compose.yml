@@ -1,27 +1,72 @@
 services:
-  nextjs:
+  frontend:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: pos-app2
-    ports:
-      - "30001:3001"
+      args:
+        # NEXT_PUBLIC_* are inlined at build time. localhost:4000 is the backend's
+        # published port, reachable from the host browser (image URLs + client
+        # fetches). NOTE: server-side RSC fetches from inside this container can't
+        # reach the host's localhost — in real deploys the backend has a public
+        # URL reachable from both browser and server, so this is a local-only quirk.
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+        - DATABASE_URL=postgresql://${DATABASE_USER}:${DATABASE_PASSWORD}@db:5432/${DATABASE_NAME}
+        - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
+        - BETTER_AUTH_URL=${BETTER_AUTH_URL}
+        - RESEND_API_KEY=${RESEND_API_KEY}
+    container_name: pos-frontend
+    env_file:
+      - .env
     environment:
+      - NODE_ENV=production
+      # Override PORT=4000 from .env (that's the backend's port) — the standalone
+      # frontend server reads process.env.PORT and must listen on 3000.
+      - PORT=3000
+      - HOSTNAME=0.0.0.0
+      # proxy.ts (Next middleware) hits the DB directly at runtime; reach it over
+      # the compose network, not localhost.
       - DATABASE_URL=postgresql://${DATABASE_USER}:${DATABASE_PASSWORD}@db:5432/${DATABASE_NAME}
-      - REDIS_URL=redis://redis:6379
+    ports:
+      # Standalone server listens on 3000 (Dockerfile EXPOSE 3000).
+      - "3000:3000"
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+
+  backend:
+    build:
+      context: ./apps/backend
+      dockerfile: Dockerfile
+    container_name: pos-backend
+    env_file:
+      - .env
+    environment:
+      # Override the host-oriented DATABASE_URL/PORT from .env so the container
+      # reaches Postgres over the compose network instead of localhost.
+      - DATABASE_URL=postgresql://${DATABASE_USER}:${DATABASE_PASSWORD}@db:5432/${DATABASE_NAME}
+      - PORT=4000
+      # Local-only: the prod build runs over plain HTTP on localhost, so issue a
+      # host-only, non-secure session cookie (else browsers drop the Secure /
+      # .ulunpesan.com cookie and login never persists). Omit both in real deploy.
+      - COOKIE_SECURE=false
+      - COOKIE_DOMAIN=
+    ports:
+      - "4000:4000"
+    depends_on:
+      db:
+        condition: service_healthy
     volumes:
-      - ./app:/app/app
-      - ./pages:/app/pages
-    develop:
-      watch:
-        - action: sync
-          path: ./*
-          target: /app
-        - action: rebuild
-          path: package.json
+      # Persist user uploads (products/ads/avatars) across container restarts.
+      - backend-uploads:/app/uploads
+    healthcheck:
+      # Use 127.0.0.1, not localhost: the server binds IPv4 only, and busybox
+      # wget resolves localhost to IPv6 (::1) first -> false "unhealthy".
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   db:
     image: postgres:latest
@@ -52,3 +97,4 @@ services:
 volumes:
   postgres-data:
   redis-data:
+  backend-uploads:
