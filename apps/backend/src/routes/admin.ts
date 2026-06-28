@@ -779,4 +779,162 @@ export async function adminRoutes(app: FastifyInstance) {
       recentOrders,
     });
   });
+
+  // ---- Manage Order ----
+  app.get("/api/admin/orders", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
+    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+
+    const ORDER_STATUSES = ["pending", "confirmed", "preparing", "ready", "on_delivery", "delivered", "cancelled"] as const;
+    const { page = "1", limit = "10", search = "", status = "", type = "", sortOrder = "desc" } = request.query as Record<string, string>;
+    const pageNum = Math.max(1, Number(page) || 1);
+    const limitNum = Math.max(1, Number(limit) || 10);
+    const offset = (pageNum - 1) * limitNum;
+    const order = sortOrder === "asc" ? asc : desc;
+
+    const customerUser = alias(usersTable, "customer_user");
+    const courierUser = alias(usersTable, "courier_user");
+
+    const conditions: SQL[] = [];
+    if (search) {
+      conditions.push(
+        or(
+          ilike(ordersTable.id, `%${search}%`),
+          ilike(customerUser.name, `%${search}%`),
+          ilike(outletsTable.name, `%${search}%`),
+        )!,
+      );
+    }
+    if (status && (ORDER_STATUSES as readonly string[]).includes(status)) {
+      conditions.push(eq(ordersTable.status, status as (typeof ORDER_STATUSES)[number]));
+    }
+    if (type === "offline") {
+      conditions.push(eq(customerUser.email, OFFLINE_CUSTOMER_EMAIL));
+    } else if (type === "online") {
+      conditions.push(sql`${customerUser.email} != ${OFFLINE_CUSTOMER_EMAIL}`);
+    }
+    const where = conditions.length ? and(...conditions) : undefined;
+
+    const subtotalSubquery = sql<number>`COALESCE((
+      SELECT SUM(CAST(${orderDetailsTable.summary_price} AS NUMERIC))
+      FROM ${orderDetailsTable}
+      WHERE ${orderDetailsTable.order_id} = ${ordersTable.id}
+    ), 0)`.mapWith(Number);
+
+    const [rows, [{ total }]] = await Promise.all([
+      db
+        .select({
+          id: ordersTable.id,
+          status: ordersTable.status,
+          delivery_fee: ordersTable.delivery_fee,
+          discount_amount: ordersTable.discount_amount,
+          created_at: ordersTable.createdAt,
+          outlet_name: outletsTable.name,
+          customer_name: customerUser.name,
+          customer_email: customerUser.email,
+          courier_name: courierUser.name,
+          subtotal: subtotalSubquery,
+        })
+        .from(ordersTable)
+        .innerJoin(customersTable, eq(ordersTable.customer_id, customersTable.id))
+        .innerJoin(customerUser, eq(customersTable.user_id, customerUser.id))
+        .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))
+        .leftJoin(couriersTable, eq(ordersTable.courier_id, couriersTable.id))
+        .leftJoin(courierUser, eq(couriersTable.user_id, courierUser.id))
+        .where(where)
+        .orderBy(order(ordersTable.createdAt))
+        .limit(limitNum)
+        .offset(offset),
+      db
+        .select({ total: count() })
+        .from(ordersTable)
+        .innerJoin(customersTable, eq(ordersTable.customer_id, customersTable.id))
+        .innerJoin(customerUser, eq(customersTable.user_id, customerUser.id))
+        .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))
+        .where(where),
+    ]);
+
+    const data = rows.map((r) => {
+      const subtotal = r.subtotal;
+      const deliveryFee = Number(r.delivery_fee ?? 0);
+      const discount = Number(r.discount_amount ?? 0);
+      return {
+        id: r.id,
+        status: r.status,
+        outlet_name: r.outlet_name,
+        customer_name: r.customer_name,
+        courier_name: r.courier_name,
+        subtotal,
+        delivery_fee: deliveryFee,
+        discount_amount: discount,
+        total_paid: subtotal + deliveryFee - discount,
+        is_offline: r.customer_email === OFFLINE_CUSTOMER_EMAIL,
+        created_at: r.created_at,
+      };
+    });
+
+    return reply.send({ success: true, data, count: total });
+  });
+
+  app.get("/api/admin/orders/:id", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
+    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+
+    const { id: orderId } = request.params as { id: string };
+    const courierUser = alias(usersTable, "courier_user");
+
+    const [order] = await db
+      .select({
+        id: ordersTable.id,
+        status: ordersTable.status,
+        delivery_fee: ordersTable.delivery_fee,
+        discount_amount: ordersTable.discount_amount,
+        note: ordersTable.note,
+        rejected_by: ordersTable.rejected_by,
+        rejected_reason: ordersTable.rejected_reason,
+        scheduled_at: ordersTable.scheduled_at,
+        created_at: ordersTable.createdAt,
+        updated_at: ordersTable.updatedAt,
+        outlet_name: outletsTable.name,
+        outlet_address: outletsTable.address,
+        outlet_phone: outletsTable.phone,
+        customer_name: usersTable.name,
+        customer_email: usersTable.email,
+        customer_phone: usersTable.phone,
+        customer_address: usersTable.address,
+        courier_name: courierUser.name,
+        courier_phone: courierUser.phone,
+        courier_plate: couriersTable.vehicle_plate,
+        courier_vehicle: couriersTable.vehicle_type,
+      })
+      .from(ordersTable)
+      .innerJoin(customersTable, eq(ordersTable.customer_id, customersTable.id))
+      .innerJoin(usersTable, eq(customersTable.user_id, usersTable.id))
+      .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))
+      .leftJoin(couriersTable, eq(ordersTable.courier_id, couriersTable.id))
+      .leftJoin(courierUser, eq(couriersTable.user_id, courierUser.id))
+      .where(eq(ordersTable.id, orderId))
+      .limit(1);
+
+    if (!order) return reply.status(404).send({ success: false, error: "Not found" });
+
+    const items = await db
+      .select({
+        detail_id: orderDetailsTable.id,
+        quantity: orderDetailsTable.quantity,
+        note: orderDetailsTable.note_product,
+        summary_price: orderDetailsTable.summary_price,
+        product_name: productsTable.product_name,
+        price: productsTable.price,
+        category: productsTable.category,
+        unit: productsTable.unit,
+      })
+      .from(orderDetailsTable)
+      .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
+      .where(eq(orderDetailsTable.order_id, orderId));
+
+    return reply.send({ success: true, order, items });
+  });
 }

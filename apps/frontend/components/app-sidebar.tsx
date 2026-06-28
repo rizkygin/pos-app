@@ -35,6 +35,7 @@ import {
   MapPin,
   UserCog,
   Bike,
+  Receipt,
   ClipboardList,
   Star,
   History,
@@ -309,6 +310,13 @@ const adminOutletSubItems = [
 ];
 
 const adminManageNavItems: NavItem[] = [
+  {
+    name: 'Order',
+    url: '/dashboard/admin/order',
+    icon: Receipt,
+    iconBg: 'bg-sky-100 dark:bg-sky-950',
+    iconColor: 'text-sky-600 dark:text-sky-400',
+  },
   {
     name: 'Manage Courier',
     url: '/dashboard/admin/courier',

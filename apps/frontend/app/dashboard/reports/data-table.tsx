@@ -30,6 +30,7 @@ interface DataTableProps<TData, TValue> {
     setPage: (page: number) => void
     setLimit: (limit: number) => void
     count: number
+    onRowClick?: (row: TData) => void
 }
 
 export function DataTable<TData, TValue>({
@@ -39,6 +40,7 @@ export function DataTable<TData, TValue>({
     setPage,
     count,
     limit,
+    onRowClick,
 }: DataTableProps<TData, TValue>) {
     const [sorting, setSorting] = React.useState<SortingState>([])
 
@@ -86,6 +88,8 @@ export function DataTable<TData, TValue>({
                             <TableRow
                                 key={row.id}
                                 data-state={row.getIsSelected() && "selected"}
+                                onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+                                className={onRowClick ? "cursor-pointer hover:bg-muted/50" : undefined}
                             >
                                 {row.getVisibleCells().map((cell) => (
                                     <TableCell key={cell.id}>
