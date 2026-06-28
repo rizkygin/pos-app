@@ -1,13 +1,18 @@
-import { db } from '@/src/db'
-import { account, usersTable } from '@/src/db/schema'
+import { db } from '../db'
+import { account, usersTable } from '../db/schema'
 import { eq } from 'drizzle-orm'
-import { auth } from '@/lib/auth'
+import { auth } from '../auth'
+
+// Dev/maintenance CLI — resets a user's password directly in the DB.
+// Run from apps/backend:  npx tsx src/scripts/reset-password-user.ts <userId> <newPassword>
+// Lives on the backend because that's where the DB + better-auth instance are
+// (the frontend no longer has either).
 
 const userId = process.argv[2]      // first argument
 const newPassword = process.argv[3] // second argument
 
 if (!userId || !newPassword) {
-    console.error('❌ Usage: npx tsx lib/reset-password-user.ts <userId> <newPassword>')
+    console.error('❌ Usage: npx tsx src/scripts/reset-password-user.ts <userId> <newPassword>')
     process.exit(1)
 }
 
@@ -21,7 +26,7 @@ const main = async () => {
         .where(eq(account.userId, userId))
 
     console.log('✅ Password reset successfully for email:', user[0].email)
-    console.log('✅ Hassing Password: ', hashedPassword);
+    console.log('✅ Hashed Password: ', hashedPassword);
     process.exit(0)
 }
 

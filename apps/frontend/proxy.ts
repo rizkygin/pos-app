@@ -1,23 +1,24 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { auth } from '@/lib/auth';
-import { db } from '@/src/db';
-import { adminsTable } from '@/src/db/schema';
-import { eq } from 'drizzle-orm';
+import { API_URL } from '@/lib/api-url';
 
+// Admin gate for /dashboard/admin/*. Decoupled from the DB: the role check goes
+// through the backend /api/me endpoint (cookie forwarded — middleware fetches
+// don't carry credentials automatically). 401 => no session => home; any
+// non-admin role => the regular dashboard.
 export async function proxy(request: NextRequest) {
-  const session = await auth.api.getSession({ headers: request.headers });
+  const cookie = request.headers.get('cookie') ?? '';
+  const res = await fetch(`${API_URL}/api/me`, {
+    headers: { cookie },
+    cache: 'no-store',
+  });
 
-  if (!session) {
+  if (res.status === 401) {
     return NextResponse.redirect(new URL('/', request.url));
   }
 
-  const totalAdmin = await db.$count(
-    adminsTable,
-    eq(adminsTable.user_id, session.user.id),
-  );
-
-  if (totalAdmin === 0) {
+  const me = res.ok ? await res.json() : null;
+  if (me?.role !== 'admin') {
     return NextResponse.redirect(new URL('/dashboard', request.url));
   }
 
