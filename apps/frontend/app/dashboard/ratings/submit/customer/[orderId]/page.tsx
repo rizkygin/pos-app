@@ -1,11 +1,5 @@
 import { redirect } from "next/navigation";
-import { getSession } from "@/lib/auth";
-import { db } from "@/src/db";
-import {
-    couriersTable, customersTable, orderDetailsTable,
-    ordersTable, outletsTable, productsTable, ratingsTable, usersTable,
-} from "@/src/db/schema";
-import { and, eq } from "drizzle-orm";
+import { serverFetch } from "@/lib/server-fetch";
 import { RatingSubmitForm } from "@/components/ratings/rating-submit-form";
 import { submitCustomerRatingAction } from "@/app/dashboard/ratings/actions";
 
@@ -15,56 +9,13 @@ export default async function CustomerRatingPage({
     params: Promise<{ orderId: string }>;
 }) {
     const { orderId } = await params;
-    const session = await getSession();
 
-    const [customer] = await db
-        .select({ id: customersTable.id })
-        .from(customersTable)
-        .where(eq(customersTable.user_id, session.user.id))
-        .limit(1);
-    if (!customer) redirect("/dashboard/order");
-
-    // Fetch order + courier info — only show if order is delivered and belongs to this customer
-    const [order] = await db
-        .select({
-            courierName: usersTable.name,
-            vehicleType: couriersTable.vehicle_type,
-            vehiclePlate: couriersTable.vehicle_plate,
-        })
-        .from(ordersTable)
-        .innerJoin(couriersTable, eq(ordersTable.courier_id, couriersTable.id))
-        .innerJoin(usersTable, eq(couriersTable.user_id, usersTable.id))
-        .where(and(
-            eq(ordersTable.id, orderId),
-            eq(ordersTable.customer_id, customer.id),
-            eq(ordersTable.status, "delivered")
-        ))
-        .limit(1);
-    if (!order) redirect("/dashboard/order");
-
-    // Fetch products in this order
-    const products = await db
-        .select({
-            orderDetailId: orderDetailsTable.id,
-            productId: productsTable.id,
-            name: productsTable.product_name,
-            quantity: orderDetailsTable.quantity,
-        })
-        .from(orderDetailsTable)
-        .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
-        .where(eq(orderDetailsTable.order_id, orderId));
-    if (products.length === 0) redirect("/dashboard/order");
-
-    // Page-level guard: redirect if already rated
-    const [existingRating] = await db
-        .select({ id: ratingsTable.id })
-        .from(ratingsTable)
-        .where(and(
-            eq(ratingsTable.reviewer, session.user.id),
-            eq(ratingsTable.order_details_id, products[0].orderDetailId)
-        ))
-        .limit(1);
-    if (existingRating) redirect("/dashboard/order");
+    // Backend runs the page guards (this customer's delivered order, has products,
+    // not already rated). { ok: false } => redirect.
+    const res = await serverFetch(`/api/ratings/customer-page?orderId=${orderId}`);
+    const data = res.ok ? await res.json() : { ok: false };
+    if (!data.ok) redirect("/dashboard/order");
+    const { order, products } = data;
 
     // Inline server action — captures orderId from closure
     async function handleSubmit(
@@ -85,7 +36,7 @@ export default async function CustomerRatingPage({
                     vehicleType: order.vehicleType === "motorcycle" ? "Motor" : "Mobil",
                     vehiclePlate: order.vehiclePlate,
                 }}
-                products={products.map((p) => ({
+                products={products.map((p: any) => ({
                     id: p.productId,
                     orderDetailId: p.orderDetailId,
                     name: p.name,

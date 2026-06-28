@@ -26,6 +26,128 @@ type SubmitResult =
   | { ok: false; error: "already_rated" | "not_found" | "unknown" };
 
 export async function ratingRoutes(app: FastifyInstance) {
+  // Data for the courier's "rate the customer + outlet" page, with all the
+  // page guards (must be this courier's delivered order, must have details, must
+  // not be already rated). { ok: false } => the page redirects to /dashboard/order.
+  app.get("/api/ratings/courier-page", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ ok: false });
+
+    const { orderId } = request.query as { orderId?: string };
+    if (!orderId) return reply.send({ ok: false });
+
+    const [courier] = await db
+      .select({ id: couriersTable.id })
+      .from(couriersTable)
+      .where(eq(couriersTable.user_id, session.user.id))
+      .limit(1);
+    if (!courier) return reply.send({ ok: false });
+
+    const [order] = await db
+      .select({
+        customerName: usersTable.name,
+        customerPhone: usersTable.phone,
+        outletName: outletsTable.name,
+        outletAddress: outletsTable.address,
+      })
+      .from(ordersTable)
+      .innerJoin(customersTable, eq(ordersTable.customer_id, customersTable.id))
+      .innerJoin(usersTable, eq(customersTable.user_id, usersTable.id))
+      .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))
+      .where(
+        and(
+          eq(ordersTable.id, orderId),
+          eq(ordersTable.courier_id, courier.id),
+          eq(ordersTable.status, "delivered"),
+        ),
+      )
+      .limit(1);
+    if (!order) return reply.send({ ok: false });
+
+    const [firstDetail] = await db
+      .select({ id: orderDetailsTable.id })
+      .from(orderDetailsTable)
+      .where(eq(orderDetailsTable.order_id, orderId))
+      .limit(1);
+    if (!firstDetail) return reply.send({ ok: false });
+
+    const [existingRating] = await db
+      .select({ id: ratingsTable.id })
+      .from(ratingsTable)
+      .where(
+        and(
+          eq(ratingsTable.reviewer, session.user.id),
+          eq(ratingsTable.order_details_id, firstDetail.id),
+        ),
+      )
+      .limit(1);
+    if (existingRating) return reply.send({ ok: false });
+
+    return reply.send({ ok: true, order });
+  });
+
+  // Data for the customer's "rate the courier + products" page, with the same
+  // guard pattern. { ok: false } => the page redirects to /dashboard/order.
+  app.get("/api/ratings/customer-page", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ ok: false });
+
+    const { orderId } = request.query as { orderId?: string };
+    if (!orderId) return reply.send({ ok: false });
+
+    const [customer] = await db
+      .select({ id: customersTable.id })
+      .from(customersTable)
+      .where(eq(customersTable.user_id, session.user.id))
+      .limit(1);
+    if (!customer) return reply.send({ ok: false });
+
+    const [order] = await db
+      .select({
+        courierName: usersTable.name,
+        vehicleType: couriersTable.vehicle_type,
+        vehiclePlate: couriersTable.vehicle_plate,
+      })
+      .from(ordersTable)
+      .innerJoin(couriersTable, eq(ordersTable.courier_id, couriersTable.id))
+      .innerJoin(usersTable, eq(couriersTable.user_id, usersTable.id))
+      .where(
+        and(
+          eq(ordersTable.id, orderId),
+          eq(ordersTable.customer_id, customer.id),
+          eq(ordersTable.status, "delivered"),
+        ),
+      )
+      .limit(1);
+    if (!order) return reply.send({ ok: false });
+
+    const products = await db
+      .select({
+        orderDetailId: orderDetailsTable.id,
+        productId: productsTable.id,
+        name: productsTable.product_name,
+        quantity: orderDetailsTable.quantity,
+      })
+      .from(orderDetailsTable)
+      .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
+      .where(eq(orderDetailsTable.order_id, orderId));
+    if (products.length === 0) return reply.send({ ok: false });
+
+    const [existingRating] = await db
+      .select({ id: ratingsTable.id })
+      .from(ratingsTable)
+      .where(
+        and(
+          eq(ratingsTable.reviewer, session.user.id),
+          eq(ratingsTable.order_details_id, products[0].orderDetailId),
+        ),
+      )
+      .limit(1);
+    if (existingRating) return reply.send({ ok: false });
+
+    return reply.send({ ok: true, order, products });
+  });
+
   // Customer rates the courier + the products for a delivered order
   app.post("/api/ratings/customer", async (request, reply) => {
     const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });

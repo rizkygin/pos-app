@@ -31,6 +31,61 @@ function mapProductRow(row: JoinRow) {
 }
 
 export async function publicRoutes(app: FastifyInstance) {
+  // Public menu for an outlet: the outlet's public info + its available products.
+  // { outlet: null } => the page renders Not Found.
+  app.get("/api/get-menu", async (request) => {
+    const { outlet_id } = request.query as { outlet_id?: string };
+    const id = Number(outlet_id);
+    if (!outlet_id || Number.isNaN(id)) return { outlet: null, products: [] };
+
+    const [outlet] = await db
+      .select({
+        id: outletsTable.id,
+        name: outletsTable.name,
+        address: outletsTable.address,
+        phone: outletsTable.phone,
+        lat: outletsTable.lat,
+        lon: outletsTable.lon,
+        avatar: outletsTable.avatar,
+        tags: outletsTable.tags,
+        is_open: outletsTable.is_open,
+        ratings: outletsTable.ratings,
+        review_count: outletsTable.review_count,
+      })
+      .from(outletsTable)
+      .where(and(eq(outletsTable.id, id), isNull(outletsTable.deletedAt)))
+      .limit(1);
+
+    if (!outlet) return { outlet: null, products: [] };
+
+    const products = await db
+      .select({
+        id: productsTable.id,
+        product_name: productsTable.product_name,
+        price: productsTable.price,
+        price_mark_down: productsTable.price_mark_down,
+        category: productsTable.category,
+        image: productsTable.image,
+        description: productsTable.description,
+        unit: productsTable.unit,
+        ratings: productsTable.ratings,
+        review_count: productsTable.review_count,
+        is_recommended: productsTable.is_recommended,
+        isAvailable: productsTable.isAvailable,
+        discount_percent: productsTable.discount_percent,
+      })
+      .from(productsTable)
+      .where(
+        and(
+          eq(productsTable.outlet_id, id),
+          eq(productsTable.isAvailable, true),
+          isNull(productsTable.deletedAt),
+        ),
+      );
+
+    return { outlet, products };
+  });
+
   app.get("/api/get-all-outlet", async (request) => {
     const { search } = request.query as { search?: string };
 

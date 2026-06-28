@@ -1,22 +1,11 @@
-import { getSession } from '@/lib/auth';
-import { db } from '@/src/db';
-import { adminsTable } from '@/src/db/schema';
-import { eq } from 'drizzle-orm';
+import { getRole } from '@/lib/utils/get-role';
 import Forbidden from '@/lib/forbidden';
 import { Building2 } from 'lucide-react';
 import { OutletsTable } from './outlets-table';
 
 const Page = async () => {
-  const session = await getSession();
-  if (!session) return <Forbidden />;
-
-  const [admin] = await db
-    .select({ id: adminsTable.id })
-    .from(adminsTable)
-    .where(eq(adminsTable.user_id, session.user.id))
-    .limit(1);
-
-  if (!admin) return <Forbidden />;
+  const role = await getRole();
+  if (!role || role.role !== 'admin') return <Forbidden />;
 
   return (
     <main className="px-4 mx-2 md:mx-6 pb-12 space-y-6">
