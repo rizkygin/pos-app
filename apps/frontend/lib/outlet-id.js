@@ -1,19 +1,11 @@
-import { getSession } from "./auth";
-import Forbidden from "./forbidden";
-import { db } from "@/src/db";
-import { eq } from "drizzle-orm";
-import { outletsTable } from "@/src/db/schema";
+import { serverFetch } from "@/lib/server-fetch";
 
-
+// The outlet belonging to the current user, via the backend /api/outlet/me
+// (was a direct DB lookup). Returns null when there is no session / no outlet.
 export default async function getOutletID() {
-    const session = await getSession();
+    const res = await serverFetch("/api/outlet/me");
+    if (!res.ok) return null;
 
-    if (!session || !session.user) {
-        return null;
-    }
-
-    // Find the outlet belonging to this user
-    const outletRes = await db.select().from(outletsTable).where(eq(outletsTable.user_id, session.user.id)).limit(1);
-    const outlet = outletRes[0];
-    return outlet;
+    const data = await res.json();
+    return data?.outlet ?? null;
 }

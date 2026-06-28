@@ -1,71 +1,23 @@
-import { getSession } from "../auth";
-import { db } from "@/src/db";
-import { eq } from "drizzle-orm";
-import { adminsTable, customersTable, couriersTable, outletsTable } from "@/src/db/schema";
-import { count } from "drizzle-orm";
+import { serverFetch } from "@/lib/server-fetch";
 
-
+// Resolves the current user's role + profile via the backend /api/me endpoint
+// (was a direct DB probe). Preserves the previous contract: `{ role, data }`
+// for a recognised role, or `false` when there is no session / no role row.
 export const getRole = async () => {
-    const session = await getSession();
+    const res = await serverFetch("/api/me");
+    if (!res.ok) return false;
 
-    const admin = db.query.adminsTable.findFirst({
-        where: eq(adminsTable.user_id, session.user.id),
-    })
-    const totalAdmin = await db.$count(adminsTable, eq(adminsTable.user_id, session.user.id));
+    const me = await res.json();
+    if (!me?.role) return false;
 
-    if (totalAdmin > 0) {
-        return {
-            role: 'admin',
-            data: admin
-        };
-    }
+    return { role: me.role as "admin" | "customer" | "courier" | "owner", data: me.data };
+};
 
-    const customer = db.query.customersTable.findFirst({
-        where: eq(customersTable.user_id, session.user.id),
-    })
-    const totalCustomer = await db.$count(customersTable, eq(customersTable.user_id, session.user.id));
-
-    if (totalCustomer > 0) {
-        return {
-            role: 'customer',
-            data: customer
-        };
-    }
-
-    const courier = db.query.couriersTable.findFirst({
-        where: eq(couriersTable.user_id, session.user.id),
-    })
-    const totalCourier = await db.$count(couriersTable, eq(couriersTable.user_id, session.user.id));
-
-    if (totalCourier > 0) {
-        return {
-            role: 'courier',
-            data: courier
-        };
-    }
-
-    const outlet = db.query.outletsTable.findFirst({
-        where: eq(outletsTable.user_id, session.user.id),
-    })
-    const totalOutlet = await db.$count(outletsTable, eq(outletsTable.user_id, session.user.id));
-
-    if (totalOutlet > 0) {
-        return {
-            role: 'owner',
-            data: outlet
-        };
-    }
-
-    return false;
-}
-
+// The caller's outlet. Returns `{ result }` (array) to preserve the previous
+// `getOutlet().result[0]` access pattern.
 export const getOutlet = async () => {
-    const session = await getSession();
-    const result = await db.select()
-    .from(outletsTable)
-    .where(eq(outletsTable.user_id, session.user.id))
+    const res = await serverFetch("/api/outlet/me");
+    const data = res.ok ? await res.json() : null;
 
-    return {
-        result
-    }
-}
+    return { result: data?.outlet ? [data.outlet] : [] };
+};
