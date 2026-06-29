@@ -17,6 +17,20 @@ const nextConfig: NextConfig = {
   },
   allowedDevOrigins: ['192.168.1.7', 'breeder-enduring-manpower.ngrok-free.dev'],
   devIndicators: false,
+  experimental: {
+    // The dashboard is auth-gated, so every page is dynamically rendered. By
+    // default `staleTimes.dynamic` is 0, meaning the client router caches dynamic
+    // pages for 0s and refetches/re-renders on every navigation (incl. back/forward)
+    // -> laggy clicks. Caching the rendered segment client-side makes revisits
+    // instant. router.refresh() after mutations still busts the cache for fresh data.
+    staleTimes: {
+      dynamic: 30,
+      static: 180,
+    },
+    // Prefetch the full dynamic page content on hover (not just the shell), so the
+    // first click into a route feels instant too, not only revisits.
+    dynamicOnHover: true,
+  },
 };
 
 export default nextConfig;
