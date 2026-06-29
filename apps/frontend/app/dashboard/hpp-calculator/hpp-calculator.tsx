@@ -21,11 +21,12 @@ function newIngredient(): Ingredient {
     return { id: crypto.randomUUID(), name: "", buyPrice: "", buyQty: "", usedQty: "", unit: "gr" };
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
     return (
-        <div className="space-y-2">
+        <div className="space-y-1.5">
             <p className="text-sm font-bold text-muted-foreground">{label}</p>
             {children}
+            {hint ? <p className="text-[11px] leading-snug text-muted-foreground/80">{hint}</p> : null}
         </div>
     );
 }
@@ -188,7 +189,7 @@ export function HppCalculator() {
                             </div>
 
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                                <Field label="Harga Beli">
+                                <Field label="Harga Beli" hint="Total yang pian bayar saat beli bahan ini. Mis. Rp20.000 untuk 1 kg tepung.">
                                     <div className="relative">
                                         <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground font-medium text-xs">
                                             Rp
@@ -203,8 +204,7 @@ export function HppCalculator() {
                                         />
                                     </div>
                                 </Field>
-                                <Field label="Jumlah Beli">
-                                    <span> contoh : harga beli 1 lusin pita : 12 ribu jumlah beli bisa ditulis dengan 12</span>
+                                <Field label="Jumlah Beli" hint="Isi kemasan yang pian beli, sesuai satuan. Mis. 1000 (gr).">
                                     <Input
                                         type="number"
                                         inputMode="decimal"
@@ -214,7 +214,7 @@ export function HppCalculator() {
                                         className="rounded-xl"
                                     />
                                 </Field>
-                                <Field label="Dipakai/Resep">
+                                <Field label="Dipakai/Resep" hint="Jumlah dipakai untuk 1 resep. Isi 0.5 untuk setengah.">
                                     <Input
                                         type="number"
                                         inputMode="decimal"
@@ -224,7 +224,7 @@ export function HppCalculator() {
                                         className="rounded-xl"
                                     />
                                 </Field>
-                                <Field label="Satuan">
+                                <Field label="Satuan" hint="Satuan bahan: gr, ml, atau pcs.">
                                     <Input
                                         value={ing.unit}
                                         onChange={(e) => updateIngredient(ing.id, "unit", e.target.value)}
