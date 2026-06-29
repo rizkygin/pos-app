@@ -161,7 +161,6 @@ export function CategoryClient({ feature }: { feature: string }) {
     const filteredOutlets = useMemo(() => {
         return all_outlets?.filter((o) => o.features.includes(feature));
     }, [all_outlets, outletSearch, feature]);
-    console.log("[outlets] data:", all_outlets, "filtered:", filteredOutlets)
 
     const recommendedProducts = useMemo(() => {
         if (!recommended_products) return [];

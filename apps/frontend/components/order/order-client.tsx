@@ -98,7 +98,6 @@ export function OrderClient({
       const rest = await fetch(`${API_URL}/api/get-categories?outletId=${_outletId}`);
       if (!rest.ok) throw new Error('Failed to fetch categories');
       const json = await rest.json();
-      console.log(json.data);
 
       return json.data;
     },

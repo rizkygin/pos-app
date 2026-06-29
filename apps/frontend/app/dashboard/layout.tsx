@@ -15,7 +15,6 @@ const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
 
     const session = await getSession();
     if (!session) {
-        console.log(session, "session");
         return <Forbidden />
     }
 

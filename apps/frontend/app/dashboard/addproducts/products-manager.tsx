@@ -167,14 +167,12 @@ export const ProductsManager = ({
       product.image = '/avatar.png';
     } else {
       const result = await checkImageUrlAccessable(product.image);
-      console.log(result)
       if (!result?.success) {
         setImageUrl('');
       } else {
         setImageUrl(product.image);
       }
     }
-    console.log(product.image);
     setHasDiscount(
       !!product.price_mark_down && product.price_mark_down !== '0',
     );
@@ -261,7 +259,6 @@ export const ProductsManager = ({
   };
 
   useEffect(() => {
-    console.log(imageUrl);
     if (initialProducts.length > 0) {
       setView('list');
     } else {

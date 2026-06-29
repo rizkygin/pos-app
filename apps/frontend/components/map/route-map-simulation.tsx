@@ -62,7 +62,6 @@ export function RouteMapSimulation({ pickup, dropoff, className }: Props) {
     fetch(url)
       .then((r) => r.json())
       .then((data) => {
-        console.log(data);
         const coords: [number, number][] = (
           data.routes?.[0]?.geometry?.coordinates ?? []
         ).map(([lon, lat]: [number, number]) => [lat, lon]);
