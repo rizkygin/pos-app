@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/popover';
 import { CalendarIcon } from 'lucide-react';
 import { formatDateInput } from '@/lib/date-calender';
+import { API_URL } from '@/lib/api-url';
 
 type HourlyData = {
   hour: string;
@@ -54,7 +55,8 @@ export default function HourlyOrderChart() {
     setIsLoading(true);
     setError(null);
     fetch(
-      `/api/get-hourly-orders?date=${date}&timezone=${encodeURIComponent(timezone)}`,
+      `${API_URL}/api/get-hourly-orders?date=${date}&timezone=${encodeURIComponent(timezone)}`,
+      { credentials: 'include' },
     )
       .then(async (r) => {
         const j = await r.json();
@@ -62,7 +64,14 @@ export default function HourlyOrderChart() {
           setError(j.error ?? `HTTP ${r.status}`);
           setData(EMPTY_DATA);
         } else {
-          setData(j.data ?? EMPTY_DATA);
+          // Backend returns { hour: 0-23, count, total }; map to the chart's shape.
+          const mapped: HourlyData[] = (j.data ?? []).map(
+            (d: { hour: number; count: number }) => ({
+              hour: `${String(d.hour).padStart(2, '0')}:00`,
+              orders: d.count,
+            }),
+          );
+          setData(mapped.length ? mapped : EMPTY_DATA);
         }
       })
       .catch((e) => {
