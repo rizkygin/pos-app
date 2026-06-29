@@ -46,6 +46,7 @@ import {
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import Image from 'next/image';
 import { authClient, useSession } from '@/lib/auth-client';
 import dynamic from 'next/dynamic';
 import { useCurrentUrl } from '@/hooks/use-current-url';
@@ -397,15 +398,19 @@ export function AppSidebar({
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild className="h-9 gap-2 px-2">
               <Link href="/dashboard">
-                <div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-linear-to-br from-indigo-500 to-violet-600 text-white text-xs font-bold shadow-sm">
-                  P
-                </div>
+                <Image
+                  src="/icons/icon-192x192.png"
+                  alt="Ulun Pesan"
+                  width={28}
+                  height={28}
+                  className="size-7 shrink-0 rounded-md object-cover shadow-sm"
+                />
                 <div className="flex min-w-0 flex-col text-left">
                   <span className="truncate text-[13px] font-semibold leading-none">
                     Ulun Pesan
                   </span>
                   <span className="truncate text-[11px] text-muted-foreground leading-none mt-0.5">
-                    Workspace
+                    Pangkalan Bun Punya
                   </span>
                 </div>
                 <ChevronsUpDown className="ml-auto size-3.5 shrink-0 text-muted-foreground" />
@@ -418,7 +423,7 @@ export function AppSidebar({
       <SidebarContent className="px-2 py-1 gap-0">
         <SidebarGroup className="p-0">
           <SidebarGroupLabel className="px-2 py-1 text-[10px] font-medium uppercase tracking-widest text-muted-foreground/60">
-            Overview
+            FITUR
           </SidebarGroupLabel>
           <SidebarMenu className="gap-1">
             {isAdmin ? (
