@@ -16,10 +16,10 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://ulunpesan.com"),
-  title: "POS Gratis",
-  description: "Point of Sale Application",
+  title: "Ulun Pesan",
+  description: "Believe with the local",
   appleWebApp: {
-    title: "POS Gratis",
+    title: "Ulun Pesan",
     statusBarStyle: "default",
   },
   icons: {
@@ -28,7 +28,7 @@ export const metadata: Metadata = {
   },
   openGraph: {
     title: "Ulun Pesan",
-    description: "Point of Sale Application",
+    description: "Believe with the local",
     url: "https://ulunpesan.com",
     siteName: "Ulun Pesan",
     images: ["/og-image.png"],
@@ -36,7 +36,7 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
     title: "Ulun Pesan",
-    description: "Point of Sale Application",
+    description: "Believe with the local",
     images: ["/og-image.png"],
   },
 };

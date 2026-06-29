@@ -402,7 +402,7 @@ export function AppSidebar({
                 </div>
                 <div className="flex min-w-0 flex-col text-left">
                   <span className="truncate text-[13px] font-semibold leading-none">
-                    POS Gratis Pbun
+                    Ulun Pesan
                   </span>
                   <span className="truncate text-[11px] text-muted-foreground leading-none mt-0.5">
                     Workspace
