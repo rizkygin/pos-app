@@ -286,6 +286,8 @@ export async function ownerRoutes(app: FastifyInstance) {
 
       const filterCond = filter === "all" ? undefined : eq(ratingsTable.reciepent_as, filter as "customer" | "courier" | "outlet" | "product");
 
+      const outletScope = or(eq(ratingsTable.outlet_id, outlet.id), eq(productsTable.outlet_id, outlet.id));
+
       const [rows, summaryRows, countRows] = await Promise.all([
         db
           .select({
@@ -300,32 +302,40 @@ export async function ownerRoutes(app: FastifyInstance) {
           .from(ratingsTable)
           .leftJoin(usersTable, eq(ratingsTable.reviewer, usersTable.id))
           .leftJoin(productsTable, eq(ratingsTable.product_id, productsTable.id))
-          .where(and(or(eq(ratingsTable.outlet_id, outlet.id), eq(productsTable.outlet_id, outlet.id)), filterCond))
+          .where(and(outletScope, filterCond))
           .orderBy(desc(ratingsTable.createdAt))
           .limit(PAGE_SIZE)
           .offset(offset),
 
+        // Summary is split per recipient (outlet vs product) and ignores the tab
+        // filter, so the two summary cards always reflect totals across all ratings.
         db
-          .select({ rating: ratingsTable.ratings, count: count() })
+          .select({ reciepent_as: ratingsTable.reciepent_as, rating: ratingsTable.ratings, count: count() })
           .from(ratingsTable)
-          .leftJoin(usersTable, eq(ratingsTable.reviewer, usersTable.id))
           .leftJoin(productsTable, eq(ratingsTable.product_id, productsTable.id))
-          .where(and(or(eq(ratingsTable.outlet_id, outlet.id), eq(productsTable.outlet_id, outlet.id)), filterCond))
-          .groupBy(ratingsTable.ratings),
+          .where(outletScope)
+          .groupBy(ratingsTable.reciepent_as, ratingsTable.ratings),
 
         db
           .select({ count: count() })
           .from(ratingsTable)
           .leftJoin(productsTable, eq(ratingsTable.product_id, productsTable.id))
-          .where(and(or(eq(ratingsTable.outlet_id, outlet.id), eq(productsTable.outlet_id, outlet.id)), filterCond)),
+          .where(and(outletScope, filterCond)),
       ]);
 
-      const summary = [5, 4, 3, 2, 1].map((star) => ({
-        star,
-        count: (summaryRows as any[]).find((r: any) => Math.round(Number(r.rating)) === star)?.count ?? 0,
-      }));
+      const buildSection = (kind: "outlet" | "product") => {
+        const dist = [5, 4, 3, 2, 1].map((star) => ({
+          star,
+          count: (summaryRows as any[])
+            .filter((r: any) => r.reciepent_as === kind && Math.round(Number(r.rating)) === star)
+            .reduce((a: number, r: any) => a + Number(r.count), 0),
+        }));
+        const sectionCount = dist.reduce((a, d) => a + d.count, 0);
+        const avg = sectionCount > 0 ? dist.reduce((a, d) => a + d.star * d.count, 0) / sectionCount : 0;
+        return { avg: Number(avg.toFixed(2)), count: sectionCount, dist };
+      };
+
       const totalCount = (countRows as any[])[0]?.count ?? 0;
-      const avg = totalCount > 0 ? summary.reduce((a, s) => a + s.star * s.count, 0) / totalCount : 0;
 
       return {
         success: true,
@@ -338,10 +348,10 @@ export async function ownerRoutes(app: FastifyInstance) {
           reviewer_name: r.reviewer_name ?? "Anonim",
           product_name: r.product_name ?? null,
         })),
-        summary,
-        avg: Number(avg.toFixed(2)),
+        summary: { outlet: buildSection("outlet"), product: buildSection("product") },
         total: totalCount,
         page: pageNum,
+        totalPages: Math.ceil(totalCount / PAGE_SIZE),
       };
     } catch (error) {
       return reply.status(500).send({ success: false, error: String(error) });
