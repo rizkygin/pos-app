@@ -1,8 +1,10 @@
 "use client";
 import { useState } from "react";
+import Image from "next/image";
 import { motion, AnimatePresence } from "motion/react";
 import { Eye, EyeOff } from "lucide-react";
 import { authClient } from "@/lib/auth-client";
+import { AboutUlunPesan } from "@/components/about-ulun-pesan";
 
 export default function Home() {
   const [isLogin, setIsLogin] = useState(true);
@@ -51,6 +53,10 @@ export default function Home() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background overflow-hidden relative">
       {/* Background Decor */}
+
+      {/* About / "Tentang Ulun Pesan" overlay trigger + modal */}
+      <AboutUlunPesan />
+
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-gradient-to-br from-indigo-500/20 to-blue-500/20 blur-[120px] rounded-full pointer-events-none" />
       <motion.div
         initial={{ opacity: 0, y: 20 }}
@@ -60,6 +66,22 @@ export default function Home() {
       >
         <div className="backdrop-blur-xl bg-foreground dark:bg-black/40 border border-white/10 dark:border-white/10 shadow-2xl rounded-3xl p-8 overflow-hidden">
           <div className="mb-8 text-center">
+            <motion.div
+              layout
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.6, ease: "easeOut" }}
+              className="mx-auto mb-4 flex h-20 w-20 items-center justify-center overflow-hidden rounded-2xl bg-white/10 ring-1 ring-white/15 shadow-lg"
+            >
+              <Image
+                src="/icons/icon-192x192.png"
+                alt="Ulun Pesan"
+                width={80}
+                height={80}
+                priority
+                className="h-full w-full object-contain"
+              />
+            </motion.div>
             <motion.h1
               layout
               className="text-3xl font-semibold tracking-tight text-white mb-2"
@@ -105,7 +127,7 @@ export default function Home() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="w-full px-4 py-3 rounded-2xl bg-white/5 border border-white/10 text-white placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all font-medium"
-                placeholder="Email Sampian"
+                placeholder="Email Pian"
                 required
               />
             </motion.div>
@@ -168,6 +190,7 @@ export default function Home() {
               {isLogin ? "Daftar" : "Login"}
             </button>
           </motion.div>
+
         </div>
       </motion.div>
     </div>
