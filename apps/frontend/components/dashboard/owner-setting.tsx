@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { FEATURES } from "@/lib/feature-categories";
 import { ORDER_FEATURES } from "@/lib/order-features";
 import { API_URL } from "@/lib/api-url";
+import { resolveOutletImage, isBackendImage } from "@/lib/image-src";
 
 const FEATURE_META = ORDER_FEATURES;
 
@@ -87,11 +88,7 @@ export function OwnerSetting() {
             .finally(() => setLoading(false));
     }, []);
 
-    const avatarSrc = avatar.startsWith("http")
-        ? avatar
-        : avatar.startsWith("/uploads/")
-            ? `${API_URL}${avatar}`
-            : `/${avatar.replace(/^\//, "")}`;
+    const avatarSrc = resolveOutletImage(avatar);
 
     function handleGetLocation() {
         setLocating(true);
@@ -197,7 +194,7 @@ export function OwnerSetting() {
                             alt="Avatar outlet"
                             fill
                             className="object-cover"
-                            unoptimized={avatar.startsWith("/uploads/")}
+                            unoptimized={isBackendImage(avatar)}
                         />
                         {uploading && (
                             <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
