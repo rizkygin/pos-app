@@ -401,7 +401,7 @@ export async function ownerRoutes(app: FastifyInstance) {
 
       const rows = await db
         .select({
-          hour: sql<number>`extract(hour from ${orderDetailsTable.created_at} at time zone '${timezone}')::int`,
+          hour: sql<number>`extract(hour from ${orderDetailsTable.created_at} at time zone ${timezone})::int`,
           count: sql<number>`count(distinct ${orderDetailsTable.order_id})`,
           total: sql<number>`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric)), 0)`,
         })
@@ -414,8 +414,8 @@ export async function ownerRoutes(app: FastifyInstance) {
             lt(orderDetailsTable.created_at, endUTC),
           ),
         )
-        .groupBy(sql`extract(hour from ${orderDetailsTable.created_at} at time zone '${timezone}')`)
-        .orderBy(sql`extract(hour from ${orderDetailsTable.created_at} at time zone '${timezone}')`);
+        .groupBy(sql`extract(hour from ${orderDetailsTable.created_at} at time zone ${timezone})`)
+        .orderBy(sql`extract(hour from ${orderDetailsTable.created_at} at time zone ${timezone})`);
 
       const hourlyData = Array.from({ length: 24 }, (_, i) => ({
         hour: i,
