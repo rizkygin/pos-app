@@ -2,9 +2,9 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "POS Gratis",
-    short_name: "POS Gratis",
-    description: "Point of Sale Application",
+    name: "Ulun Pesan",
+    short_name: "Ulun Pesan",
+    description: "Believe with the local",
     start_url: "/",
     display: "standalone",
     background_color: "#ffffff",
