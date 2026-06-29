@@ -6,7 +6,7 @@ import { driver } from "driver.js";
 import "driver.js/dist/driver.css";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { formatCurrency } from "@/lib/utils/format";
+import { formatCurrency, formatNumberInput, parseNumberInput } from "@/lib/utils/format";
 
 type Ingredient = {
     id: string;
@@ -134,7 +134,7 @@ export function HppCalculator() {
     };
 
     return (
-        <div className="space-y-8 max-w-2xl">
+        <div className="space-y-8 max-w-2xl m-5">
             {/* Header */}
             <div className="flex items-start justify-between gap-3">
                 <div>
@@ -194,16 +194,17 @@ export function HppCalculator() {
                                             Rp
                                         </span>
                                         <Input
-                                            type="number"
-                                            inputMode="decimal"
-                                            value={ing.buyPrice}
-                                            onChange={(e) => updateIngredient(ing.id, "buyPrice", e.target.value)}
-                                            placeholder="20000"
+                                            type="text"
+                                            inputMode="numeric"
+                                            value={formatNumberInput(ing.buyPrice)}
+                                            onChange={(e) => updateIngredient(ing.id, "buyPrice", parseNumberInput(e.target.value))}
+                                            placeholder="20.000"
                                             className="rounded-xl pl-9"
                                         />
                                     </div>
                                 </Field>
                                 <Field label="Jumlah Beli">
+                                    <span> contoh : harga beli 1 lusin pita : 12 ribu jumlah beli bisa ditulis dengan 12</span>
                                     <Input
                                         type="number"
                                         inputMode="decimal"
@@ -261,10 +262,10 @@ export function HppCalculator() {
                                 Rp
                             </span>
                             <Input
-                                type="number"
-                                inputMode="decimal"
-                                value={extraCost}
-                                onChange={(e) => setExtraCost(e.target.value)}
+                                type="text"
+                                inputMode="numeric"
+                                value={formatNumberInput(extraCost)}
+                                onChange={(e) => setExtraCost(parseNumberInput(e.target.value))}
                                 placeholder="0"
                                 className="rounded-xl pl-9"
                             />
