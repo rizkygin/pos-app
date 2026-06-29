@@ -414,8 +414,12 @@ export async function ownerRoutes(app: FastifyInstance) {
             lt(orderDetailsTable.created_at, endUTC),
           ),
         )
-        .groupBy(sql`extract(hour from ${orderDetailsTable.created_at} at time zone ${timezone})`)
-        .orderBy(sql`extract(hour from ${orderDetailsTable.created_at} at time zone ${timezone})`);
+        // Group/order by the SELECT's first output column (the hour expression).
+        // Repeating the expression would emit a separate $-param for the timezone
+        // each time, so Postgres wouldn't treat them as the same grouped expression
+        // ("must appear in the GROUP BY clause").
+        .groupBy(sql`1`)
+        .orderBy(sql`1`);
 
       const hourlyData = Array.from({ length: 24 }, (_, i) => ({
         hour: i,
