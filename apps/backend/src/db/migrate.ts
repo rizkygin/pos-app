@@ -1,5 +1,7 @@
 // src/db/migrate.ts
-import 'dotenv/config';
+import { config } from 'dotenv';
+config({ path: '.env' });
+config({ path: '../../.env' });
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Pool } from 'pg';

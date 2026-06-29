@@ -563,6 +563,13 @@ export function AppSidebar({
               </div>
             </div>
             <div className="h-px bg-border mb-1" />
+            <Link
+              href="/dashboard/user"
+              className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-[13px] text-foreground hover:bg-accent transition-colors"
+            >
+              <UserCog className="size-3.5" />
+              User Setting
+            </Link>
             <button
               onClick={signOut}
               className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-[13px] text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors"
