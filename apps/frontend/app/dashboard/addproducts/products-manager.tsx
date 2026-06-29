@@ -35,6 +35,7 @@ import {
   removeOnDatabase,
 } from './actions';
 import Image from 'next/image';
+import { useRouter } from 'next/navigation';
 import { DashboardHeader } from '@/components/dashboard-header';
 import { ORDER_FEATURES } from '@/lib/order-features';
 import { resolveProductImage, isBackendImage } from '@/lib/image-src';
@@ -70,6 +71,7 @@ export const ProductsManager = ({
   outletId,
   initialProducts,
 }: ProductsManagerProps) => {
+  const router = useRouter();
   const [view, setView] = useState<'list' | 'category' | 'form'>('list');
   const [selectedCategory, setSelectedCategory] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -131,6 +133,7 @@ export const ProductsManager = ({
     }
 
     setIsSubmitting(false);
+    
 
     if (result.success) {
       // Reset and go back to list
@@ -146,6 +149,8 @@ export const ProductsManager = ({
       setEditingProductId(null);
       setSelectedFeatures([]);
       setView('list');
+      // Re-run the server component so the list reflects the new/edited product.
+      router.refresh();
     } else {
       alert(result.message);
     }
@@ -194,7 +199,10 @@ export const ProductsManager = ({
     setIsSubmitting(false);
     if (!result.success) {
       alert(result.message);
+      return;
     }
+    // Re-run the server component so the deleted product drops off the list.
+    router.refresh();
   };
 
   //handle Image Upload
