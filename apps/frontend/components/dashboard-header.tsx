@@ -22,24 +22,6 @@ export function DashboardHeader({ title }: DashboardHeaderProps) {
                 <h1 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
                     {title}
                 </h1>
-
-                {/* <div className="flex items-center gap-2">
-                    <div className="hidden items-center gap-2 rounded-lg border bg-background/50 px-3 py-1.5 text-sm font-medium text-muted-foreground lg:flex">
-                        <CalendarIcon className="h-4 w-4" />
-                        <span className="text-[10px] uppercase tracking-wider">{today}</span>
-                    </div>
-
-                    <Button variant="outline" size="icon" className="relative group">
-                        <Bell className="h-4 w-4 transition-transform group-hover:rotate-12" />
-                        <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-blue-600 ring-2 ring-background" />
-                        <span className="sr-only">Notifications</span>
-                    </Button>
-
-                    <Button variant="ghost" size="icon" className="rounded-full border border-muted bg-background/50">
-                        <User className="h-4 w-4" />
-                        <span className="sr-only">Profile</span>
-                    </Button>
-                </div> */}
             </div>
         </header>
     );

@@ -284,7 +284,7 @@ export const OwnerDashboard = ({
                 color: 'text-amber-600',
                 bg: 'bg-amber-50',
                 border: 'border-amber-100',
-                href: '/dashboard/users',
+                href: '/dashboard/user',
               },
               {
                 name: 'Settings',
@@ -317,12 +317,12 @@ export const OwnerDashboard = ({
 
       {/* Mobile Quick Actions Bottom Nav */}
       <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 border-t bg-background/95 backdrop-blur-sm">
-        <div className="flex items-center justify-around">
+        <div className="flex items-center justify-around ">
           {[
             { name: 'Add Product', icon: ShoppingBag, color: 'text-blue-600', href: '/dashboard/addproducts' },
             { name: 'Reports', icon: TrendingUp, color: 'text-purple-600', href: '/dashboard/reports' },
-            { name: 'Users', icon: User, color: 'text-amber-600', href: '/dashboard/users' },
-            { name: 'Settings', icon: Layers, color: 'text-rose-600', href: '/dashboard/settings' },
+            { name: 'Users', icon: User, color: 'text-amber-600', href: '/dashboard/user' },
+            { name: 'Settings', icon: Layers, color: 'text-rose-600', href: '/dashboard/setting' },
           ].map((action, i) => (
             <Link
               key={i}

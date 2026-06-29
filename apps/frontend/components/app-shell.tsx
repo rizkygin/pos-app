@@ -11,7 +11,7 @@ export function AppShell({ children, variant = 'header' }: Props) {
 
     if (variant === 'header') {
         return (
-            <div className="flex min-h-screen w-full flex-col">{children}</div>
+            <div className="flex min-h-screen w-full flex-col bg-linear-to-br from-purple-500 via-green-500 to-orange-500">{children}</div>
         );
     }
 

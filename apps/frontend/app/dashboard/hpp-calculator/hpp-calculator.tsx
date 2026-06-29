@@ -214,7 +214,7 @@ export function HppCalculator() {
                                         className="rounded-xl"
                                     />
                                 </Field>
-                                <Field label="Dipakai/Resep" hint="Jumlah dipakai untuk 1 resep. Isi 0.5 untuk setengah.">
+                                <Field label="Dipakai/Resep" hint="Jumlah dipakai untuk 1 resep. Mis. 150 (gr)">
                                     <Input
                                         type="number"
                                         inputMode="decimal"

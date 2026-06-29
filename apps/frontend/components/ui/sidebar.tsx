@@ -271,8 +271,8 @@ function SidebarTrigger({
       {...props}
     >
       {/* Hamburger (triple strip) on mobile, panel toggle on desktop. */}
-      <Menu className="md:hidden" />
-      <PanelLeftIcon className="hidden md:block" />
+      <Menu className="md:hidden text-white" />
+      <PanelLeftIcon className="hidden md:block text-white" />
       <span className="sr-only">Toggle Sidebar</span>
     </Button>
   )
