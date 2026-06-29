@@ -42,3 +42,6 @@ next-env.d.ts
 
 # backend-owned upload storage (local dev only; persistent volume in prod)
 apps/backend/uploads/
+
+# local backups & DB dumps (sensitive — never commit)
+/backups/

@@ -39,10 +39,10 @@ RUN rm -f package-lock.json && npm install --omit=dev
 COPY --from=builder /app/dist ./dist
 COPY drizzle ./drizzle
 
-# Uploads are written to process.cwd()/uploads — declare it as a volume so user
-# uploads survive container restarts/redeploys.
+# Uploads are written to process.cwd()/uploads. For persistence, mount a volume
+# at /app/uploads — Railway's builder rejects a Dockerfile VOLUME instruction, so
+# persistence is configured at the platform (Railway Volume / compose volume).
 RUN mkdir -p uploads
-VOLUME ["/app/uploads"]
 
 EXPOSE 4000
 

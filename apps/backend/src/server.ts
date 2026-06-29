@@ -20,13 +20,40 @@ import { meRoutes } from "./routes/me";
 import { dashboardRoutes } from "./routes/dashboard";
 
 const PORT = Number(process.env.PORT ?? 4000);
+// FRONTEND_ORIGIN accepts a comma-separated list so apex + www (and any extra
+// origins) are all allowed. @fastify/cors reflects whichever request origin is
+// in the list, which credentialed (cookie) requests require.
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN ?? "http://localhost:3000";
+const ALLOWED_ORIGINS = FRONTEND_ORIGIN.split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
 
 async function main() {
   const app = Fastify({ logger: true });
 
+  // Fastify's default JSON parser rejects an empty body with a 400 when
+  // Content-Type: application/json is set. better-auth's sign-out POST does
+  // exactly that (json content-type, no body), so sign-out was 400ing and the
+  // cookie-clearing Set-Cookie never reached the browser. Treat an empty body
+  // as undefined so those requests pass through to the handler.
+  app.addContentTypeParser(
+    "application/json",
+    { parseAs: "string" },
+    (_req, body, done) => {
+      const text = body as string;
+      if (text === "" || text == null) return done(null, undefined);
+      try {
+        done(null, JSON.parse(text));
+      } catch {
+        const err = new Error("Invalid JSON body") as Error & { statusCode: number };
+        err.statusCode = 400;
+        done(err, undefined);
+      }
+    }
+  );
+
   await app.register(cors, {
-    origin: FRONTEND_ORIGIN,
+    origin: ALLOWED_ORIGINS,
     credentials: true,
     methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
   });
@@ -75,7 +102,11 @@ async function main() {
 
   app.get("/health", async () => ({ ok: true }));
 
-  await app.listen({ port: PORT, host: "0.0.0.0" });
+  // Bind IPv6 "::" (dual-stack) so the server is reachable both over Railway's
+  // private network (IPv6-only, e.g. backend.railway.internal) AND the public
+  // edge (IPv4-mapped, e.g. api.ulunpesan.com). "0.0.0.0" would be IPv4-only and
+  // unreachable on the private network.
+  await app.listen({ port: PORT, host: "::" });
 }
 
 main().catch((err) => {
