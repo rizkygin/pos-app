@@ -10,9 +10,14 @@ export default async function CashierPage() {
         return <Forbidden />;
     }
 
-    // Outlet + its products in one backend call.
+    // Outlet + its products in one backend call. /api/products/mine returns ALL
+    // products (incl. inventory-only); the cashier only sells customer-facing
+    // items, so drop anything flagged not-for-sale.
     const res = await serverFetch("/api/products/mine");
     const { outlet, products } = res.ok ? await res.json() : { outlet: null, products: [] };
+    const sellableProducts = (products ?? []).filter(
+        (p: { is_for_sale?: boolean }) => p.is_for_sale !== false,
+    );
 
     if (!outlet) {
         return (
@@ -33,7 +38,7 @@ export default async function CashierPage() {
                 outletAddress={outlet.address}
                 outletPhone={outlet.phone}
                 cashierName={session.user.name ?? "Cashier"}
-                initialProducts={products}
+                initialProducts={sellableProducts}
             />
         </main>
     );

@@ -52,6 +52,8 @@ type Product = {
   description: string | null;
   unit: string;
   features: string[];
+  is_for_sale: boolean;
+  track_stock: boolean;
 };
 
 type ProductsManagerProps = {
@@ -79,6 +81,8 @@ export const ProductsManager = ({
   const [imageUrl, setImageUrl] = useState<string>('');
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [selectedFeatures, setSelectedFeatures] = useState<string[]>([]);
+  const [isForSale, setIsForSale] = useState(true);
+  const [trackStock, setTrackStock] = useState(true);
   const [shareOpen, setShareOpen] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -94,6 +98,8 @@ export const ProductsManager = ({
 
   const handleCategorySelect = (category: string) => {
     setSelectedCategory(category);
+    setIsForSale(true);
+    setTrackStock(true);
     setView('form');
   };
 
@@ -121,6 +127,8 @@ export const ProductsManager = ({
         category: selectedCategory,
         image: imageUrl,
         features: selectedFeatures,
+        is_for_sale: isForSale,
+        track_stock: trackStock,
       });
     } else {
       result = await addProductAction({
@@ -129,6 +137,8 @@ export const ProductsManager = ({
         outlet_id: outletId,
         image: imageUrl,
         features: selectedFeatures,
+        is_for_sale: isForSale,
+        track_stock: trackStock,
       });
     }
 
@@ -177,6 +187,8 @@ export const ProductsManager = ({
       !!product.price_mark_down && product.price_mark_down !== '0',
     );
     setSelectedFeatures(product.features ?? []);
+    setIsForSale(product.is_for_sale ?? true);
+    setTrackStock(product.track_stock ?? true);
     setEditingProductId(product.id);
     setSelectedCategory(product.category);
     setFormData({
@@ -600,6 +612,82 @@ export const ProductsManager = ({
                   className="flex min-h-[100px] w-full rounded-xl border border-input bg-transparent px-4 py-3 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 resize-none"
                   placeholder="Describe your product..."
                 />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-bold flex items-center gap-2">
+                  <Layers className="h-4 w-4 text-muted-foreground" />
+                  Jual ke pelanggan
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setIsForSale((v) => !v)}
+                  className={`flex w-full items-center justify-between rounded-xl border-2 px-4 py-3 text-left transition-colors ${
+                    isForSale
+                      ? 'border-teal-500 bg-teal-50 dark:bg-teal-950/30'
+                      : 'border-border bg-muted/30'
+                  }`}
+                >
+                  <span>
+                    <span className="block text-sm font-semibold">
+                      {isForSale ? 'Dijual ke pelanggan' : 'Hanya inventaris'}
+                    </span>
+                    <span className="block text-xs text-muted-foreground">
+                      {isForSale
+                        ? 'Produk tampil di menu pelanggan.'
+                        : 'Disembunyikan dari menu pelanggan; hanya untuk stok & faktur.'}
+                    </span>
+                  </span>
+                  <span
+                    className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                      isForSale ? 'bg-teal-600' : 'bg-zinc-300 dark:bg-zinc-700'
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-0.5 size-5 rounded-full bg-white shadow transition-all ${
+                        isForSale ? 'left-[22px]' : 'left-0.5'
+                      }`}
+                    />
+                  </span>
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-bold flex items-center gap-2">
+                  <Layers className="h-4 w-4 text-muted-foreground" />
+                  Kelola stok
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setTrackStock((v) => !v)}
+                  className={`flex w-full items-center justify-between rounded-xl border-2 px-4 py-3 text-left transition-colors ${
+                    trackStock
+                      ? 'border-teal-500 bg-teal-50 dark:bg-teal-950/30'
+                      : 'border-border bg-muted/30'
+                  }`}
+                >
+                  <span>
+                    <span className="block text-sm font-semibold">
+                      {trackStock ? 'Punya stok sendiri' : 'Tanpa stok (resep/jasa)'}
+                    </span>
+                    <span className="block text-xs text-muted-foreground">
+                      {trackStock
+                        ? 'Stok bertambah/berkurang lewat faktur & opname.'
+                        : 'Produk olahan dari bahan, atau jasa — tidak dihitung stoknya.'}
+                    </span>
+                  </span>
+                  <span
+                    className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                      trackStock ? 'bg-teal-600' : 'bg-zinc-300 dark:bg-zinc-700'
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-0.5 size-5 rounded-full bg-white shadow transition-all ${
+                        trackStock ? 'left-[22px]' : 'left-0.5'
+                      }`}
+                    />
+                  </span>
+                </button>
               </div>
 
               <div className="space-y-3">

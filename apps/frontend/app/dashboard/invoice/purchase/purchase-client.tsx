@@ -1,62 +1,47 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import {
-  ShoppingBag,
-  Plus,
-  Trash2,
-  Loader2,
-  ArrowLeft,
-  CheckCircle2,
-  Wallet,
-  Ban,
-} from "lucide-react";
+import { ShoppingBag, Plus, Trash2, Loader2, ArrowLeft, CheckCircle2, Wallet, Ban, Printer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DataTable } from "@/app/dashboard/reports/data-table";
 import { API_URL } from "@/lib/api-url";
+import {
+  getPurchaseColumns,
+  type PurchaseRow,
+  PURCHASE_STATUS_STYLE,
+  PURCHASE_STATUS_LABEL,
+} from "./columns";
 
-type InvoiceRow = {
-  id: number;
-  number: string;
-  status: "draft" | "posted" | "partial" | "paid" | "void";
-  supplier_name: string | null;
-  party_name: string | null;
-  issue_date: string;
-  due_date: string | null;
-  total: string;
-  amount_paid: string;
-};
 type Supplier = { id: number; name: string };
 type Product = { id: string; product_name: string; price: string; buying_price: string };
 type LineItem = { product_id: string; description: string; quantity: string; unit_price: string };
+type DetailItem = { id: number; description: string; quantity: string; unit_price: string; line_total: string };
+type DetailInvoice = PurchaseRow & {
+  subtotal: string;
+  tax_rate: string;
+  tax_amount: string;
+  discount: string;
+  notes: string | null;
+  items: DetailItem[];
+};
 
 const rupiah = (v: number | string) =>
   new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(
     Number(v) || 0,
   );
 
-const STATUS_STYLE: Record<InvoiceRow["status"], string> = {
-  draft: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300",
-  posted: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
-  partial: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
-  paid: "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300",
-  void: "bg-red-100 text-red-600 line-through dark:bg-red-950 dark:text-red-300",
-};
-const STATUS_LABEL: Record<InvoiceRow["status"], string> = {
-  draft: "Draft",
-  posted: "Diposting",
-  partial: "Sebagian",
-  paid: "Lunas",
-  void: "Batal",
-};
-
 const emptyItem: LineItem = { product_id: "", description: "", quantity: "1", unit_price: "0" };
 
 export function PurchaseClient() {
-  const [view, setView] = useState<"list" | "create">("list");
-  const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
+  const [view, setView] = useState<"list" | "create" | "detail">("list");
+  const [invoices, setInvoices] = useState<PurchaseRow[]>([]);
+  const [detail, setDetail] = useState<DetailInvoice | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(10);
 
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -179,10 +164,158 @@ export function PurchaseClient() {
         body: "{}",
       });
       await fetchInvoices();
+      if (view === "detail" && detail?.id === id) await openDetail(detail);
     } finally {
       setBusyId(null);
     }
   };
+
+  // Opens a read-only detail of one invoice. Takes the list row so the supplier
+  // name (joined in the list query, not the detail one) carries over.
+  const openDetail = async (row: PurchaseRow) => {
+    setView("detail");
+    setDetailLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/purchase-invoices/${row.id}`, { credentials: "include" });
+      const json = await res.json();
+      if (json.success) setDetail({ ...json.data, supplier_name: row.supplier_name });
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  // ===================================================================== detail
+  if (view === "detail") {
+    return (
+      <div className="p-4 md:p-6 space-y-5">
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => {
+              setDetail(null);
+              setView("list");
+            }}
+          >
+            <ArrowLeft className="size-4" />
+          </Button>
+          <h1 className="text-xl font-semibold tracking-tight">Detail Faktur Pembelian</h1>
+        </div>
+
+        {detailLoading || !detail ? (
+          <div className="flex items-center justify-center py-16 text-muted-foreground">
+            <Loader2 className="size-5 animate-spin" />
+          </div>
+        ) : (
+          <div className="mx-auto max-w-2xl space-y-5">
+            <div className="flex items-start justify-between rounded-xl border bg-card p-4">
+              <div className="space-y-0.5">
+                <p className="font-mono text-sm font-semibold">{detail.number}</p>
+                <p className="text-xs text-muted-foreground">
+                  Supplier: {detail.supplier_name || detail.party_name || "—"}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Jatuh tempo:{" "}
+                  {detail.due_date ? new Date(detail.due_date).toLocaleDateString("id-ID") : "—"}
+                </p>
+              </div>
+              <span
+                className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${PURCHASE_STATUS_STYLE[detail.status]}`}
+              >
+                {PURCHASE_STATUS_LABEL[detail.status]}
+              </span>
+            </div>
+
+            <div className="overflow-x-auto rounded-xl border">
+              <table className="w-full text-sm">
+                <thead className="border-b bg-muted/30 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                  <tr>
+                    <th className="px-3 py-2 font-medium">Item</th>
+                    <th className="px-3 py-2 text-right font-medium">Qty</th>
+                    <th className="px-3 py-2 text-right font-medium">Harga</th>
+                    <th className="px-3 py-2 text-right font-medium">Jumlah</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {detail.items.map((it) => (
+                    <tr key={it.id} className="border-b last:border-0">
+                      <td className="px-3 py-2">{it.description}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{Number(it.quantity)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{rupiah(it.unit_price)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{rupiah(it.line_total)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="ml-auto w-full max-w-xs space-y-1 text-sm">
+              <div className="flex justify-between text-muted-foreground">
+                <span>Subtotal</span>
+                <span className="tabular-nums">{rupiah(detail.subtotal)}</span>
+              </div>
+              <div className="flex justify-between text-muted-foreground">
+                <span>Pajak ({Number(detail.tax_rate)}%)</span>
+                <span className="tabular-nums">{rupiah(detail.tax_amount)}</span>
+              </div>
+              <div className="flex justify-between border-t pt-1 font-semibold">
+                <span>Total</span>
+                <span className="tabular-nums">{rupiah(detail.total)}</span>
+              </div>
+              {Number(detail.amount_paid) > 0 && (
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Dibayar</span>
+                  <span className="tabular-nums">{rupiah(detail.amount_paid)}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-wrap justify-end gap-2">
+              {busyId === detail.id ? (
+                <Loader2 className="size-5 animate-spin text-muted-foreground" />
+              ) : (
+                <>
+                  {detail.status === "draft" && (
+                    <Button variant="outline" onClick={() => action(detail.id, "post")}>
+                      <CheckCircle2 className="size-4" /> Posting
+                    </Button>
+                  )}
+                  {(detail.status === "posted" || detail.status === "partial") && (
+                    <Button
+                      className="bg-green-600 text-white hover:bg-green-700"
+                      onClick={() => action(detail.id, "pay")}
+                    >
+                      <Wallet className="size-4" /> Bayar
+                    </Button>
+                  )}
+                  {detail.status !== "void" && (
+                    <a
+                      href={`/dashboard/invoice/purchase/${detail.id}/print`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <Button variant="outline">
+                        <Printer className="size-4" /> Cetak / PDF
+                      </Button>
+                    </a>
+                  )}
+                  {detail.status !== "void" && (
+                    <Button
+                      variant="ghost"
+                      className="text-destructive hover:text-destructive"
+                      onClick={() => action(detail.id, "void")}
+                    >
+                      <Ban className="size-4" /> Batalkan
+                    </Button>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   // ===================================================================== create
   if (view === "create") {
@@ -334,73 +467,16 @@ export function PurchaseClient() {
           </p>
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-xl border">
-          <table className="w-full text-sm">
-            <thead className="border-b bg-muted/30 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-              <tr>
-                <th className="px-3 py-2 font-medium">No. Faktur</th>
-                <th className="px-3 py-2 font-medium">Supplier</th>
-                <th className="px-3 py-2 font-medium">Jatuh Tempo</th>
-                <th className="px-3 py-2 text-right font-medium">Total</th>
-                <th className="px-3 py-2 font-medium">Status</th>
-                <th className="px-3 py-2 text-right font-medium">Aksi</th>
-              </tr>
-            </thead>
-            <tbody>
-              {invoices.map((inv) => (
-                <tr key={inv.id} className="border-b last:border-0">
-                  <td className="px-3 py-2 font-medium tabular-nums">{inv.number}</td>
-                  <td className="px-3 py-2 text-muted-foreground">
-                    {inv.supplier_name || inv.party_name || "—"}
-                  </td>
-                  <td className="px-3 py-2 text-muted-foreground tabular-nums">
-                    {inv.due_date ? new Date(inv.due_date).toLocaleDateString("id-ID") : "—"}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums">{rupiah(inv.total)}</td>
-                  <td className="px-3 py-2">
-                    <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${STATUS_STYLE[inv.status]}`}>
-                      {STATUS_LABEL[inv.status]}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2">
-                    <div className="flex justify-end gap-1">
-                      {busyId === inv.id ? (
-                        <Loader2 className="size-4 animate-spin text-muted-foreground" />
-                      ) : (
-                        <>
-                          {inv.status === "draft" && (
-                            <Button size="xs" variant="outline" onClick={() => action(inv.id, "post")}>
-                              <CheckCircle2 className="size-3.5" /> Posting
-                            </Button>
-                          )}
-                          {(inv.status === "posted" || inv.status === "partial") && (
-                            <Button
-                              size="xs"
-                              className="bg-green-600 text-white hover:bg-green-700"
-                              onClick={() => action(inv.id, "pay")}
-                            >
-                              <Wallet className="size-3.5" /> Bayar
-                            </Button>
-                          )}
-                          {inv.status !== "void" && (
-                            <Button
-                              size="xs"
-                              variant="ghost"
-                              className="text-destructive hover:text-destructive"
-                              onClick={() => action(inv.id, "void")}
-                            >
-                              <Ban className="size-3.5" />
-                            </Button>
-                          )}
-                        </>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          columns={getPurchaseColumns({ busyId, onAction: action })}
+          data={invoices.slice((page - 1) * limit, page * limit)}
+          page={page}
+          limit={limit}
+          count={invoices.length}
+          setPage={setPage}
+          setLimit={setLimit}
+          onRowClick={(row) => openDetail(row)}
+        />
       )}
     </div>
   );

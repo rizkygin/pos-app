@@ -11,6 +11,8 @@ export type AddProductInput = {
   unit?: string;
   image?: string;
   features?: string[];
+  is_for_sale?: boolean;
+  track_stock?: boolean;
 };
 
 type ActionResult = { success: boolean; message?: string };

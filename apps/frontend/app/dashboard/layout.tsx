@@ -38,7 +38,8 @@ const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
                     </header>
 
                     {children}
-                    <div className="hidden md:block"><MessageChatComponent /></div>
+                    
+                    {/* <div className="hidden md:block"><MessageChatComponent /></div> */}
                 </AppContent>
             </AppShell>
         </>

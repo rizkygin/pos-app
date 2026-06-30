@@ -58,7 +58,7 @@ const sections = [
   },
   {
     icon: BubblesIcon,
-    title: "V.1.2.6 Updated at 29 June ",
+    title: "V.1.3.0 Updated at 1 July ",
     body: (
       <>
         Ulun percaya Pangkalan bun bisa berkembang, sama seperti kota besar.
