@@ -1,7 +1,7 @@
 // Bump this version whenever the caching logic changes. The `activate` handler
 // deletes every cache that isn't the current one, so bumping it also purges
 // stale entries (e.g. previously-cached pages or error responses).
-const CACHE_NAME = "ulun-pesan-v3";
+const CACHE_NAME = "ulun-pesan-v4";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(self.skipWaiting());
@@ -50,6 +50,12 @@ self.addEventListener("fetch", (event) => {
         }
         return response;
       })
-      .catch(() => caches.match(request))
+      .catch(async () => {
+        // Network failed. Serve the cached copy if we have one; otherwise return
+        // a real network error (NOT undefined) so the page's error boundary can
+        // catch the failed chunk and recover, instead of a silent blank screen.
+        const cached = await caches.match(request);
+        return cached ?? Response.error();
+      })
   );
 });
