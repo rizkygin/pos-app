@@ -43,6 +43,10 @@ import {
   CreditCard,
   Users,
   Calculator,
+  FileText,
+  ShoppingBag,
+  Boxes,
+  Truck,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -282,6 +286,15 @@ const ratingNavItem: NavItem = {
   iconColor: 'text-amber-600 dark:text-amber-400',
 };
 
+// Owner-only "Faktur & Stok" group. Pages live under /dashboard/invoice/* and
+// are gated to the owner role by that route's layout (getSession + role check).
+const invoiceNavSubItems = [
+  { name: 'Faktur Penjualan', url: '/dashboard/invoice/sales', icon: Receipt },
+  { name: 'Faktur Pembelian', url: '/dashboard/invoice/purchase', icon: ShoppingBag },
+  { name: 'Stok', url: '/dashboard/invoice/stock', icon: Boxes },
+  { name: 'Supplier', url: '/dashboard/invoice/supplier', icon: Truck },
+];
+
 const customerNavItems: NavItem[] = [
   {
     name: 'History Order',
@@ -493,6 +506,16 @@ export function AppSidebar({
                   <NavRow
                     item={ratingNavItem}
                     isActive={ratingNavItem.url === currentUrl}
+                  />
+                )}
+                {isOwner && (
+                  <NavCollapsible
+                    label="Faktur & Stok"
+                    icon={FileText}
+                    iconBg="bg-teal-100 dark:bg-teal-950"
+                    iconColor="text-teal-600 dark:text-teal-400"
+                    items={invoiceNavSubItems}
+                    currentUrl={currentUrl}
                   />
                 )}
               </>

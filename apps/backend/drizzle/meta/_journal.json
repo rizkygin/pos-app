@@ -148,6 +148,13 @@
       "when": 1781945000000,
       "tag": "0020_product_ads_schedule_to_dates",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1782785854282,
+      "tag": "0021_invoicing_and_stock",
+      "breakpoints": true
     }
   ]
 }
