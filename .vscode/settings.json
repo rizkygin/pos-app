@@ -1,0 +1,25 @@
+{
+  // Stop VS Code's file watcher from monitoring large generated/dependency dirs.
+  // This is the biggest RAM/CPU win — the watcher won't track ~1GB of .next +
+  // node_modules churn. (TS still reads node_modules types; this only drops the
+  // live file-change watching.)
+  "files.watcherExclude": {
+    "**/node_modules/**": true,
+    "**/.next/**": true,
+    "**/dist/**": true,
+    "**/backups/**": true
+  },
+  // Keep search (and its in-memory index) out of the same heavy dirs.
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/.next": true,
+    "**/dist": true,
+    "**/backups": true,
+    "**/package-lock.json": true
+  },
+  // Cap the TypeScript server's heap so it can't balloon past ~2GB. Raise toward
+  // 3072 if you hit "tsserver out of memory" on very large edits.
+  "typescript.tsserver.maxTsServerMemory": 2048,
+  // Don't auto-download @types packages in the background (extra RAM + network).
+  "typescript.disableAutomaticTypeAcquisition": true
+}

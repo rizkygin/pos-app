@@ -35,33 +35,82 @@ type Props = {
 const fmt = (n: number) =>
     new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 0 }).format(n);
 
+const esc = (s: string) =>
+    String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] as string));
+
 export function ReceiptModal({ data, onClose }: Props) {
     const shortId = data.orderId.split("-")[0].toUpperCase();
 
+    // Build a self-contained, thermal-sized receipt from the data (NOT from the
+    // Tailwind-styled modal markup, which wouldn't carry over to the print window).
+    // Sized for 58mm thermal paper; monospace; auto-prints then closes.
     const handlePrint = () => {
-        const content = document.getElementById("receipt-printable")?.innerHTML;
-        if (!content) return;
-        const w = window.open("", "_blank", "width=420,height=700");
-        if (!w) return;
-        w.document.write(`<!DOCTYPE html><html><head><title>Receipt #${shortId}</title>
+        const itemsHtml = data.items
+            .map((item) => {
+                const isDiscount = !!item.price_mark_down && item.price_mark_down !== "0";
+                const original = parseFloat(item.price);
+                const unit = parseFloat(isDiscount ? item.price_mark_down : item.price);
+                const sub = unit * item.quantity;
+                return `<div class="item"><div class="name">${esc(item.product_name)}</div>` +
+                    `<div class="row"><span>${item.quantity} x ${fmt(unit)}${isDiscount ? ` <s>${fmt(original)}</s>` : ""}</span><span>${fmt(sub)}</span></div></div>`;
+            })
+            .join("");
+
+        const paymentHtml =
+            data.paymentMethod === "non_cash"
+                ? `<div class="row b"><span>Pembayaran</span><span>Non-Tunai</span></div>`
+                : `<div class="row"><span>Tunai</span><span>${fmt(data.amountPaid)}</span></div>` +
+                  `<div class="row b"><span>Kembali</span><span>${fmt(data.changeDue)}</span></div>`;
+
+        const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Struk #${shortId}</title>
 <style>
+  @page { size: 58mm auto; margin: 0; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: 'Courier New', monospace; font-size: 12px; width: 300px; margin: 0 auto; padding: 16px 8px; color: #111; }
-  .center { text-align: center; }
-  .bold { font-weight: bold; }
-  .large { font-size: 15px; }
-  .small { font-size: 11px; color: #555; }
-  .divider { border-top: 1px dashed #888; margin: 8px 0; }
-  .row { display: flex; justify-content: space-between; margin: 3px 0; }
-  .total-row { display: flex; justify-content: space-between; font-weight: bold; font-size: 14px; margin-top: 4px; }
-  .item-name { font-weight: bold; }
-  .item-detail { color: #555; font-size: 11px; }
-  .thank { text-align: center; margin-top: 12px; font-size: 12px; }
-</style></head><body>${content}</body></html>`);
+  html, body { width: 58mm; }
+  body { font-family: 'Courier New', monospace; font-size: 11px; line-height: 1.35; color: #000; padding: 3mm 2mm; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .c { text-align: center; }
+  .b { font-weight: bold; }
+  .lg { font-size: 14px; }
+  .sm { font-size: 10px; }
+  .dv { border-top: 1px dashed #000; margin: 5px 0; }
+  .row { display: flex; justify-content: space-between; gap: 6px; }
+  .row span:last-child { text-align: right; white-space: nowrap; }
+  .item { margin: 3px 0; }
+  .item .name { font-weight: bold; word-break: break-word; }
+  s { text-decoration: line-through; }
+</style></head><body>
+  <div class="c b lg">${esc(data.outletName)}</div>
+  ${data.outletAddress ? `<div class="c sm">${esc(data.outletAddress)}</div>` : ""}
+  ${data.outletPhone ? `<div class="c sm">${esc(data.outletPhone)}</div>` : ""}
+  <div class="dv"></div>
+  <div class="row sm"><span>Order #</span><span class="b">${shortId}</span></div>
+  <div class="row sm"><span>Tanggal</span><span>${data.date.toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" })}</span></div>
+  <div class="row sm"><span>Jam</span><span>${data.date.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}</span></div>
+  <div class="row sm"><span>Kasir</span><span>${esc(data.cashierName)}</span></div>
+  ${data.customerName ? `<div class="row sm"><span>Pelanggan</span><span>${esc(data.customerName)}</span></div>` : ""}
+  <div class="dv"></div>
+  ${itemsHtml}
+  <div class="dv"></div>
+  <div class="row sm"><span>Subtotal</span><span>${fmt(data.subtotal)}</span></div>
+  ${data.discountAmount > 0 ? `<div class="row sm"><span>${esc(data.discountLabel)}</span><span>-${fmt(data.discountAmount)}</span></div>` : ""}
+  <div class="row b lg"><span>TOTAL</span><span>${fmt(data.total)}</span></div>
+  <div class="dv"></div>
+  ${paymentHtml}
+  <div class="dv"></div>
+  <div class="c sm">Thank you for you purchase</div>
+  <div class="c sm">Please came again ^^</div>
+  <div class="dv"></div>
+  <div class="c sm">Dibuat oleh ulunpesan.com</div>
+  <script>window.onload=function(){window.focus();window.print();window.onafterprint=function(){window.close();};setTimeout(function(){try{window.close();}catch(e){}},2000);};</script>
+</body></html>`;
+
+        const w = window.open("", "_blank", "width=360,height=640");
+        if (!w) {
+            alert("Popup diblokir. Izinkan popup untuk situs ini agar struk bisa dicetak.");
+            return;
+        }
+        w.document.write(html);
         w.document.close();
-        w.focus();
-        w.print();
-        w.close();
     };
 
     return (
