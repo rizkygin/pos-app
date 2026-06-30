@@ -429,6 +429,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
         and(
           eq(productsTable.is_recommended, true),
           eq(productsTable.isAvailable, true),
+          eq(productsTable.is_for_sale, true),
           isNull(productsTable.deletedAt),
           eq(outletsTable.is_open, true),
         ),

@@ -23,6 +23,8 @@ type AddProductInput = {
   unit?: string;
   image?: string;
   features?: string[];
+  is_for_sale?: boolean;
+  track_stock?: boolean;
 };
 
 async function requireUser(request: any, reply: any) {
@@ -75,6 +77,8 @@ export async function productRoutes(app: FastifyInstance) {
         unit: data.unit || "pcs",
         image: data.image || "avatar.png",
         features: data.features ?? [],
+        is_for_sale: data.is_for_sale ?? true,
+        track_stock: data.track_stock ?? true,
       });
 
       return reply.send({ success: true, message: "Product added successfully." });
@@ -214,6 +218,8 @@ export async function productRoutes(app: FastifyInstance) {
           unit: data.unit,
           ...(data.image && { image: data.image }),
           ...(data.features !== undefined && { features: data.features }),
+          ...(data.is_for_sale !== undefined && { is_for_sale: data.is_for_sale }),
+          ...(data.track_stock !== undefined && { track_stock: data.track_stock }),
         })
         .where(eq(productsTable.id, productId));
 

@@ -1,0 +1,1 @@
+CREATE INDEX "stock_movements_outlet_reason_created_idx" ON "stock_movements" USING btree ("outlet_id","reason","created_at");

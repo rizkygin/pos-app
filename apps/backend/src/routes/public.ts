@@ -79,6 +79,7 @@ export async function publicRoutes(app: FastifyInstance) {
         and(
           eq(productsTable.outlet_id, id),
           eq(productsTable.isAvailable, true),
+          eq(productsTable.is_for_sale, true),
           isNull(productsTable.deletedAt),
         ),
       );
@@ -133,6 +134,7 @@ export async function publicRoutes(app: FastifyInstance) {
 
     const baseWhere = and(
       eq(productsTable.isAvailable, true),
+      eq(productsTable.is_for_sale, true),
       isNull(productsTable.deletedAt),
       nameFilter,
       featureFilter,
@@ -225,7 +227,13 @@ export async function publicRoutes(app: FastifyInstance) {
       const categories = await db
         .selectDistinct({ category: productsTable.category })
         .from(productsTable)
-        .where(eq(productsTable.outlet_id, parseInt(outletIdParam, 10)));
+        .where(
+          and(
+            eq(productsTable.outlet_id, parseInt(outletIdParam, 10)),
+            eq(productsTable.is_for_sale, true),
+            isNull(productsTable.deletedAt),
+          ),
+        );
 
       return { success: true, message: "Categories fetched successfully", data: categories };
     } catch (error) {

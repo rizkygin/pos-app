@@ -166,6 +166,13 @@ export const productsTable = pgTable(
     category: varchar('category', { length: 255 })
       .notNull(),
     isAvailable: boolean('is_available').default(true).notNull(),
+    // false = inventory-only item: tracked in stock and usable on invoices, but
+    // hidden from the customer ordering flow (customers can't pick it).
+    is_for_sale: boolean('is_for_sale').default(true).notNull(),
+    // false = this product has no countable stock of its own (a recipe/menu item
+    // made from ingredients, or a service). Invoice posting only moves stock for
+    // track_stock products; the Stok page only lists them.
+    track_stock: boolean('track_stock').default(true).notNull(),
     description: varchar('description', { length: 255 }).default(''),
     unit: varchar('unit', { length: 10 }).notNull().default('pcs'),
     features: text('features').array().default([]).notNull(),
@@ -591,5 +598,11 @@ export const stockMovementsTable = pgTable(
     index('stock_movements_product_idx').on(table.product_id),
     index('stock_movements_outlet_idx').on(table.outlet_id),
     index('stock_movements_invoice_idx').on(table.invoice_id),
+    // Opname history: filter by outlet + reason, range/sort on created_at.
+    index('stock_movements_outlet_reason_created_idx').on(
+      table.outlet_id,
+      table.reason,
+      table.created_at,
+    ),
   ],
 );
