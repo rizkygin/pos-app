@@ -54,7 +54,7 @@ export const ORDER_FEATURES: OrderFeature[] = [
         iconBg: "bg-blue-100",
         iconColor: "text-blue-600",
         count: "80+ layanan",
-        isAvailable: false,
+        isAvailable: true,
         color: "text-orange-600"
     },
     {

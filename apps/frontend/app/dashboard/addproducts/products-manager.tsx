@@ -54,6 +54,8 @@ type Product = {
   features: string[];
   is_for_sale: boolean;
   track_stock: boolean;
+  lowest_price?: string | null;
+  highest_price?: string | null;
 };
 
 type ProductsManagerProps = {
@@ -94,7 +96,13 @@ export const ProductsManager = ({
     buying_price: '',
     description: '',
     unit: 'pcs',
+    lowest_price: '',
+    highest_price: '',
   });
+
+  // Service products (category "jasa") are priced as a negotiable range instead
+  // of a fixed selling price + discount.
+  const isServiceCategory = selectedCategory === 'jasa';
 
   const handleCategorySelect = (category: string) => {
     setSelectedCategory(category);
@@ -154,6 +162,8 @@ export const ProductsManager = ({
         buying_price: '',
         description: '',
         unit: 'pcs',
+        lowest_price: '',
+        highest_price: '',
       });
       setImageUrl('');
       setEditingProductId(null);
@@ -198,6 +208,8 @@ export const ProductsManager = ({
       buying_price: product.buying_price,
       description: product.description || '',
       unit: product.unit,
+      lowest_price: product.lowest_price ?? '',
+      highest_price: product.highest_price ?? '',
     });
     setView('form');
   };
@@ -308,6 +320,8 @@ export const ProductsManager = ({
                     buying_price: '',
                     description: '',
                     unit: 'pcs',
+                    lowest_price: '',
+                    highest_price: '',
                   });
                   setImageUrl('');
                   setSelectedFeatures([]);
@@ -525,26 +539,75 @@ export const ProductsManager = ({
               </div>
 
               <div className="grid grid-cols-2 gap-4 md:gap-6">
-                <div className="space-y-2">
-                  <label className="text-sm font-bold flex items-center gap-2">
-                    <DollarSign className="h-4 w-4 text-muted-foreground" />
-                    Harga Jual
-                  </label>
-                  <div className="relative">
-                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground font-medium text-sm">
-                      Rp
-                    </span>
-                    <input
-                      required
-                      name="price"
-                      type="number"
-                      value={formData.price}
-                      onChange={handleInputChange}
-                      className="flex h-12 w-full rounded-xl border border-input bg-transparent pl-12 pr-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-                      placeholder="25000"
-                    />
+                {isServiceCategory ? (
+                  <>
+                    <div className="space-y-2">
+                      <label className="text-sm font-bold flex items-center gap-2">
+                        <DollarSign className="h-4 w-4 text-muted-foreground" />
+                        Harga Terendah
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground font-medium text-sm">
+                          Rp
+                        </span>
+                        <input
+                          required
+                          name="lowest_price"
+                          type="number"
+                          value={formData.lowest_price}
+                          onChange={handleInputChange}
+                          className="flex h-12 w-full rounded-xl border border-input bg-transparent pl-12 pr-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                          placeholder="50000"
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-bold flex items-center gap-2">
+                        <DollarSign className="h-4 w-4 text-muted-foreground" />
+                        Harga Tertinggi
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground font-medium text-sm">
+                          Rp
+                        </span>
+                        <input
+                          required
+                          name="highest_price"
+                          type="number"
+                          value={formData.highest_price}
+                          onChange={handleInputChange}
+                          className="flex h-12 w-full rounded-xl border border-input bg-transparent pl-12 pr-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                          placeholder="150000"
+                        />
+                      </div>
+                    </div>
+                    <p className="col-span-2 -mt-1 text-xs text-muted-foreground">
+                      Layanan jasa memakai rentang harga. Nanti pian pilih harga
+                      pasti (di antara terendah &amp; tertinggi) saat menerima order.
+                    </p>
+                  </>
+                ) : (
+                  <div className="space-y-2">
+                    <label className="text-sm font-bold flex items-center gap-2">
+                      <DollarSign className="h-4 w-4 text-muted-foreground" />
+                      Harga Jual
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground font-medium text-sm">
+                        Rp
+                      </span>
+                      <input
+                        required
+                        name="price"
+                        type="number"
+                        value={formData.price}
+                        onChange={handleInputChange}
+                        className="flex h-12 w-full rounded-xl border border-input bg-transparent pl-12 pr-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                        placeholder="25000"
+                      />
+                    </div>
                   </div>
-                </div>
+                )}
                 <div className="space-y-2">
                   <label className="text-sm font-bold flex items-center gap-2 text-amber-600">
                     <DollarSign className="h-4 w-4" />
@@ -564,7 +627,7 @@ export const ProductsManager = ({
                     />
                   </div>
                 </div>
-                <div className="col-span-2 space-y-3">
+                <div className={`col-span-2 space-y-3 ${isServiceCategory ? 'hidden' : ''}`}>
                   <label className="flex items-center justify-between cursor-pointer">
                     <span className="text-sm font-bold text-muted-foreground">
                       Ada Diskon?

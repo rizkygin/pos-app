@@ -24,6 +24,13 @@ export const ORDER_STATUS = pgEnum('order_status', [
   'delivered',
   'cancelled',
 ]);
+// delivery = courier-fulfilled order (food/drink/mart): goes through the courier
+// lobby + on_delivery leg. service = no courier: owner drives the whole flow and
+// the customer accepts at the end (see the service order endpoints).
+export const ORDER_FULFILLMENT = pgEnum('order_fulfillment', [
+  'delivery',
+  'service',
+]);
 export const RECIEPENT = pgEnum('receipt', [
   'customer',
   'courier',
@@ -155,6 +162,12 @@ export const productsTable = pgTable(
     product_name: varchar('product_name', { length: 255 }).notNull(),
     price: varchar('price', { length: 10 }).notNull(),
     price_mark_down: varchar('price_mark_down', { length: 10 }).notNull(),
+    // Service products are priced as a negotiable range instead of a fixed price.
+    // When these are set the product is a "service product": the customer sees
+    // "mulai dari" lowest_price (price is mirrored to lowest_price), and the owner
+    // picks the actual price within [lowest, highest] when confirming the order.
+    lowest_price: varchar('lowest_price', { length: 15 }),
+    highest_price: varchar('highest_price', { length: 15 }),
     buying_price: varchar('buying_price', { length: 15 })
       .notNull()
       .default('0'),
@@ -205,6 +218,7 @@ export const ordersTable = pgTable(
     outlet_id: integer('outlet_id')
       .notNull()
       .references(() => outletsTable.id),
+    fulfillment: ORDER_FULFILLMENT('fulfillment').default('delivery').notNull(),
     status: ORDER_STATUS('status').default('pending').notNull(),
     promo_id: integer('promo_id').references(() => promosTable.id),
     discount_amount: varchar('discount_amount', { length: 15 }),

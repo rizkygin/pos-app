@@ -10,6 +10,7 @@ import {
   locationsTable,
   cashInDetailTable,
   orderDetailsTable,
+  productsTable,
   cashFlows,
 } from "../db/schema";
 import { auth } from "../auth";
@@ -40,6 +41,8 @@ type CreateOrderBody = {
   discount_amount?: number;
   note?: NoteJson | null;
   items: OrderItem[];
+  // 'service' = no courier: skip delivery-fee computation, owner drives the flow.
+  fulfillment?: "delivery" | "service";
 };
 
 //SEARCH:: distance pricelist
@@ -112,15 +115,18 @@ export async function orderRoutes(app: FastifyInstance) {
 
     const data = request.body as CreateOrderBody;
     const orderId = crypto.randomUUID();
+    const isService = data.fulfillment === "service";
 
     try {
+      // Service orders have no courier/delivery, so there's no delivery fee to
+      // compute (and no drop-off location to compute it from).
       const [[customer], delivery_fee] = await Promise.all([
         db
           .select({ id: customersTable.id })
           .from(customersTable)
           .where(eq(customersTable.user_id, session.user.id))
           .limit(1),
-        computeDeliveryFee(session.user.id, data.outlet_id),
+        isService ? Promise.resolve(0) : computeDeliveryFee(session.user.id, data.outlet_id),
       ]);
 
       if (!customer) throw new Error("Customer record not found for this user");
@@ -131,6 +137,7 @@ export async function orderRoutes(app: FastifyInstance) {
           customer_id: customer.id,
           outlet_id: data.outlet_id,
           courier_id: null,
+          fulfillment: isService ? "service" : "delivery",
           status: "pending",
           promo_id: data.promo_id,
           discount_amount: data.discount_amount?.toString(),
@@ -242,7 +249,9 @@ export async function orderRoutes(app: FastifyInstance) {
         and(
           eq(ordersTable.id, orderId),
           eq(ordersTable.outlet_id, outlet.id),
-          isNotNull(ordersTable.courier_id),
+          // Delivery orders need a courier assigned before they can be "ready";
+          // service orders have no courier, so allow them through.
+          or(isNotNull(ordersTable.courier_id), eq(ordersTable.fulfillment, "service")),
           or(eq(ordersTable.status, "confirmed"), eq(ordersTable.status, "preparing")),
         ),
       );
@@ -354,6 +363,252 @@ export async function orderRoutes(app: FastifyInstance) {
       return reply.send({ success: true });
     } catch (error: any) {
       app.log.error(error, "Failed to mark order delivered");
+      return reply.status(400).send({ success: false, error: error.message ?? "Gagal menyelesaikan order" });
+    }
+  });
+
+  // ----- Service (no-courier) order lifecycle -----
+  // These mirror the delivery transitions but are driven entirely by the owner
+  // (and finished by the customer). courier_id stays null the whole time.
+
+  // Helper: resolve the caller's outlet, or reply 403.
+  async function requireOwnerOutlet(request: any, reply: any) {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) {
+      reply.status(401).send({ success: false, error: "Unauthorized" });
+      return null;
+    }
+    const [outlet] = await db
+      .select({ id: outletsTable.id })
+      .from(outletsTable)
+      .where(eq(outletsTable.user_id, session.user.id))
+      .limit(1);
+    if (!outlet) {
+      reply.status(403).send({ success: false, error: "Not an owner" });
+      return null;
+    }
+    return { session, outlet };
+  }
+
+  // Owner accepts a pending service order at a price they slide within the
+  // product's [lowest_price, highest_price] range. The chosen price becomes the
+  // agreed price on the order detail. pending -> confirmed.
+  app.post("/api/orders/confirm-service", async (request, reply) => {
+    const ctx = await requireOwnerOutlet(request, reply);
+    if (!ctx) return;
+
+    const { orderId, price } = (request.body as { orderId?: string; price?: number | string }) ?? {};
+    if (!orderId || price == null) {
+      return reply.status(400).send({ success: false, error: "orderId dan price wajib diisi" });
+    }
+    const chosen = Number(price);
+    if (!Number.isFinite(chosen) || chosen < 0) {
+      return reply.status(400).send({ success: false, error: "Harga tidak valid" });
+    }
+
+    try {
+      // The service product's range (a service order is a single service item).
+      const [row] = await db
+        .select({
+          detailId: orderDetailsTable.id,
+          lowest: productsTable.lowest_price,
+          highest: productsTable.highest_price,
+          status: ordersTable.status,
+          fulfillment: ordersTable.fulfillment,
+        })
+        .from(ordersTable)
+        .innerJoin(orderDetailsTable, eq(orderDetailsTable.order_id, ordersTable.id))
+        .innerJoin(productsTable, eq(productsTable.id, orderDetailsTable.product_id))
+        .where(and(eq(ordersTable.id, orderId), eq(ordersTable.outlet_id, ctx.outlet.id)))
+        .limit(1);
+
+      if (!row) return reply.status(404).send({ success: false, error: "Order tidak ditemukan" });
+      if (row.fulfillment !== "service") return reply.status(400).send({ success: false, error: "Bukan order layanan" });
+      if (row.status !== "pending") return reply.status(400).send({ success: false, error: "Order tidak lagi menunggu konfirmasi" });
+
+      const lowest = Number(row.lowest ?? 0);
+      const highest = Number(row.highest ?? row.lowest ?? 0);
+      if (chosen < lowest || chosen > highest) {
+        return reply.status(400).send({ success: false, error: `Harga harus di antara ${lowest} dan ${highest}` });
+      }
+
+      await db.transaction(async (tx) => {
+        await tx
+          .update(orderDetailsTable)
+          .set({ summary_price: String(chosen) })
+          .where(eq(orderDetailsTable.order_id, orderId));
+        await tx
+          .update(ordersTable)
+          .set({ status: "confirmed", updatedAt: new Date() })
+          .where(and(eq(ordersTable.id, orderId), eq(ordersTable.status, "pending")));
+      });
+
+      return reply.send({ success: true });
+    } catch (error: any) {
+      app.log.error(error, "Failed to confirm service order");
+      return reply.status(400).send({ success: false, error: error.message ?? "Gagal mengonfirmasi order" });
+    }
+  });
+
+  // Owner sets the appointment time and an optional discount (amount or percent,
+  // stored resolved into discount_amount). confirmed -> preparing.
+  app.post("/api/orders/schedule-service", async (request, reply) => {
+    const ctx = await requireOwnerOutlet(request, reply);
+    if (!ctx) return;
+
+    const { orderId, scheduled_at, discount_amount, discount_percent } =
+      (request.body as {
+        orderId?: string;
+        scheduled_at?: string;
+        discount_amount?: number | string;
+        discount_percent?: number | string;
+      }) ?? {};
+    if (!orderId || !scheduled_at) {
+      return reply.status(400).send({ success: false, error: "orderId dan scheduled_at wajib diisi" });
+    }
+    const when = new Date(scheduled_at);
+    if (Number.isNaN(when.getTime())) {
+      return reply.status(400).send({ success: false, error: "Tanggal jadwal tidak valid" });
+    }
+
+    try {
+      // Agreed price = sum of the order's detail prices (set at confirm).
+      const [{ sum: agreed } = { sum: 0 }] = await db
+        .select({ sum: sql<number>`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric)), 0)` })
+        .from(orderDetailsTable)
+        .where(eq(orderDetailsTable.order_id, orderId));
+
+      let discount = 0;
+      if (discount_percent != null && discount_percent !== "") {
+        const pct = Number(discount_percent);
+        if (Number.isFinite(pct) && pct > 0) discount = Math.round((Number(agreed) * pct) / 100);
+      } else if (discount_amount != null && discount_amount !== "") {
+        const amt = Number(discount_amount);
+        if (Number.isFinite(amt) && amt > 0) discount = Math.round(amt);
+      }
+      if (discount > Number(agreed)) discount = Number(agreed);
+
+      const res = await db
+        .update(ordersTable)
+        .set({ status: "preparing", scheduled_at: when, discount_amount: String(discount), updatedAt: new Date() })
+        .where(
+          and(
+            eq(ordersTable.id, orderId),
+            eq(ordersTable.outlet_id, ctx.outlet.id),
+            eq(ordersTable.fulfillment, "service"),
+            eq(ordersTable.status, "confirmed"),
+          ),
+        )
+        .returning({ id: ordersTable.id });
+
+      if (res.length === 0) return reply.status(400).send({ success: false, error: "Order tidak dapat dijadwalkan" });
+      return reply.send({ success: true, discount_amount: discount });
+    } catch (error: any) {
+      app.log.error(error, "Failed to schedule service order");
+      return reply.status(400).send({ success: false, error: error.message ?? "Gagal menjadwalkan order" });
+    }
+  });
+
+  // Owner closes a scheduled service order once the work is done, handing it to
+  // the customer to accept. ready -> on_delivery (reuses on_delivery as "closed").
+  app.post("/api/orders/close-service", async (request, reply) => {
+    const ctx = await requireOwnerOutlet(request, reply);
+    if (!ctx) return;
+
+    const { orderId } = (request.body as { orderId?: string }) ?? {};
+    if (!orderId) return reply.status(400).send({ success: false, error: "orderId wajib diisi" });
+
+    const res = await db
+      .update(ordersTable)
+      .set({ status: "on_delivery", updatedAt: new Date() })
+      .where(
+        and(
+          eq(ordersTable.id, orderId),
+          eq(ordersTable.outlet_id, ctx.outlet.id),
+          eq(ordersTable.fulfillment, "service"),
+          eq(ordersTable.status, "ready"),
+        ),
+      )
+      .returning({ id: ordersTable.id });
+
+    if (res.length === 0) return reply.status(400).send({ success: false, error: "Order tidak dapat ditutup" });
+    return reply.send({ success: true });
+  });
+
+  // Customer accepts a closed service order. Records the outlet's cash-in
+  // (agreed price - discount) and finalises. on_delivery -> delivered.
+  app.post("/api/orders/accept-service", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
+
+    const { orderId } = (request.body as { orderId?: string }) ?? {};
+    if (!orderId) return reply.status(400).send({ success: false, error: "orderId wajib diisi" });
+
+    try {
+      const [customer] = await db
+        .select({ id: customersTable.id })
+        .from(customersTable)
+        .where(eq(customersTable.user_id, session.user.id))
+        .limit(1);
+      if (!customer) return reply.status(403).send({ success: false, error: "Customer not found" });
+
+      await db.transaction(async (tx) => {
+        const [order] = await tx
+          .select({
+            outlet_id: ordersTable.outlet_id,
+            discount: ordersTable.discount_amount,
+          })
+          .from(ordersTable)
+          .where(
+            and(
+              eq(ordersTable.id, orderId),
+              eq(ordersTable.customer_id, customer.id),
+              eq(ordersTable.fulfillment, "service"),
+              eq(ordersTable.status, "on_delivery"),
+            ),
+          )
+          .limit(1);
+        if (!order) throw new Error("Order tidak dapat diselesaikan");
+
+        const [{ sum: agreed } = { sum: 0 }] = await tx
+          .select({ sum: sql<number>`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric)), 0)` })
+          .from(orderDetailsTable)
+          .where(eq(orderDetailsTable.order_id, orderId));
+
+        const net = Math.max(0, Number(agreed) - Number(order.discount ?? 0));
+
+        const [idCategory] = await tx
+          .select({ id: cashInCategoryTable.id })
+          .from(cashInCategoryTable)
+          .where(eq(cashInCategoryTable.category, CATEGORY_IN[0]))
+          .limit(1);
+        if (!idCategory) throw new Error("Kategori kas masuk belum ada");
+
+        const cashIn = await tx
+          .insert(cashInDetailTable)
+          .values({ category_id: idCategory.id, money_amount: String(net), type: "cash" })
+          .returning({ id: cashInDetailTable.id });
+
+        await tx.insert(cashFlows).values({
+          outlet_id: Number(order.outlet_id),
+          cash_opname: "cash",
+          cash_in_detail_id: cashIn[0].id,
+        });
+
+        await tx
+          .update(orderDetailsTable)
+          .set({ status: "checkout" })
+          .where(eq(orderDetailsTable.order_id, orderId));
+
+        await tx
+          .update(ordersTable)
+          .set({ status: "delivered", updatedAt: new Date() })
+          .where(and(eq(ordersTable.id, orderId), eq(ordersTable.status, "on_delivery")));
+      });
+
+      return reply.send({ success: true });
+    } catch (error: any) {
+      app.log.error(error, "Failed to accept service order");
       return reply.status(400).send({ success: false, error: error.message ?? "Gagal menyelesaikan order" });
     }
   });

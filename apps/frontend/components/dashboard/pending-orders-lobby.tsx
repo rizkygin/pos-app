@@ -23,7 +23,10 @@ import {
   confirmOrder,
   markOrderReady,
   confirmPickup,
+  closeServiceOrder,
 } from '@/app/dashboard/activeorder/actions';
+import { ServiceConfirmModal } from '@/components/dashboard/service-confirm-modal';
+import { CalendarClock, Wrench } from 'lucide-react';
 import { API_URL } from '@/lib/api-url';
 import {
   AlertDialog,
@@ -43,6 +46,8 @@ type OrderItem = {
   quantity: number;
   noteProduct: string | null;
   summaryPrice: string;
+  lowestPrice: string | null;
+  highestPrice: string | null;
 };
 
 type Order = {
@@ -60,6 +65,9 @@ type Order = {
   courierId: number | null;
   items: OrderItem[];
   totalAmount: number;
+  fulfillment?: 'delivery' | 'service';
+  scheduledAt?: string | null;
+  discountAmount?: string | null;
 };
 
 type Tab = 'pending' | 'preparing' | 'ready';
@@ -191,12 +199,19 @@ function PendingOrderCard({
   order,
   index,
   onConfirm,
+  onServiceDone,
 }: {
   order: Order;
   index: number;
   onConfirm: (id: string) => void;
+  onServiceDone: (id: string) => void;
 }) {
   const [isPending, startTransition] = useTransition();
+  const [serviceModal, setServiceModal] = useState(false);
+  const isService = order.fulfillment === 'service';
+  const svcItem = order.items[0];
+  const svcLowest = Number(svcItem?.lowestPrice ?? svcItem?.summaryPrice ?? 0);
+  const svcHighest = Number(svcItem?.highestPrice ?? svcLowest);
   const note = noteStr(order.note?.customer_note ?? '');
   const rating = noteStr(order.note?.customer_ratings ?? '');
   const review_count = noteStr(order.note?.customer_review_count ?? '');
@@ -248,36 +263,71 @@ function PendingOrderCard({
 
         <div className="flex items-end justify-between mt-auto pt-4 border-t border-border/50">
           <div>
-            <p className="text-xs text-muted-foreground">Total</p>
-            <p className="text-xl font-black tabular-nums">
-              {fmtIDR(order.totalAmount)}
-            </p>
-            {order.deliveryFee && parseInt(order.deliveryFee) > 0 && (
-              <p className="text-xs text-muted-foreground">
-                +{fmtIDR(parseInt(order.deliveryFee))} ongkir
-              </p>
+            {isService ? (
+              <>
+                <p className="text-xs text-muted-foreground">Kisaran harga</p>
+                <p className="text-base font-black tabular-nums text-blue-600">
+                  {fmtIDR(svcLowest)} – {fmtIDR(svcHighest)}
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-xs text-muted-foreground">Total</p>
+                <p className="text-xl font-black tabular-nums">
+                  {fmtIDR(order.totalAmount)}
+                </p>
+                {order.deliveryFee && parseInt(order.deliveryFee) > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    +{fmtIDR(parseInt(order.deliveryFee))} ongkir
+                  </p>
+                )}
+              </>
             )}
           </div>
           <div className="flex gap-2">
-            <button
-              disabled
-              title="Segera hadir"
-              className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-200 text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              <X className="h-3 w-3" />
-              Tolak
-            </button>
-            <button
-              disabled={isPending}
-              onClick={() => startTransition(() => onConfirm(order.orderId))}
-              className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-bold bg-emerald-500 text-white hover:bg-emerald-600 transition-colors shadow-sm shadow-emerald-200 disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              {isPending ? 'Memproses...' : 'Konfirmasi'}
-              {!isPending && <ChevronRight className="h-3 w-3" />}
-            </button>
+            {isService ? (
+              <button
+                onClick={() => setServiceModal(true)}
+                className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-bold bg-blue-600 text-white hover:bg-blue-700 transition-colors shadow-sm shadow-blue-200"
+              >
+                <Wrench className="h-3 w-3" /> Terima Layanan
+              </button>
+            ) : (
+              <>
+                <button
+                  disabled
+                  title="Segera hadir"
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-200 text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <X className="h-3 w-3" />
+                  Tolak
+                </button>
+                <button
+                  disabled={isPending}
+                  onClick={() => startTransition(() => onConfirm(order.orderId))}
+                  className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-bold bg-emerald-500 text-white hover:bg-emerald-600 transition-colors shadow-sm shadow-emerald-200 disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {isPending ? 'Memproses...' : 'Konfirmasi'}
+                  {!isPending && <ChevronRight className="h-3 w-3" />}
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>
+      {serviceModal && (
+        <ServiceConfirmModal
+          orderId={order.orderId}
+          productName={svcItem?.productName ?? 'Layanan'}
+          lowest={svcLowest}
+          highest={svcHighest}
+          onClose={() => setServiceModal(false)}
+          onDone={() => {
+            setServiceModal(false);
+            onServiceDone(order.orderId);
+          }}
+        />
+      )}
     </motion.div>
   );
 }
@@ -295,7 +345,10 @@ function PreparingOrderCard({
   const note = noteStr(order.note?.customer_note ?? '');
   const rating = noteStr(order.note?.customer_ratings ?? '');
   const review_count = noteStr(String(order.note?.customer_review_count ?? ''));
-  const hasCourier = order.courierId != null;
+  const isService = order.fulfillment === 'service';
+  // Service orders never have a courier, but the owner still drives them, so
+  // they're always "active" in the preparing lane.
+  const active = order.courierId != null || isService;
 
   return (
     <motion.div
@@ -304,30 +357,30 @@ function PreparingOrderCard({
       exit={{ opacity: 0, scale: 0.95, y: -10 }}
       transition={{ duration: 0.3, delay: index * 0.05 }}
       className={`rounded-2xl border shadow-sm overflow-hidden flex flex-col transition-shadow ${
-        hasCourier ? 'bg-background hover:shadow-md' : 'bg-muted/30 opacity-60'
+        active ? 'bg-background hover:shadow-md' : 'bg-muted/30 opacity-60'
       }`}
     >
       <div
         className={`flex items-center justify-between px-5 py-3 border-b ${
-          hasCourier
+          active
             ? 'bg-blue-50 dark:bg-blue-950/20 border-blue-100 dark:border-blue-900/30'
             : 'bg-muted/50 border-border/40'
         }`}
       >
         <div className="flex items-center gap-2">
           <span
-            className={`font-mono font-black text-sm ${hasCourier ? 'text-blue-700 dark:text-blue-400' : 'text-muted-foreground'}`}
+            className={`font-mono font-black text-sm ${active ? 'text-blue-700 dark:text-blue-400' : 'text-muted-foreground'}`}
           >
             #{order.orderId.slice(-8).toUpperCase()}
           </span>
           <span
             className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-              hasCourier
+              active
                 ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400'
                 : 'bg-muted text-muted-foreground'
             }`}
           >
-            {hasCourier ? 'Diproses' : 'Menunggu Kurir'}
+            {isService ? 'Terjadwal' : active ? 'Diproses' : 'Menunggu Kurir'}
           </span>
         </div>
         <div className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -352,6 +405,15 @@ function PreparingOrderCard({
           )}
         </div>
         <ItemList items={order.items} />
+        {isService && order.scheduledAt && (
+          <p className="flex items-center gap-1.5 text-xs font-semibold text-blue-600">
+            <CalendarClock className="h-3.5 w-3.5" />
+            {new Date(order.scheduledAt).toLocaleString('id-ID', {
+              dateStyle: 'medium',
+              timeStyle: 'short',
+            })}
+          </p>
+        )}
         {note && (
           <p className="text-xs text-muted-foreground italic border-l-2 border-muted pl-3 leading-relaxed">
             {note}
@@ -363,6 +425,11 @@ function PreparingOrderCard({
             <p className="text-xl font-black tabular-nums">
               {fmtIDR(order.totalAmount)}
             </p>
+            {order.discountAmount && parseInt(order.discountAmount) > 0 && (
+              <p className="text-xs text-emerald-600">
+                −{fmtIDR(parseInt(order.discountAmount))} diskon
+              </p>
+            )}
             {order.deliveryFee && parseInt(order.deliveryFee) > 0 && (
               <p className="text-xs text-muted-foreground">
                 +{fmtIDR(parseInt(order.deliveryFee))} ongkir
@@ -370,9 +437,9 @@ function PreparingOrderCard({
             )}
           </div>
           <button
-            disabled={!hasCourier || isPending}
+            disabled={!active || isPending}
             onClick={() => startTransition(() => onMarkReady(order.orderId))}
-            title={!hasCourier ? 'Menunggu kurir menerima pesanan' : undefined}
+            title={!active ? 'Menunggu kurir menerima pesanan' : undefined}
             className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-bold bg-emerald-500 text-white hover:bg-emerald-600 transition-colors shadow-sm shadow-emerald-200 disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none"
           >
             {isPending ? 'Memproses...' : 'Siap'}
@@ -384,7 +451,17 @@ function PreparingOrderCard({
   );
 }
 
-function ReadyOrderCard({ order, index }: { order: Order; index: number }) {
+function ReadyOrderCard({
+  order,
+  index,
+  onCloseService,
+}: {
+  order: Order;
+  index: number;
+  onCloseService: (id: string) => void;
+}) {
+  const [isPending, startTransition] = useTransition();
+  const isService = order.fulfillment === 'service';
   const note = noteStr(order.note?.customer_note ?? '');
   const rating = noteStr(order.note?.customer_ratings ?? '');
   const review_count = noteStr(String(order.note?.customer_review_count ?? ''));
@@ -433,15 +510,27 @@ function ReadyOrderCard({ order, index }: { order: Order; index: number }) {
             {note}
           </p>
         )}
-        <div className="mt-auto pt-4 border-t border-border/50">
-          <p className="text-xs text-muted-foreground">Total</p>
-          <p className="text-xl font-black tabular-nums">
-            {fmtIDR(order.totalAmount)}
-          </p>
-          {order.deliveryFee && parseInt(order.deliveryFee) > 0 && (
-            <p className="text-xs text-muted-foreground">
-              +{fmtIDR(parseInt(order.deliveryFee))} ongkir
+        <div className="mt-auto pt-4 border-t border-border/50 flex items-end justify-between">
+          <div>
+            <p className="text-xs text-muted-foreground">Total</p>
+            <p className="text-xl font-black tabular-nums">
+              {fmtIDR(order.totalAmount)}
             </p>
+            {order.deliveryFee && parseInt(order.deliveryFee) > 0 && (
+              <p className="text-xs text-muted-foreground">
+                +{fmtIDR(parseInt(order.deliveryFee))} ongkir
+              </p>
+            )}
+          </div>
+          {isService && (
+            <button
+              disabled={isPending}
+              onClick={() => startTransition(() => onCloseService(order.orderId))}
+              className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-bold bg-blue-600 text-white hover:bg-blue-700 transition-colors shadow-sm shadow-blue-200 disabled:opacity-60"
+            >
+              {isPending ? 'Memproses...' : 'Selesai'}
+              {!isPending && <CheckCheck className="h-3 w-3" />}
+            </button>
           )}
         </div>
       </div>
@@ -894,6 +983,25 @@ export function PendingOrdersLobby() {
     [ready],
   );
 
+  // The service confirm modal already ran confirm-service + schedule-service
+  // (order is now 'preparing'); just drop it from the pending list.
+  const handleServiceDone = useCallback(
+    (orderId: string) => {
+      pending.setOrders((prev) => prev.filter((o) => o.orderId !== orderId));
+    },
+    [pending],
+  );
+
+  // Owner closes a ready service order (ready -> on_delivery), handing it to the
+  // customer to accept.
+  const handleCloseService = useCallback(
+    async (orderId: string) => {
+      ready.setOrders((prev) => prev.filter((o) => o.orderId !== orderId));
+      await closeServiceOrder(orderId);
+    },
+    [ready],
+  );
+
   const current =
     activeTab === 'pending'
       ? pending
@@ -995,10 +1103,10 @@ export function PendingOrdersLobby() {
           ) : activeTab === 'preparing' ? (
             (() => {
               const waiting = preparing.orders.filter(
-                (o) => o.courierId == null,
+                (o) => o.courierId == null && o.fulfillment !== 'service',
               );
               const assigned = preparing.orders.filter(
-                (o) => o.courierId != null,
+                (o) => o.courierId != null || o.fulfillment === 'service',
               );
               return (
                 <div className="space-y-8">
@@ -1045,7 +1153,10 @@ export function PendingOrdersLobby() {
             })()
           ) : activeTab === 'ready' ? (
             <>
-              <QRScannerBar orders={ready.orders} onPickup={handlePickup} />
+              <QRScannerBar
+                orders={ready.orders.filter((o) => o.fulfillment !== 'service')}
+                onPickup={handlePickup}
+              />
               <AnimatePresence mode="popLayout">
                 <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
                   {ready.orders.map((order, i) => (
@@ -1053,6 +1164,7 @@ export function PendingOrdersLobby() {
                       key={order.orderId}
                       order={order}
                       index={i}
+                      onCloseService={handleCloseService}
                     />
                   ))}
                 </div>
@@ -1067,6 +1179,7 @@ export function PendingOrdersLobby() {
                     order={order}
                     index={i}
                     onConfirm={handleConfirm}
+                    onServiceDone={handleServiceDone}
                   />
                 ))}
               </div>

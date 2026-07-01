@@ -73,6 +73,8 @@ export async function customerRoutes(app: FastifyInstance) {
         outletName: outletsTable.name,
         updatedAt: ordersTable.updatedAt,
         createdAt: ordersTable.createdAt,
+        fulfillment: ordersTable.fulfillment,
+        scheduledAt: ordersTable.scheduled_at,
       })
       .from(ordersTable)
       .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))
@@ -125,7 +127,14 @@ export async function customerRoutes(app: FastifyInstance) {
       .innerJoin(customersTable, eq(ordersTable.customer_id, customersTable.id))
       .innerJoin(usersTable, eq(customersTable.user_id, usersTable.id))
       .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))
-      .where(and(eq(ordersTable.status, "confirmed"), isNull(ordersTable.courier_id)))
+      .where(
+        and(
+          eq(ordersTable.status, "confirmed"),
+          isNull(ordersTable.courier_id),
+          // Service orders are courier-less by design — never surface them here.
+          eq(ordersTable.fulfillment, "delivery"),
+        ),
+      )
       .orderBy(ordersTable.createdAt);
 
     const visibleOrders = availability.delaySeconds > 0

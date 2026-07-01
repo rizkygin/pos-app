@@ -126,6 +126,9 @@ export async function ownerRoutes(app: FastifyInstance) {
         deliveryFee: ordersTable.delivery_fee,
         note: ordersTable.note,
         createdAt: ordersTable.createdAt,
+        fulfillment: ordersTable.fulfillment,
+        scheduledAt: ordersTable.scheduled_at,
+        discountAmount: ordersTable.discount_amount,
       })
       .from(ordersTable)
       .innerJoin(customersTable, eq(ordersTable.customer_id, customersTable.id))
@@ -152,6 +155,9 @@ export async function ownerRoutes(app: FastifyInstance) {
         deliveryFee: ordersTable.delivery_fee,
         note: ordersTable.note,
         createdAt: ordersTable.createdAt,
+        fulfillment: ordersTable.fulfillment,
+        scheduledAt: ordersTable.scheduled_at,
+        discountAmount: ordersTable.discount_amount,
       })
       .from(ordersTable)
       .innerJoin(customersTable, eq(ordersTable.customer_id, customersTable.id))
@@ -178,6 +184,9 @@ export async function ownerRoutes(app: FastifyInstance) {
         deliveryFee: ordersTable.delivery_fee,
         note: ordersTable.note,
         createdAt: ordersTable.createdAt,
+        fulfillment: ordersTable.fulfillment,
+        scheduledAt: ordersTable.scheduled_at,
+        discountAmount: ordersTable.discount_amount,
       })
       .from(ordersTable)
       .innerJoin(customersTable, eq(ordersTable.customer_id, customersTable.id))

@@ -7,6 +7,9 @@ type OrderItem = {
     quantity: number;
     noteProduct: string | null;
     summaryPrice: string;
+    // Service products carry a negotiable price range (null for normal products).
+    lowestPrice: string | null;
+    highestPrice: string | null;
 };
 
 export async function attachOrderItems<T extends { orderId: string }>(
@@ -23,6 +26,8 @@ export async function attachOrderItems<T extends { orderId: string }>(
             quantity: orderDetailsTable.quantity,
             noteProduct: orderDetailsTable.note_product,
             summaryPrice: orderDetailsTable.summary_price,
+            lowestPrice: productsTable.lowest_price,
+            highestPrice: productsTable.highest_price,
         })
         .from(orderDetailsTable)
         .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))

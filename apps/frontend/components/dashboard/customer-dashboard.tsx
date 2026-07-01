@@ -100,7 +100,7 @@ export const CustomerDashboard = ({ lastOrders = [], recommend = [], ads = [], h
         { name: "Food", icon: Utensils, url: 'food', color: "bg-orange-100 text-orange-600" , available: 'available'},
         { name: "Mart", icon: ShoppingBag,url: 'mart', color: "bg-emerald-100 text-emerald-600" , available: 'available'},
         { name: "Minuman", icon: Coffee, url: 'drink', color: "bg-amber-100 text-amber-800" , available: 'available'},
-        { name: "Jasa", icon: Wrench, url: 'service', color: "bg-amber-100 text-amber-800", available: 'non' },
+        { name: "Jasa", icon: Wrench, url: 'service', color: "bg-amber-100 text-amber-800", available: 'available' },
         { name: "Send", icon: Truck, url:'send', color: "bg-blue-100 text-blue-600" , available: 'non'},
         { name: "Ride", icon: Bike, url: 'ride',color: "bg-purple-100 text-purple-600" , available: 'non'},
     ];

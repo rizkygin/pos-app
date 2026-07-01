@@ -25,7 +25,27 @@ type AddProductInput = {
   features?: string[];
   is_for_sale?: boolean;
   track_stock?: boolean;
+  // Service products: a negotiable price range. When lowest_price is set the
+  // product is treated as a service (price mirrors lowest_price, no stock).
+  lowest_price?: string;
+  highest_price?: string;
 };
+
+// A service product is priced by range. Mirror `price`/`price_mark_down` to the
+// lowest price so existing "mulai dari" customer displays keep working, and force
+// track_stock off (services hold no countable stock).
+function serviceProductFields(data: Partial<AddProductInput>) {
+  const isService = data.lowest_price != null && data.lowest_price !== "";
+  if (!isService) return null;
+  return {
+    lowest_price: data.lowest_price!,
+    highest_price: data.highest_price ?? data.lowest_price!,
+    price: data.lowest_price!,
+    price_mark_down: data.lowest_price!,
+    track_stock: false,
+    discount_percent: null,
+  };
+}
 
 async function requireUser(request: any, reply: any) {
   const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
@@ -64,12 +84,13 @@ export async function productRoutes(app: FastifyInstance) {
     try {
       const data = request.body as AddProductInput;
       const id = crypto.randomUUID();
+      const service = serviceProductFields(data);
 
       await db.insert(productsTable).values({
         id,
         product_name: data.product_name,
-        price: data.price,
-        price_mark_down: data.price_mark_down,
+        price: service?.price ?? data.price,
+        price_mark_down: service?.price_mark_down ?? data.price_mark_down,
         buying_price: data.buying_price,
         outlet_id: data.outlet_id,
         category: data.category,
@@ -78,7 +99,9 @@ export async function productRoutes(app: FastifyInstance) {
         image: data.image || "avatar.png",
         features: data.features ?? [],
         is_for_sale: data.is_for_sale ?? true,
-        track_stock: data.track_stock ?? true,
+        track_stock: service ? false : (data.track_stock ?? true),
+        lowest_price: service?.lowest_price ?? null,
+        highest_price: service?.highest_price ?? null,
       });
 
       return reply.send({ success: true, message: "Product added successfully." });
@@ -206,12 +229,14 @@ export async function productRoutes(app: FastifyInstance) {
         return reply.send({ success: false, message: "productId and data are required" });
       }
 
+      const service = serviceProductFields(data);
+
       await db
         .update(productsTable)
         .set({
           product_name: data.product_name,
-          price: data.price,
-          price_mark_down: data.price_mark_down,
+          price: service?.price ?? data.price,
+          price_mark_down: service?.price_mark_down ?? data.price_mark_down,
           buying_price: data.buying_price,
           category: data.category,
           description: data.description,
@@ -219,7 +244,9 @@ export async function productRoutes(app: FastifyInstance) {
           ...(data.image && { image: data.image }),
           ...(data.features !== undefined && { features: data.features }),
           ...(data.is_for_sale !== undefined && { is_for_sale: data.is_for_sale }),
-          ...(data.track_stock !== undefined && { track_stock: data.track_stock }),
+          ...(service
+            ? { lowest_price: service.lowest_price, highest_price: service.highest_price, track_stock: false, discount_percent: null }
+            : data.track_stock !== undefined && { track_stock: data.track_stock }),
         })
         .where(eq(productsTable.id, productId));
 

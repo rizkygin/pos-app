@@ -48,6 +48,8 @@ export type OrdersFormDataForFood = {
   discount_amount?: number;
   note?: NoteJson | null;
   items: OrderItem[];
+  // 'service' = no courier/delivery; owner drives the flow (see service endpoints).
+  fulfillment?: 'delivery' | 'service';
 };
 
 export async function customerMakingOrder(data: OrdersFormDataForFood) {

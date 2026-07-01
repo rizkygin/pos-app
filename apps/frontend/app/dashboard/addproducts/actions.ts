@@ -13,6 +13,9 @@ export type AddProductInput = {
   features?: string[];
   is_for_sale?: boolean;
   track_stock?: boolean;
+  // Service products: negotiable price range (backend derives price = lowest).
+  lowest_price?: string;
+  highest_price?: string;
 };
 
 type ActionResult = { success: boolean; message?: string };

@@ -9,6 +9,19 @@ type JoinRow = {
   outlets: typeof outletsTable.$inferSelect;
 };
 
+// Order feature slug -> product category (mirrors frontend lib/order-features.ts).
+// Used to scope get-all-product?feature=... to that feature's own products.
+const FEATURE_CATEGORY: Record<string, string> = {
+  food: "makanan",
+  drink: "minuman",
+  service: "jasa",
+  mart: "mart",
+  delivery: "antar",
+  beauty: "kecantikan",
+  ride: "sewa kendaraan",
+  entertainment: "hiburan",
+};
+
 function mapProductRow(row: JoinRow) {
   return {
     id: row.products.id,
@@ -16,6 +29,9 @@ function mapProductRow(row: JoinRow) {
     image: row.products.image,
     price: Number(row.products.price),
     price_mark_down: Number(row.products.price_mark_down),
+    // Service products carry a negotiable range; null for normal products.
+    lowest_price: row.products.lowest_price != null ? Number(row.products.lowest_price) : null,
+    highest_price: row.products.highest_price != null ? Number(row.products.highest_price) : null,
     category: row.products.category,
     isAvailable: row.products.isAvailable,
     description: row.products.description ?? "",
@@ -132,12 +148,22 @@ export async function publicRoutes(app: FastifyInstance) {
       ? sql`${outletsTable.features} @> ARRAY[${feature}]::text[]`
       : sql`true`;
 
+    // The customer browses by feature slug (e.g. "service"), but products are
+    // stored by category (e.g. "jasa"). Without this, feature=service returns
+    // every product of a service-offering outlet (its food/drink too) instead of
+    // the actual services. Map the slug to its category and scope by it.
+    const categoryFilter =
+      feature && FEATURE_CATEGORY[feature]
+        ? eq(productsTable.category, FEATURE_CATEGORY[feature])
+        : sql`true`;
+
     const baseWhere = and(
       eq(productsTable.isAvailable, true),
       eq(productsTable.is_for_sale, true),
       isNull(productsTable.deletedAt),
       nameFilter,
       featureFilter,
+      categoryFilter,
       eq(outletsTable.is_open, true),
     );
 

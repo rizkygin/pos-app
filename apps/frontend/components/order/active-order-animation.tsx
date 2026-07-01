@@ -1,7 +1,7 @@
 'use client';
 
 import { motion, AnimatePresence } from 'motion/react';
-import { cancelOrderbyCustomer } from '@/app/dashboard/activeorder/actions';
+import { cancelOrderbyCustomer, acceptServiceOrder } from '@/app/dashboard/activeorder/actions';
 import { useTransition, useState, useEffect, useCallback } from 'react';
 import QRCode from 'react-qr-code';
 import { QrCode, X, Lock, MapPin } from 'lucide-react';
@@ -423,14 +423,17 @@ export function ActiveOrderAnimation({
   orderRef,
   outletName,
   statusSince,
+  fulfillment,
 }: {
   orderId: string;
   status: OrderStatus;
   orderRef: string;
   outletName: string;
   statusSince: string;
+  fulfillment?: 'delivery' | 'service';
 }) {
   const router = useRouter();
+  const isService = fulfillment === 'service';
   const [liveStatus, setLiveStatus] = useState<OrderStatus>(status);
   const [liveStatusSince, setLiveStatusSince] = useState(statusSince);
   const cfg = STATUS_CONFIG[liveStatus];
@@ -450,11 +453,16 @@ export function ActiveOrderAnimation({
         if (since) setLiveStatusSince(since);
       }
       if (next === 'delivered')
-        router.push(`/dashboard/ratings/submit/customer/${data.order.id}`);
+        // Service orders have no courier to rate — send them to their history.
+        router.push(
+          isService
+            ? '/dashboard/history-order'
+            : `/dashboard/ratings/submit/customer/${data.order.id}`,
+        );
     } catch {
       /* silently retry */
     }
-  }, [liveStatus, router]);
+  }, [liveStatus, router, isService]);
 
   useEffect(() => {
     const id = setInterval(poll, 2000);
@@ -557,8 +565,8 @@ export function ActiveOrderAnimation({
           </motion.form>
         )}
 
-        {/* QR button — shown when courier is on the way */}
-        {liveStatus === 'on_delivery' && (
+        {/* QR button — courier delivery: shown when courier is on the way */}
+        {liveStatus === 'on_delivery' && !isService && (
           <motion.button
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -568,6 +576,25 @@ export function ActiveOrderAnimation({
           >
             <QrCode className="h-4 w-4" />
             Tampilkan QR Konfirmasi
+          </motion.button>
+        )}
+
+        {/* Service: customer accepts the closed order to finish it */}
+        {liveStatus === 'on_delivery' && isService && (
+          <motion.button
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.3 }}
+            disabled={pending}
+            onClick={() =>
+              startTransition(async () => {
+                await acceptServiceOrder(orderId);
+                router.push('/dashboard/history-order');
+              })
+            }
+            className="w-full py-2.5 rounded-xl bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-60"
+          >
+            {pending ? 'Memproses...' : 'Terima & Selesaikan Layanan'}
           </motion.button>
         )}
       </motion.div>

@@ -21,7 +21,13 @@ export default async function ActiveOrderPage() {
   const activeOrder = data?.success ? data.order : null;
 
   if (!activeOrder) redirect('/dashboard/order');
-  if (activeOrder.status === 'delivered') redirect(`/dashboard/ratings/submit/customer/${activeOrder.id}`);
+  if (activeOrder.status === 'delivered')
+    // Service orders have no courier to rate — send them to their history instead.
+    redirect(
+      activeOrder.fulfillment === 'service'
+        ? '/dashboard/history-order'
+        : `/dashboard/ratings/submit/customer/${activeOrder.id}`,
+    );
 
   return (
     <main className="px-4 pb-12">
@@ -31,6 +37,7 @@ export default async function ActiveOrderPage() {
         orderRef={activeOrder.id.slice(-8).toUpperCase()}
         outletName={activeOrder.outletName}
         statusSince={activeOrder.updatedAt ?? activeOrder.createdAt}
+        fulfillment={activeOrder.fulfillment}
       />
     </main>
   );

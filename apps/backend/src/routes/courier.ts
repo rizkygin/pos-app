@@ -82,6 +82,8 @@ export async function courierRoutes(app: FastifyInstance) {
           eq(ordersTable.id, orderId),
           eq(ordersTable.status, "confirmed"),
           isNull(ordersTable.courier_id),
+          // Service orders are courier-less; a courier must never claim one.
+          eq(ordersTable.fulfillment, "delivery"),
         ),
       )
       .returning({ id: ordersTable.id });
