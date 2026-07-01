@@ -12,7 +12,6 @@ import {
   SidebarMenuSub,
   SidebarMenuSubItem,
   SidebarMenuSubButton,
-  SidebarSeparator,
 } from '@/components/ui/sidebar';
 import {
   Collapsible,
@@ -47,6 +46,7 @@ import {
   ShoppingBag,
   Boxes,
   Truck,
+  Home
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -138,104 +138,7 @@ const Sidebar = dynamic(
   },
 );
 
-function NavRow({ item, isActive }: { item: NavItem; isActive: boolean }) {
-  const Icon = item.icon;
-  return (
-    <SidebarMenuItem>
-      <SidebarMenuButton
-        asChild
-        isActive={isActive}
-        className={cn(
-          'h-11 gap-2.5 rounded-md px-2 text-[13px] font-medium transition-colors',
-          'text-muted-foreground hover:bg-accent hover:text-foreground',
-          isActive && 'bg-accent text-foreground',
-        )}
-      >
-        <Link href={item.url}>
-          <span
-            className={cn(
-              'flex size-7 shrink-0 items-center justify-center rounded-md',
-              item.iconBg,
-            )}
-          >
-            <Icon className={cn('size-4', item.iconColor)} />
-          </span>
-          <span>{item.name}</span>
-        </Link>
-      </SidebarMenuButton>
-    </SidebarMenuItem>
-  );
-}
 
-function NavCollapsible({
-  label,
-  icon: Icon,
-  iconBg,
-  iconColor,
-  items,
-  currentUrl,
-}: {
-  label: string;
-  icon: LucideIcon;
-  iconBg: string;
-  iconColor: string;
-  items: { name: string; url: string; icon: LucideIcon }[];
-  currentUrl: string | null;
-}) {
-  const isActive = items.some((sub) => sub.url === currentUrl);
-  return (
-    <Collapsible defaultOpen={isActive} className="group/collapsible">
-      <SidebarMenuItem>
-        <CollapsibleTrigger asChild>
-          <SidebarMenuButton
-            isActive={isActive}
-            className={cn(
-              'h-11 gap-2.5 rounded-md px-2 text-[13px] font-medium transition-colors',
-              'text-muted-foreground hover:bg-accent hover:text-foreground',
-              isActive && 'bg-accent text-foreground',
-            )}
-          >
-            <span
-              className={cn(
-                'flex size-7 shrink-0 items-center justify-center rounded-md',
-                iconBg,
-              )}
-            >
-              <Icon className={cn('size-4', iconColor)} />
-            </span>
-            <span>{label}</span>
-            <ChevronDown className="ml-auto size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]/collapsible:rotate-180" />
-          </SidebarMenuButton>
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <SidebarMenuSub className="mt-0.5">
-            {items.map((sub) => {
-              const SubIcon = sub.icon;
-              const subActive = sub.url === currentUrl;
-              return (
-                <SidebarMenuSubItem key={sub.name}>
-                  <SidebarMenuSubButton
-                    asChild
-                    isActive={subActive}
-                    className={cn(
-                      'h-10 text-[13px] text-muted-foreground',
-                      subActive && 'text-foreground font-medium',
-                    )}
-                  >
-                    <Link href={sub.url}>
-                      <SubIcon className="size-4" />
-                      <span>{sub.name}</span>
-                    </Link>
-                  </SidebarMenuSubButton>
-                </SidebarMenuSubItem>
-              );
-            })}
-          </SidebarMenuSub>
-        </CollapsibleContent>
-      </SidebarMenuItem>
-    </Collapsible>
-  );
-}
 
 const courierNavItems: NavItem[] = [
   {
@@ -360,7 +263,95 @@ const adminManageNavItems: NavItem[] = [
     iconColor: 'text-violet-600 dark:text-violet-400',
   },
 ];
+function NavRow({ item, isActive }: { item: NavItem; isActive: boolean }) {
+  const Icon = item.icon;
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        asChild
+        isActive={isActive}
+        className={cn(
+          'clay-item h-12 gap-3 rounded-[18px] px-3 text-[13.5px] font-medium',
+          'text-muted-foreground hover:text-foreground',
+          'group-data-[collapsible=icon]:size-12! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:rounded-2xl! group-data-[collapsible=icon]:px-0!',
+          isActive && 'clay-active text-foreground font-semibold',
+        )}
+      >
+        <Link href={item.url}>
+          <span className="clay-icon flex size-9 shrink-0 items-center justify-center rounded-xl">
+            <Icon className={cn('size-4.5', item.iconColor)} />
+          </span>
+          <span className="group-data-[collapsible=icon]:hidden">{item.name}</span>
+        </Link>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  );
+}
 
+function NavCollapsible({
+  label,
+  icon: Icon,
+  iconColor,
+  items,
+  currentUrl,
+}: {
+  label: string;
+  icon: LucideIcon;
+  iconBg?: string;
+  iconColor: string;
+  items: { name: string; url: string; icon: LucideIcon }[];
+  currentUrl: string | null;
+}) {
+  const isActive = items.some((sub) => sub.url === currentUrl);
+  return (
+    <Collapsible defaultOpen={isActive} className="group/collapsible">
+      <SidebarMenuItem>
+        <CollapsibleTrigger asChild>
+          <SidebarMenuButton
+            isActive={isActive}
+            className={cn(
+              'clay-item h-12 gap-3 rounded-[18px] px-3 text-[13.5px] font-medium',
+              'text-muted-foreground hover:text-foreground',
+              'group-data-[collapsible=icon]:size-12! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:rounded-2xl! group-data-[collapsible=icon]:px-0!',
+              isActive && 'clay-active text-foreground font-semibold',
+            )}
+          >
+            <span className="clay-icon flex size-9 shrink-0 items-center justify-center rounded-xl">
+              <Icon className={cn('size-4.5', iconColor)} />
+            </span>
+            <span className="group-data-[collapsible=icon]:hidden">{label}</span>
+            <ChevronDown className="ml-auto size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]/collapsible:rotate-180 group-data-[collapsible=icon]:hidden" />
+          </SidebarMenuButton>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <SidebarMenuSub className="mt-0.5">
+            {items.map((sub) => {
+              const SubIcon = sub.icon;
+              const subActive = sub.url === currentUrl;
+              return (
+                <SidebarMenuSubItem key={sub.name}>
+                  <SidebarMenuSubButton
+                    asChild
+                    isActive={subActive}
+                    className={cn(
+                      'h-10 text-[13px] text-muted-foreground',
+                      subActive && 'text-foreground font-medium',
+                    )}
+                  >
+                    <Link href={sub.url}>
+                      <SubIcon className="size-4" />
+                      <span>{sub.name}</span>
+                    </Link>
+                  </SidebarMenuSubButton>
+                </SidebarMenuSubItem>
+              );
+            })}
+          </SidebarMenuSub>
+        </CollapsibleContent>
+      </SidebarMenuItem>
+    </Collapsible>
+  );
+}
 export function AppSidebar({
   isOwner = false,
   isCourier = false,
@@ -375,7 +366,7 @@ export function AppSidebar({
   const router = useRouter();
   const currentUrl = useCurrentUrl();
   const { data: session } = useSession();
-  const ownerOnlyNames = new Set(['Product', 'Laporan', 'Cashier', 'Buku Kas']);
+  const ownerOnlyNames = new Set(['Product', 'Laporan', 'Kasir', 'Buku Kas']);
   const visibleNavMain = isOwner
     ? navMain.filter((item) => item.url !== '/dashboard/order')
     : isCourier
@@ -405,28 +396,41 @@ export function AppSidebar({
   };
 
   return (
-    <Sidebar collapsible="icon" variant="inset">
-      <SidebarHeader className="px-3 py-3">
+    <Sidebar
+      collapsible="icon"
+      variant="inset"
+      style={
+        {
+          '--sidebar-border': 'transparent',
+        } as React.CSSProperties
+      }
+    >
+      <SidebarHeader className="px-3 py-4">
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" asChild className="h-9 gap-2 px-2">
+            <SidebarMenuButton
+              size="lg"
+              asChild
+              className="h-auto gap-3 rounded-[18px] px-2 py-2 hover:bg-transparent! group-data-[collapsible=icon]:size-12! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:rounded-2xl!"
+            >
               <Link href="/dashboard">
-                <Image
-                  src="/icons/icon-192x192.png"
-                  alt="Ulun Pesan"
-                  width={28}
-                  height={28}
-                  className="size-7 shrink-0 rounded-md object-cover shadow-sm"
-                />
-                <div className="flex min-w-0 flex-col text-left">
-                  <span className="truncate text-[13px] font-semibold leading-none">
+                <span className="clay-icon flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-2xl">
+                  <Image
+                    src="/icons/icon-192x192.png"
+                    alt="Ulun Pesan"
+                    width={44}
+                    height={44}
+                    className="size-9 rounded-lg object-cover"
+                  />
+                </span>
+                <div className="flex min-w-0 flex-col text-left group-data-[collapsible=icon]:hidden">
+                  <span className="truncate text-[14px] font-semibold leading-none">
                     Ulun Pesan
                   </span>
-                  <span className="truncate text-[11px] text-muted-foreground leading-none mt-0.5">
+                  <span className="truncate text-[11px] text-muted-foreground leading-none mt-1.5">
                     Pangkalan Bun Punya
                   </span>
                 </div>
-                <ChevronsUpDown className="ml-auto size-3.5 shrink-0 text-muted-foreground" />
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
@@ -438,7 +442,7 @@ export function AppSidebar({
           <SidebarGroupLabel className="px-2 py-1 text-[10px] font-medium uppercase tracking-widest text-muted-foreground/60">
             FITUR
           </SidebarGroupLabel>
-          <SidebarMenu className="gap-1">
+          <SidebarMenu className="gap-3">
             {isAdmin ? (
               <>
                 <NavRow
@@ -525,7 +529,7 @@ export function AppSidebar({
 
         {!isAdmin && (
           <>
-            <SidebarSeparator className="mx-2 my-2" />
+            <div className="clay-divider mx-2 my-3" />
 
             <SidebarGroup className="p-0">
               <SidebarGroupLabel className="px-2 py-1 text-[10px] font-medium uppercase tracking-widest text-muted-foreground/60">
@@ -558,18 +562,18 @@ export function AppSidebar({
       </SidebarContent>
 
       <SidebarFooter className="px-2 py-3">
-        <SidebarSeparator className="mx-0 mb-2" />
+        <div className="clay-divider mx-1 mb-3" />
         <Popover>
           <PopoverTrigger asChild>
-            <button className="flex w-full items-center gap-2.5 rounded-md px-2 py-3 text-left transition-colors hover:bg-accent group-data-[collapsible=icon]:justify-center">
-              <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-linear-to-br from-indigo-500 to-violet-600 text-white text-[11px] font-semibold shadow-sm">
+            <button className="clay-item flex w-full items-center gap-3 rounded-[18px] px-2 py-2.5 text-left group-data-[collapsible=icon]:size-12! group-data-[collapsible=icon]:mx-auto group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:rounded-2xl! group-data-[collapsible=icon]:px-0!">
+              <div className="clay-raised flex size-9 shrink-0 items-center justify-center rounded-full bg-linear-to-br from-indigo-500 to-violet-600 text-white text-[11px] font-semibold">
                 {initials}
               </div>
               <div className="flex min-w-0 flex-1 flex-col group-data-[collapsible=icon]:hidden">
-                <span className="truncate text-[13px] font-medium leading-none">
+                <span className="truncate text-[13px] font-semibold leading-none">
                   {user?.name ?? 'User'}
                 </span>
-                <span className="truncate text-[11px] text-muted-foreground leading-none mt-0.5">
+                <span className="truncate text-[11px] text-muted-foreground leading-none mt-1">
                   {user?.email ?? ''}
                 </span>
               </div>

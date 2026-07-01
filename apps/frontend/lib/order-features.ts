@@ -20,7 +20,7 @@ export const ORDER_FEATURES: OrderFeature[] = [
     {
         slug: "food",
         category: "makanan",
-        label: "Ulun Pesan Makan",
+        label: "Layanan Makan",
         description: "Makanan lezat dari restoran & warung terdekat",
         icon: Utensils,
         gradient: "from-rose-50 to-orange-50",
@@ -34,7 +34,7 @@ export const ORDER_FEATURES: OrderFeature[] = [
     {
         slug: "drink",
         category: "minuman",
-        label: "Ulun Pesan Minum",
+        label: "Layanan Minum",
         description: "Kopi, teh, jus, dan minuman segar lainnya",
         icon: Coffee,
         gradient: "from-amber-50 to-yellow-50",
@@ -60,7 +60,7 @@ export const ORDER_FEATURES: OrderFeature[] = [
     {
         slug: "mart",
         category: 'mart',
-        label: "Ulun mau Belanja",
+        label: "Belanja",
         description: "Kebutuhan sehari-hari, sembako, dan produk rumah",
         icon: ShoppingBag,
         gradient: "from-emerald-50 to-teal-50",

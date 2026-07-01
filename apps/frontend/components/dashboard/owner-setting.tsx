@@ -12,7 +12,7 @@ import { ORDER_FEATURES } from "@/lib/order-features";
 import { API_URL } from "@/lib/api-url";
 import { resolveOutletImage, isBackendImage } from "@/lib/image-src";
 
-const FEATURE_META = ORDER_FEATURES;
+const FEATURE_META = ORDER_FEATURES.filter((f) => f.isAvailable);
 
 const BG_IMAGES = [
     "https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?w=1920&q=80&auto=format&fit=crop",

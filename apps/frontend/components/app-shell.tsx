@@ -15,5 +15,12 @@ export function AppShell({ children, variant = 'header' }: Props) {
         );
     }
 
-    return <SidebarProvider defaultOpen={isOpen}>{children}</SidebarProvider>;
+    return (
+        <SidebarProvider
+            defaultOpen={isOpen}
+            style={{ '--sidebar-width-icon': '4.75rem' } as React.CSSProperties}
+        >
+            {children}
+        </SidebarProvider>
+    );
 }

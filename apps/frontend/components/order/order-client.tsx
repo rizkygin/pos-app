@@ -495,6 +495,9 @@ export function OrderClient({
               </AnimatePresence>
             </motion.div>
           )}
+          <div className='min-h-52 flex justify-center'>
+              Kedida yang pian cari? 
+          </div>
         </section>
       </div>
       )}

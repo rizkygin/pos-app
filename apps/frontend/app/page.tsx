@@ -64,7 +64,7 @@ export default function Home() {
         transition={{ duration: 0.8, ease: "easeOut" }}
         className="w-full max-w-md p-8 relative z-10"
       >
-        <div className="backdrop-blur-xl bg-foreground dark:bg-black/40 border border-white/10 dark:border-white/10 shadow-2xl rounded-3xl p-8 overflow-hidden">
+        <div className="backdrop-blur-xl bg-foreground  border border-white/10 shadow-2xl rounded-3xl p-8 overflow-hidden">
           <div className="mb-8 text-center">
             <motion.div
               layout
