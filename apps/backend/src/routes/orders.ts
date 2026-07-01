@@ -189,7 +189,6 @@ export async function orderRoutes(app: FastifyInstance) {
         and(
           eq(ordersTable.id, orderId),
           eq(ordersTable.customer_id, customer.id),
-          eq(ordersTable.status, "pending"),
         ),
       );
 

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, desc, eq, isNull, notInArray, or, sql, sum } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, notInArray, or, sql, sum } from "drizzle-orm";
 import { db } from "../db";
 import {
   customersTable,
@@ -33,13 +33,92 @@ export async function customerRoutes(app: FastifyInstance) {
 
     if (!customer) return reply.send({ success: false, orders: [] });
 
+    const base = await db
+      .select({
+        orderId: ordersTable.id,
+        status: ordersTable.status,
+        createdAt: ordersTable.createdAt,
+        outletName: outletsTable.name,
+        fulfillment: ordersTable.fulfillment,
+      })
+      .from(ordersTable)
+      .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))
+      .where(eq(ordersTable.customer_id, customer.id))
+      .orderBy(desc(ordersTable.createdAt));
+
+    // Attach the actual purchased items (name + qty) + total per order.
+    const withItems = await attachOrderItems(base);
+
+    // Orders this customer has already rated (a rating row referencing any of the
+    // order's detail rows, authored by this user).
+    const orderIds = base.map((o) => o.orderId);
+    const ratedRows = orderIds.length
+      ? await db
+          .selectDistinct({ orderId: orderDetailsTable.order_id })
+          .from(ratingsTable)
+          .innerJoin(orderDetailsTable, eq(ratingsTable.order_details_id, orderDetailsTable.id))
+          .where(
+            and(
+              eq(ratingsTable.reviewer, session.user.id),
+              inArray(orderDetailsTable.order_id, orderIds),
+            ),
+          )
+      : [];
+    const ratedSet = new Set(ratedRows.map((r) => r.orderId));
+
+    // Rating stays open for 7 days after the order was made; after that it's no
+    // longer relevant. Both delivery (rate courier + products) and service
+    // (rate owner + products) orders are rateable once delivered.
+    const RATING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+
+    const orders = withItems.map((o) => {
+      const createdMs = o.createdAt ? new Date(o.createdAt).getTime() : now;
+      const withinWindow = now - createdMs <= RATING_WINDOW_MS;
+      const rated = ratedSet.has(o.orderId);
+      const rateable = o.status === "delivered";
+      return {
+        id: o.orderId,
+        status: o.status,
+        createdAt: o.createdAt,
+        outletName: o.outletName,
+        fulfillment: o.fulfillment,
+        items: o.items.map((it) => ({ name: it.productName, quantity: it.quantity })),
+        itemCount: o.items.length,
+        totalAmount: o.totalAmount,
+        rated,
+        canRate: rateable && withinWindow && !rated,
+        ratingExpired: rateable && !withinWindow && !rated,
+      };
+    });
+
+    return reply.send({ success: true, orders });
+  });
+
+  // Customer's scheduled (service) orders that aren't finished yet — i.e. service
+  // orders still in flight (not delivered/cancelled). Backs the "Scheduled Order"
+  // sidebar page.
+  app.get("/api/get-scheduled-orders", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false });
+
+    const [customer] = await db
+      .select({ id: customersTable.id })
+      .from(customersTable)
+      .where(eq(customersTable.user_id, session.user.id))
+      .limit(1);
+
+    if (!customer) return reply.send({ success: false, orders: [] });
+
     const orders = await db
       .select({
         id: ordersTable.id,
         status: ordersTable.status,
         createdAt: ordersTable.createdAt,
+        scheduledAt: ordersTable.scheduled_at,
+        discountAmount: ordersTable.discount_amount,
         outletName: outletsTable.name,
-        itemCount: sql<number>`COUNT(${orderDetailsTable.id})`.mapWith(Number),
+        serviceName: sql<string>`MAX(${productsTable.product_name})`,
         totalAmount: sum(
           sql<number>`CAST(${orderDetailsTable.summary_price} AS NUMERIC)`,
         ).mapWith(Number),
@@ -47,9 +126,16 @@ export async function customerRoutes(app: FastifyInstance) {
       .from(ordersTable)
       .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))
       .leftJoin(orderDetailsTable, eq(orderDetailsTable.order_id, ordersTable.id))
-      .where(eq(ordersTable.customer_id, customer.id))
+      .leftJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
+      .where(
+        and(
+          eq(ordersTable.customer_id, customer.id),
+          eq(ordersTable.fulfillment, "service"),
+          notInArray(ordersTable.status, ["delivered", "cancelled"]),
+        ),
+      )
       .groupBy(ordersTable.id, outletsTable.name)
-      .orderBy(desc(ordersTable.createdAt));
+      .orderBy(desc(ordersTable.scheduled_at));
 
     return reply.send({ success: true, orders });
   });

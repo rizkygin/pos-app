@@ -24,10 +24,42 @@ function newIngredient(): Ingredient {
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
     return (
         <div className="space-y-1.5">
-            <p className="text-sm font-bold text-muted-foreground">{label}</p>
+            <p className="text-xs font-bold text-muted-foreground sm:text-sm">{label}</p>
             {children}
             {hint ? <p className="text-[11px] leading-snug text-muted-foreground/80">{hint}</p> : null}
         </div>
+    );
+}
+
+function SectionCard({
+    icon: Icon,
+    title,
+    subtitle,
+    tour,
+    children,
+}: {
+    icon: React.ComponentType<{ className?: string }>;
+    title: string;
+    subtitle?: string;
+    tour?: string;
+    children: React.ReactNode;
+}) {
+    return (
+        <section
+            data-tour={tour}
+            className="space-y-4 rounded-2xl border border-border/60 bg-card p-4 shadow-sm sm:p-5"
+        >
+            <div className="flex items-start gap-2.5">
+                <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-rose-100 text-rose-600 dark:bg-rose-950/60">
+                    <Icon className="size-4" />
+                </span>
+                <div className="min-w-0">
+                    <p className="font-black leading-tight">{title}</p>
+                    {subtitle ? <p className="mt-0.5 text-xs text-muted-foreground">{subtitle}</p> : null}
+                </div>
+            </div>
+            {children}
+        </section>
     );
 }
 
@@ -135,63 +167,64 @@ export function HppCalculator() {
     };
 
     return (
-        <div className="space-y-8 max-w-2xl m-5">
+        <div className="mx-auto w-full max-w-2xl space-y-5 p-4 sm:space-y-6 sm:p-6">
             {/* Header */}
             <div className="flex items-start justify-between gap-3">
-                <div>
-                    <h1 className="text-2xl font-black flex items-center gap-2">
-                        <Calculator className="h-6 w-6 text-rose-500" />
+                <div className="min-w-0">
+                    <h1 className="flex items-center gap-2 text-xl font-black tracking-tight sm:text-2xl">
+                        <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-rose-100 text-rose-600 dark:bg-rose-950/60">
+                            <Calculator className="size-5" />
+                        </span>
                         Kalkulator HPP
                     </h1>
-                    <p className="text-muted-foreground mt-1 text-sm">
-                        Hitung Harga Pokok Penjualan (HPP) berdasarkan bahan baku, lalu dapatkan rekomendasi harga jual.
+                    <p className="mt-1.5 text-sm text-muted-foreground">
+                        Hitung Harga Pokok Penjualan dari bahan baku, lalu dapatkan rekomendasi harga jual.
                     </p>
                 </div>
                 <Button
                     type="button"
                     onClick={startTour}
-                    className="rounded-xl shrink-0 gap-2 bg-rose-600 hover:bg-rose-700 text-white font-bold shadow-md"
+                    className="shrink-0 gap-2 rounded-xl bg-rose-600 font-bold text-white shadow-md hover:bg-rose-700"
                 >
-                    <HelpCircle className="h-4 w-4" />
+                    <HelpCircle className="size-4" />
                     <span className="hidden sm:inline">Tutorial</span>
                 </Button>
             </div>
 
             {/* Bahan Baku */}
-            <div data-tour="ingredients" className="p-5 rounded-2xl border border-border/60 bg-card shadow-sm space-y-4">
-                <div>
-                    <p className="font-black flex items-center gap-2">
-                        <Package className="h-4 w-4 text-rose-500" /> Bahan Baku
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-1">
-                        Isi harga &amp; jumlah beli, lalu jumlah yang dipakai untuk satu resep.
-                    </p>
-                </div>
-
-                <div className="space-y-4">
+            <SectionCard
+                icon={Package}
+                title="Bahan Baku"
+                subtitle="Isi harga & jumlah beli, lalu jumlah yang dipakai untuk satu resep."
+                tour="ingredients"
+            >
+                <div className="space-y-3">
                     {ingredients.map((ing, idx) => (
-                        <div key={ing.id} className="p-4 rounded-xl border border-border/60 bg-background space-y-3">
-                            <div className="flex items-center justify-between gap-2">
+                        <div key={ing.id} className="space-y-3 rounded-xl border border-border/60 bg-background p-3 sm:p-4">
+                            <div className="flex items-center gap-2">
+                                <span className="grid size-6 shrink-0 place-items-center rounded-md bg-rose-100 text-[11px] font-black text-rose-600 dark:bg-rose-950/60">
+                                    {idx + 1}
+                                </span>
                                 <Input
                                     value={ing.name}
                                     onChange={(e) => updateIngredient(ing.id, "name", e.target.value)}
-                                    placeholder={`Nama bahan ${idx + 1} (mis. Tepung Terigu)`}
+                                    placeholder={`Nama bahan (mis. Tepung Terigu)`}
                                     className="rounded-xl font-bold"
                                 />
                                 <button
                                     type="button"
                                     onClick={() => removeIngredient(ing.id)}
                                     disabled={ingredients.length <= 1}
-                                    className="h-9 w-9 shrink-0 flex items-center justify-center rounded-xl border border-border/60 text-muted-foreground hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 transition-all disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:border-border/60"
+                                    className="grid size-9 shrink-0 place-items-center rounded-xl border border-border/60 text-muted-foreground transition-all hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-40 disabled:hover:border-border/60 disabled:hover:bg-transparent"
                                 >
-                                    <Trash2 className="h-4 w-4" />
+                                    <Trash2 className="size-4" />
                                 </button>
                             </div>
 
-                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                                <Field label="Harga Beli" hint="Total yang pian bayar saat beli bahan ini. Mis. Rp20.000 untuk 1 kg tepung.">
+                            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                                <Field label="Harga Beli" hint="Total saat beli bahan ini. Mis. Rp20.000 / 1 kg tepung.">
                                     <div className="relative">
-                                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground font-medium text-xs">
+                                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-medium text-muted-foreground">
                                             Rp
                                         </span>
                                         <Input
@@ -204,7 +237,7 @@ export function HppCalculator() {
                                         />
                                     </div>
                                 </Field>
-                                <Field label="Jumlah Beli" hint="Isi kemasan yang pian beli, sesuai satuan. Mis. 1000 (gr).">
+                                <Field label="Jumlah Beli" hint="Isi kemasan sesuai satuan. Mis. 1000 (gr).">
                                     <Input
                                         type="number"
                                         inputMode="decimal"
@@ -214,7 +247,7 @@ export function HppCalculator() {
                                         className="rounded-xl"
                                     />
                                 </Field>
-                                <Field label="Dipakai/Resep" hint="Jumlah dipakai untuk 1 resep. Mis. 150 (gr)">
+                                <Field label="Dipakai/Resep" hint="Dipakai untuk 1 resep. Mis. 150 (gr).">
                                     <Input
                                         type="number"
                                         inputMode="decimal"
@@ -224,7 +257,7 @@ export function HppCalculator() {
                                         className="rounded-xl"
                                     />
                                 </Field>
-                                <Field label="Satuan" hint="Satuan bahan: gr, ml, atau pcs.">
+                                <Field label="Satuan" hint="gr, ml, atau pcs.">
                                     <Input
                                         value={ing.unit}
                                         onChange={(e) => updateIngredient(ing.id, "unit", e.target.value)}
@@ -234,8 +267,9 @@ export function HppCalculator() {
                                 </Field>
                             </div>
 
-                            <div className="flex justify-end text-xs text-muted-foreground">
-                                Biaya bahan ini: <span className="ml-1 font-black text-foreground">{formatCurrency(ingredientCosts[idx])}</span>
+                            <div className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2 text-xs">
+                                <span className="text-muted-foreground">Biaya bahan ini</span>
+                                <span className="font-black text-foreground">{formatCurrency(ingredientCosts[idx])}</span>
                             </div>
                         </div>
                     ))}
@@ -244,21 +278,18 @@ export function HppCalculator() {
                 <button
                     type="button"
                     onClick={addIngredient}
-                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-dashed border-border/60 text-sm font-bold text-muted-foreground hover:border-rose-200 hover:bg-rose-50/40 hover:text-rose-600 transition-all"
+                    className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-border/60 px-4 py-2.5 text-sm font-bold text-muted-foreground transition-all hover:border-rose-200 hover:bg-rose-50/40 hover:text-rose-600"
                 >
-                    <Plus className="h-4 w-4" /> Tambah Bahan
+                    <Plus className="size-4" /> Tambah Bahan
                 </button>
-            </div>
+            </SectionCard>
 
             {/* Biaya Tambahan & Porsi */}
-            <div data-tour="extra-cost" className="p-5 rounded-2xl border border-border/60 bg-card shadow-sm space-y-4">
-                <p className="font-black flex items-center gap-2">
-                    <Package className="h-4 w-4 text-rose-500" /> Biaya Tambahan &amp; Porsi
-                </p>
-                <div className="grid grid-cols-2 gap-4">
-                    <Field label="Biaya Tambahan (kemasan, gas, dll)">
+            <SectionCard icon={Package} title="Biaya Tambahan & Porsi" tour="extra-cost">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <Field label="Biaya Tambahan" hint="Kemasan, gas, dan biaya lain di luar bahan.">
                         <div className="relative">
-                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground font-medium text-xs">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-medium text-muted-foreground">
                                 Rp
                             </span>
                             <Input
@@ -271,7 +302,7 @@ export function HppCalculator() {
                             />
                         </div>
                     </Field>
-                    <Field label="Jumlah Porsi Dihasilkan">
+                    <Field label="Jumlah Porsi Dihasilkan" hint="Berapa porsi dari satu resep ini.">
                         <Input
                             type="number"
                             inputMode="decimal"
@@ -282,56 +313,51 @@ export function HppCalculator() {
                         />
                     </Field>
                 </div>
-            </div>
+            </SectionCard>
 
             {/* Hasil HPP */}
-            <div data-tour="result" className="p-5 rounded-2xl border border-border/60 bg-card shadow-sm space-y-3">
-                <p className="font-black flex items-center gap-2">
-                    <Calculator className="h-4 w-4 text-rose-500" /> Hasil HPP
-                </p>
+            <SectionCard icon={Calculator} title="Hasil HPP" tour="result">
                 <div className="space-y-2 text-sm">
                     <div className="flex items-center justify-between">
                         <span className="text-muted-foreground">Total Biaya Bahan</span>
-                        <span className="font-bold">{formatCurrency(totalIngredientCost)}</span>
+                        <span className="font-bold tabular-nums">{formatCurrency(totalIngredientCost)}</span>
                     </div>
                     <div className="flex items-center justify-between">
                         <span className="text-muted-foreground">Biaya Tambahan</span>
-                        <span className="font-bold">{formatCurrency(totalExtraCost)}</span>
+                        <span className="font-bold tabular-nums">{formatCurrency(totalExtraCost)}</span>
                     </div>
-                    <div className="h-px bg-border my-1" />
+                    <div className="my-1 h-px bg-border" />
                     <div className="flex items-center justify-between">
                         <span className="text-muted-foreground">Total HPP</span>
-                        <span className="font-bold">{formatCurrency(totalCost)}</span>
+                        <span className="font-bold tabular-nums">{formatCurrency(totalCost)}</span>
                     </div>
                     <div className="flex items-center justify-between">
                         <span className="text-muted-foreground">Jumlah Porsi</span>
-                        <span className="font-bold">{portionCount}</span>
+                        <span className="font-bold tabular-nums">{portionCount}</span>
                     </div>
                 </div>
-                <div className="flex items-center justify-between p-4 rounded-xl bg-rose-50 border border-rose-200">
-                    <span className="font-bold text-rose-700">HPP per Porsi</span>
-                    <span className="font-black text-lg text-rose-700">{formatCurrency(hppPerPortion)}</span>
+                <div className="flex items-center justify-between rounded-xl border border-rose-200 bg-rose-50 p-4 dark:border-rose-900/60 dark:bg-rose-950/40">
+                    <span className="font-bold text-rose-700 dark:text-rose-300">HPP per Porsi</span>
+                    <span className="text-lg font-black tabular-nums text-rose-700 dark:text-rose-300">
+                        {formatCurrency(hppPerPortion)}
+                    </span>
                 </div>
-            </div>
+            </SectionCard>
 
             {/* Rekomendasi Harga Jual */}
-            <div data-tour="pricing" className="p-5 rounded-2xl border border-border/60 bg-card shadow-sm space-y-4">
-                <p className="font-black flex items-center gap-2">
-                    <TrendingUp className="h-4 w-4 text-rose-500" /> Rekomendasi Harga Jual
-                </p>
-
-                <div className="grid grid-cols-2 gap-3">
+            <SectionCard icon={TrendingUp} title="Rekomendasi Harga Jual" tour="pricing">
+                <div className="grid grid-cols-2 gap-2.5">
                     <button
                         type="button"
                         onClick={() => setPricingMode("markup")}
-                        className={`px-4 py-2.5 rounded-xl border-2 text-sm font-bold transition-all ${pricingMode === "markup" ? "border-rose-400 bg-rose-50 text-rose-700" : "border-border/60 text-muted-foreground hover:border-rose-200 hover:bg-rose-50/40"}`}
+                        className={`rounded-xl border-2 px-3 py-2.5 text-xs font-bold transition-all sm:text-sm ${pricingMode === "markup" ? "border-rose-400 bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300" : "border-border/60 text-muted-foreground hover:border-rose-200 hover:bg-rose-50/40"}`}
                     >
                         Markup dari HPP
                     </button>
                     <button
                         type="button"
                         onClick={() => setPricingMode("margin")}
-                        className={`px-4 py-2.5 rounded-xl border-2 text-sm font-bold transition-all ${pricingMode === "margin" ? "border-rose-400 bg-rose-50 text-rose-700" : "border-border/60 text-muted-foreground hover:border-rose-200 hover:bg-rose-50/40"}`}
+                        className={`rounded-xl border-2 px-3 py-2.5 text-xs font-bold transition-all sm:text-sm ${pricingMode === "margin" ? "border-rose-400 bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300" : "border-border/60 text-muted-foreground hover:border-rose-200 hover:bg-rose-50/40"}`}
                     >
                         Margin dari Harga Jual
                     </button>
@@ -347,7 +373,7 @@ export function HppCalculator() {
                             placeholder="30"
                             className="rounded-xl pr-9"
                         />
-                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground font-medium text-xs">
+                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-muted-foreground">
                             %
                         </span>
                     </div>
@@ -356,21 +382,21 @@ export function HppCalculator() {
                 <div className="space-y-2 text-sm">
                     <div className="flex items-center justify-between">
                         <span className="text-muted-foreground">Keuntungan per Porsi</span>
-                        <span className="font-bold">{formatCurrency(profitPerPortion)}</span>
+                        <span className="font-bold tabular-nums">{formatCurrency(profitPerPortion)}</span>
                     </div>
                     <div className="flex items-center justify-between">
                         <span className="text-muted-foreground">Margin Keuntungan</span>
-                        <span className="font-bold">{marginPercent.toFixed(1)}%</span>
+                        <span className="font-bold tabular-nums">{marginPercent.toFixed(1)}%</span>
                     </div>
                 </div>
 
-                <div className="flex items-center justify-between p-4 rounded-xl bg-emerald-50 border border-emerald-200">
-                    <span className="font-bold text-emerald-700">Harga Jual Disarankan</span>
-                    <span className="font-black text-lg text-emerald-700">
+                <div className="flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900/60 dark:bg-emerald-950/40">
+                    <span className="font-bold text-emerald-700 dark:text-emerald-300">Harga Jual Disarankan</span>
+                    <span className="text-lg font-black tabular-nums text-emerald-700 dark:text-emerald-300">
                         {isFinite(suggestedPrice) ? formatCurrency(suggestedPrice) : "—"}
                     </span>
                 </div>
-            </div>
+            </SectionCard>
         </div>
     );
 }

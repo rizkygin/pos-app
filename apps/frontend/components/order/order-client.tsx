@@ -22,6 +22,7 @@ import {
 import { StarRating } from '@/components/star-rating';
 import { fmtIDR, discountedPrice } from '@/lib/utils/format';
 import { ProductCard } from '@/components/order/product-card';
+import { ServiceProductCard } from '@/components/order/service-product-card';
 import {
   BasketSheetContent,
   type CartItem,
@@ -56,6 +57,12 @@ function getAdBannerSrc(image: string): string {
   return resolveBannerImage(image);
 }
 
+// Compact review count, e.g. 2400 -> "2.4k".
+function fmtCount(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, '')}k`;
+  return `${n}`;
+}
+
 // ─── Main Component ─────────────────────────────────────────────────────────
 
 export function OrderClient({
@@ -66,6 +73,9 @@ export function OrderClient({
   outletId?: string;
 }) {
   const backHref = feature ? `/dashboard/order/${feature}` : '/dashboard/order';
+  // Service outlets reuse this whole browsing UI, but with per-item "Ajukan
+  // Layanan" requests instead of a basket.
+  const isService = feature === 'service';
   const [selectedCategory, setSelectedCategory] = useState('Semua');
   const [searchQuery, setSearchQuery] = useState('');
   const [cart, setCart] = useState<CartItem[]>(() => {
@@ -138,7 +148,11 @@ export function OrderClient({
 
   const categories = useMemo(() => {
     const initialCategories = ['Semua'];
-    categoriesData?.map((cat: any) => initialCategories.push(cat.category));
+    categoriesData
+      // "jasa" (services) can't be added to a basket — they live in the service
+      // flow, so never surface that category in the normal browsing tabs.
+      ?.filter((cat: any) => cat.category !== 'jasa')
+      .map((cat: any) => initialCategories.push(cat.category));
     return initialCategories;
   }, [categoriesData, _outletId]);
 
@@ -159,18 +173,21 @@ export function OrderClient({
     const matchSearch: Product[] = products.filter(
       (p: Product) =>
         p.isAvailable &&
+        // Service view shows only service products; normal (food/drink/mart)
+        // view excludes them — services can't go in a basket.
+        (isService ? p.lowest_price != null : p.lowest_price == null) &&
         (p.product_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
           (p.description ?? '')
             .toLowerCase()
             .includes(searchQuery.toLowerCase())),
     );
 
-    if (selectedCategory === 'Semua') {
+    if (isService || selectedCategory === 'Semua') {
       return matchSearch;
     }
 
     return matchSearch.filter((p: Product) => p.category === selectedCategory);
-  }, [products, searchQuery, selectedCategory]);
+  }, [products, searchQuery, selectedCategory, isService]);
 
   // ── Recommended per category ──
   const recommendedByCategory = useMemo(() => {
@@ -304,7 +321,9 @@ export function OrderClient({
                     <span className="font-black text-amber-300">
                       {outlet?.ratings.toFixed(1)}
                     </span>
-                    <span className="text-white/60">(2.4k ulasan)</span>
+                    <span className="text-white/60">
+                      ({fmtCount(outlet?.reviewCount ?? 0)} ulasan)
+                    </span>
                   </div>
                   <div className="flex items-center gap-1">
                     <Clock className="h-3 w-3" />
@@ -332,7 +351,12 @@ export function OrderClient({
         <div className="flex items-center gap-1.5 flex-shrink-0">
           <Store className="h-3.5 w-3.5 text-rose-500" />
           <span className="font-medium">
-            {products?.filter((p) => p.isAvailable).length} menu tersedia
+            {products?.filter((p) =>
+              isService
+                ? p.isAvailable && p.lowest_price != null
+                : p.isAvailable && p.lowest_price == null,
+            )?.length}{' '}
+            {isService ? 'layanan' : 'menu'} tersedia
           </span>
         </div>
       </div>
@@ -416,7 +440,7 @@ export function OrderClient({
           <Input
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Cari menu..."
+            placeholder={isService ? 'Cari layanan...' : 'Cari menu...'}
             className="pl-12 pr-4 py-6 rounded-2xl text-base shadow-sm border-border/60 bg-card"
           />
           {searchQuery && (
@@ -429,8 +453,8 @@ export function OrderClient({
           )}
         </div>
 
-        {/* ── Category Tabs ─────────────────────────────────────── */}
-        <div className="flex gap-2.5 overflow-x-auto pb-1 no-scrollbar">
+        {/* ── Category Tabs (hidden for services — single category) ── */}
+        <div className={`flex gap-2.5 overflow-x-auto pb-1 no-scrollbar ${isService ? 'hidden' : ''}`}>
           {categories.map((cat) => (
             <button
               key={cat}
@@ -455,7 +479,11 @@ export function OrderClient({
         <section className="space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="font-black text-lg">
-              {selectedCategory === 'Semua' ? 'Semua Menu' : selectedCategory}
+              {isService
+                ? 'Semua Layanan'
+                : selectedCategory === 'Semua'
+                  ? 'Semua Menu'
+                  : selectedCategory}
               <span className="ml-2 text-sm font-semibold text-muted-foreground">
                 ({filteredProducts.length})
               </span>
@@ -477,21 +505,29 @@ export function OrderClient({
               className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4"
             >
               <AnimatePresence>
-                {filteredProducts?.map((product: Product) => (
-                  <ProductCard
-                    key={product.id}
-                    product={product}
-                    onAddToCart={addToCart}
-                    onToggleWishlist={toggleWishlist}
-                    isWishlisted={wishlistStore.has(product.id)}
-                    cartQuantity={
-                      cart.find((c) => c.product.id === product.id)?.quantity ??
-                      0
-                    }
-                    onIncrement={incrementCart}
-                    onDecrement={decrementCart}
-                  />
-                ))}
+                {filteredProducts?.map((product: Product) =>
+                  isService ? (
+                    <ServiceProductCard
+                      key={product.id}
+                      product={product}
+                      outletId={_outletId ?? ''}
+                    />
+                  ) : (
+                    <ProductCard
+                      key={product.id}
+                      product={product}
+                      onAddToCart={addToCart}
+                      onToggleWishlist={toggleWishlist}
+                      isWishlisted={wishlistStore.has(product.id)}
+                      cartQuantity={
+                        cart.find((c) => c.product.id === product.id)
+                          ?.quantity ?? 0
+                      }
+                      onIncrement={incrementCart}
+                      onDecrement={decrementCart}
+                    />
+                  ),
+                )}
               </AnimatePresence>
             </motion.div>
           )}
@@ -502,8 +538,8 @@ export function OrderClient({
       </div>
       )}
 
-      {/* ── Floating Action Bar ───────────────────────────────────── */}
-      {outlet && !outlet.isOpen ? null : (
+      {/* ── Floating Action Bar (no basket in service mode) ───────── */}
+      {isService || (outlet && !outlet.isOpen) ? null : (
       <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3">
         {/* Wishlist button */}
         <Sheet open={wishlistOpen} onOpenChange={setWishlistOpen}>

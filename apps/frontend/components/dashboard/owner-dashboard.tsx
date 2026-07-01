@@ -1,19 +1,29 @@
 'use client';
-import { DashboardHeader } from '@/components/dashboard-header';
-import {
-  TrendingUp,
-  ShoppingBag,
-  Layers,
-  ArrowUpRight,
-  ArrowDownRight,
-  ShoppingCart,
-  History,
-  User,
-  MessageSquare,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
 
 import Link from 'next/link';
+import { motion } from 'motion/react';
+import {
+  ShoppingBag,
+  ShoppingCart,
+  History,
+  ArrowUpRight,
+  ArrowDownRight,
+  ArrowRight,
+  Store,
+  LayoutGrid,
+  Book,
+  BarChart3,
+  Megaphone,
+  Calculator,
+  Receipt,
+  Boxes,
+  Truck,
+  Star,
+  Settings,
+  ClipboardList,
+  Sparkles,
+} from 'lucide-react';
+
 type RecentOrder = {
   orderId: string;
   itemCount: number;
@@ -21,16 +31,8 @@ type RecentOrder = {
   status: 'addToChart' | 'checkout' | null;
 };
 
-type Total6MonthsSales = {
-  totalSales: number;
-  percentage: number;
-};
-
-type TopProduct = {
-  name: string;
-  category: string;
-  totalSold: number;
-} | null;
+type Total6MonthsSales = { totalSales: number; percentage: number };
+type TopProduct = { name: string; category: string; totalSold: number } | null;
 
 function fmtIDR(amount: number) {
   return new Intl.NumberFormat('id-ID', {
@@ -41,9 +43,30 @@ function fmtIDR(amount: number) {
 }
 
 const STATUS_MAP = {
-  addToChart: { label: 'Diproses', color: 'bg-blue-100 text-blue-600' },
-  checkout: { label: 'Selesai', color: 'bg-emerald-100 text-emerald-600' },
+  addToChart: { label: 'Diproses', color: 'bg-blue-100 text-blue-600 dark:bg-blue-950 dark:text-blue-400' },
+  checkout: { label: 'Selesai', color: 'bg-emerald-100 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-400' },
 } as const;
+
+// Every owner feature, grouped for the shortcut grid.
+const FEATURES: {
+  name: string;
+  icon: typeof Store;
+  href: string;
+  grad: string;
+}[] = [
+  { name: 'Kasir', icon: Store, href: '/dashboard/cashier', grad: 'from-cyan-400 to-blue-500' },
+  { name: 'Produk', icon: LayoutGrid, href: '/dashboard/addproducts', grad: 'from-emerald-400 to-green-500' },
+  { name: 'Buku Kas', icon: Book, href: '/dashboard/cashflow', grad: 'from-rose-400 to-pink-500' },
+  { name: 'Laporan', icon: BarChart3, href: '/dashboard/reports', grad: 'from-violet-400 to-purple-500' },
+  { name: 'Pasang Iklan', icon: Megaphone, href: '/dashboard/promote', grad: 'from-fuchsia-400 to-pink-500' },
+  { name: 'Kalkulator HPP', icon: Calculator, href: '/dashboard/hpp-calculator', grad: 'from-amber-400 to-orange-500' },
+  { name: 'Faktur Jual', icon: Receipt, href: '/dashboard/invoice/sales', grad: 'from-sky-400 to-indigo-500' },
+  { name: 'Faktur Beli', icon: ShoppingBag, href: '/dashboard/invoice/purchase', grad: 'from-indigo-400 to-blue-500' },
+  { name: 'Stok', icon: Boxes, href: '/dashboard/invoice/stock', grad: 'from-teal-400 to-emerald-500' },
+  { name: 'Supplier', icon: Truck, href: '/dashboard/invoice/supplier', grad: 'from-orange-400 to-red-500' },
+  { name: 'Ratings', icon: Star, href: '/dashboard/ratings', grad: 'from-yellow-400 to-amber-500' },
+  { name: 'Pengaturan', icon: Settings, href: '/dashboard/setting', grad: 'from-slate-400 to-gray-500' },
+];
 
 export const OwnerDashboard = ({
   activeOrdersCount,
@@ -57,284 +80,170 @@ export const OwnerDashboard = ({
   topProduct: TopProduct;
 }) => {
   const isPositive = total6monthsSales.percentage >= 0;
-  return (
-    <main className="px-4 mx-2 md:mx-6 pb-24 lg:pb-12 pt-2">
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {/* Stats Card: Total Sales */}
-        <div className="group relative overflow-hidden rounded-xl border bg-linear-to-br from-blue-600/10 to-transparent p-4 transition-all hover:shadow-md hover:border-blue-600/30">
+  return (
+    <main className="mx-auto max-w-5xl px-4 pb-16 md:px-6">
+      {/* ── Gradient Hero ─────────────────────────────────────────── */}
+      <div className="relative mt-4 overflow-hidden rounded-3xl bg-linear-to-br from-indigo-600 via-blue-600 to-violet-600 p-6 text-white shadow-xl shadow-indigo-500/20 md:p-8">
+        <div className="absolute -right-10 -top-12 size-48 rounded-full bg-white/10 blur-3xl" />
+        <div className="absolute -bottom-16 -left-10 size-48 rounded-full bg-white/10 blur-3xl" />
+
+        <div className="relative">
           <div className="flex items-center justify-between">
-            <div className="rounded-lg bg-blue-600 p-2 text-white shadow-md shadow-blue-600/20 transition-transform group-hover:scale-110">
-              <TrendingUp className="h-4 w-4" />
+            <div>
+              <p className="text-sm font-medium text-white/70">Halo, Juragan 👋</p>
+              <h1 className="text-xl font-black tracking-tight md:text-2xl">Ringkasan Bisnismu</h1>
             </div>
-            <div
-              className={`flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
-                isPositive
-                  ? 'text-emerald-600 bg-emerald-50'
-                  : 'text-rose-600 bg-rose-50'
-              }`}
+            <Link
+              href="/dashboard/activeorder"
+              className="flex items-center gap-2 rounded-2xl bg-white/15 px-3.5 py-2 text-sm font-bold backdrop-blur transition-colors hover:bg-white/25"
             >
-              {isPositive ? (
-                <ArrowUpRight className="h-3 w-3" />
-              ) : (
-                <ArrowDownRight className="h-3 w-3" />
-              )}
-              <span>
+              <ClipboardList className="size-4" />
+              <span className="hidden sm:inline">Pesanan Aktif</span>
+              <span className="flex size-5 items-center justify-center rounded-full bg-white text-[11px] font-black text-indigo-600">
+                {activeOrdersCount}
+              </span>
+            </Link>
+          </div>
+
+          {/* Headline metric */}
+          <div className="mt-6">
+            <p className="text-[11px] font-bold uppercase tracking-widest text-white/60">
+              Penjualan 6 Bulan
+            </p>
+            <div className="mt-1 flex flex-wrap items-center gap-3">
+              <h2 className="text-3xl font-black tracking-tight md:text-4xl">
+                {fmtIDR(total6monthsSales.totalSales)}
+              </h2>
+              <span
+                className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-black ${
+                  isPositive ? 'bg-emerald-400/90 text-emerald-950' : 'bg-rose-400/90 text-rose-950'
+                }`}
+              >
+                {isPositive ? <ArrowUpRight className="size-3.5" /> : <ArrowDownRight className="size-3.5" />}
                 {isPositive ? '+' : ''}
                 {total6monthsSales.percentage.toFixed(1)}%
               </span>
             </div>
           </div>
-          <div className="mt-3 flex flex-col gap-0.5">
-            <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
-              Sales (6 Months)
-            </p>
-            <h2 className="text-lg font-bold tracking-tight">
-              {fmtIDR(total6monthsSales.totalSales)}
-            </h2>
-          </div>
-          <div className="absolute -right-4 -top-4 h-16 w-16 rounded-full bg-blue-600/5 blur-2xl transition-opacity group-hover:opacity-100 opacity-50" />
-        </div>
 
-        {/* Stats Card: Active Orders */}
-        <div className="group relative overflow-hidden rounded-xl border bg-linear-to-br from-purple-600/10 to-transparent p-4 transition-all hover:shadow-md hover:border-purple-600/30">
-          <div className="flex items-center justify-between">
-            <div className="rounded-lg bg-purple-600 p-2 text-white shadow-md shadow-purple-600/20 transition-transform group-hover:scale-110">
-              <ShoppingBag className="h-4 w-4" />
+          {/* Mini stats */}
+          <div className="mt-5 grid grid-cols-2 gap-3">
+            <div className="rounded-2xl bg-white/10 p-3 backdrop-blur">
+              <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-white/60">
+                <ShoppingBag className="size-3" /> Pesanan Aktif
+              </div>
+              <p className="mt-0.5 text-xl font-black">{activeOrdersCount}</p>
             </div>
-            <div className="text-xs font-semibold text-muted-foreground bg-muted/50 px-2 py-0.5 rounded-full">
-              Last 24h
+            <div className="rounded-2xl bg-white/10 p-3 backdrop-blur">
+              <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-white/60">
+                <Sparkles className="size-3" /> Produk Terlaris
+              </div>
+              <p className="mt-0.5 truncate text-sm font-black">{topProduct ? topProduct.name : '-'}</p>
+              {topProduct && (
+                <p className="text-[11px] text-white/70">{topProduct.totalSold} terjual · {topProduct.category}</p>
+              )}
             </div>
           </div>
-          <div className="mt-3 flex flex-col gap-0.5">
-            <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
-              Active Orders
-            </p>
-            <h2 className="text-lg font-bold tracking-tight">
-              {activeOrdersCount}
-            </h2>
-          </div>
-          <div className="absolute -right-4 -top-4 h-16 w-16 rounded-full bg-purple-600/5 blur-2xl transition-opacity group-hover:opacity-100 opacity-50" />
         </div>
-
-        {/* Stats Card: Top Product */}
-        <div className="group relative overflow-hidden rounded-xl border bg-linear-to-br from-amber-600/10 to-transparent p-4 transition-all hover:shadow-md hover:border-amber-600/30">
-          <div className="flex items-center justify-between">
-            <div className="rounded-lg bg-amber-600 p-2 text-white shadow-md shadow-amber-600/20 transition-transform group-hover:scale-110">
-              <Layers className="h-4 w-4" />
-            </div>
-            <div className="text-xs font-semibold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
-              {topProduct ? topProduct.category : 'Popular'}
-            </div>
-          </div>
-          <div className="mt-3 flex flex-col gap-0.5">
-            <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
-              Top Product
-            </p>
-            <h2 className="text-lg font-bold tracking-tight truncate">
-              {topProduct ? topProduct.name : '-'}
-            </h2>
-          </div>
-          <div className="absolute -right-4 -top-4 h-16 w-16 rounded-full bg-amber-600/5 blur-2xl transition-opacity group-hover:opacity-100 opacity-50" />
-        </div>
-
-        {/* Stats Card: Order Outlet */}
-        <Link
-          href="/dashboard/order-outlet"
-          className="group relative overflow-hidden rounded-xl border bg-linear-to-br from-rose-600/10 to-transparent p-4 transition-all hover:shadow-md hover:border-rose-600/30"
-        >
-          <div className="flex items-center justify-between">
-            <div className="rounded-lg bg-rose-600 p-2 text-white shadow-md shadow-rose-600/20 transition-transform group-hover:scale-110">
-              <ShoppingCart className="h-4 w-4" />
-            </div>
-            <div className="flex items-center gap-1 text-xs font-semibold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full">
-              <span>Manage</span>
-              <ArrowUpRight className="h-3 w-3" />
-            </div>
-          </div>
-          <div className="mt-3 flex flex-col gap-0.5">
-            <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
-              History Pesanan
-            </p>
-            <h2 className="text-lg font-bold tracking-tight">
-              {activeOrdersCount} Active
-            </h2>
-          </div>
-          <div className="absolute -right-4 -top-4 h-16 w-16 rounded-full bg-rose-600/5 blur-2xl transition-opacity group-hover:opacity-100 opacity-50" />
-        </Link>
       </div>
 
-      {/* Premium Dashboard Sections */}
-      <div className="mt-8 grid gap-6 lg:grid-cols-2">
-        {/* Recent Orders Table */}
-        <div className="rounded-2xl border bg-background/50 p-6 backdrop-blur-sm transition-all hover:bg-background shadow-sm hover:shadow-md">
-          <div className="flex items-center justify-between mb-6">
-            <div>
-              <h3 className="text-lg font-bold tracking-tight text-foreground">
-                Recent Orders
-              </h3>
-              <p className="text-xs text-muted-foreground uppercase tracking-widest font-bold">
-                Live Updates
-              </p>
-            </div>
-            <Link href="/dashboard/order-outlet">
-              <Button
-                variant="outline"
-                size="sm"
-                className="text-xs font-bold border-muted hover:bg-muted/50 transition-colors"
+      {/* ── Feature Shortcuts ─────────────────────────────────────── */}
+      <section className="mt-8">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-lg font-black tracking-tight">Kelola Bisnis</h3>
+          <span className="text-xs font-bold text-muted-foreground">{FEATURES.length} fitur</span>
+        </div>
+        <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-6">
+          {FEATURES.map((f, i) => (
+            <motion.div
+              key={f.name}
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.25, delay: i * 0.03 }}
+            >
+              <Link
+                href={f.href}
+                className="group flex flex-col items-center gap-2 rounded-2xl border border-border/60 bg-card p-3 shadow-sm transition-all hover:-translate-y-1 hover:shadow-md"
               >
-                View All
-              </Button>
-            </Link>
-          </div>
-          {recentOrders && (
-            <div className="space-y-3">
-              {recentOrders?.length === 0 ? (
-                <div className="flex flex-col items-center gap-2 py-8 text-muted-foreground">
-                  <History className="h-8 w-8 opacity-20" />
-                  <p className="text-sm font-semibold">Belum ada pesanan</p>
+                <div className={`flex size-12 items-center justify-center rounded-2xl bg-linear-to-br ${f.grad} text-white shadow-lg transition-transform group-hover:scale-110`}>
+                  <f.icon className="size-5" />
                 </div>
-              ) : (
-                recentOrders.map((order) => {
-                  const s = order.status
-                    ? STATUS_MAP[order.status]
-                    : {
-                        label: 'Pending',
-                        color: 'bg-amber-100 text-amber-600',
-                      };
-                  const Icon =
-                    order.status === 'checkout'
-                      ? ShoppingBag
-                      : order.status === 'addToChart'
-                        ? ShoppingCart
-                        : History;
-                  return (
+                <span className="text-center text-[11px] font-bold leading-tight text-muted-foreground group-hover:text-foreground">
+                  {f.name}
+                </span>
+              </Link>
+            </motion.div>
+          ))}
+        </div>
+      </section>
+
+      {/* ── Recent Orders ─────────────────────────────────────────── */}
+      <section className="mt-8">
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-black tracking-tight">Pesanan Terbaru</h3>
+            <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-widest text-muted-foreground">
+              <span className="size-1.5 animate-pulse rounded-full bg-emerald-500" /> Live
+            </p>
+          </div>
+          <Link
+            href="/dashboard/order-outlet"
+            className="flex items-center gap-1 rounded-2xl border border-border/60 px-3 py-1.5 text-xs font-bold transition-colors hover:bg-muted/50"
+          >
+            Lihat Semua <ArrowRight className="size-3.5" />
+          </Link>
+        </div>
+
+        <div className="rounded-3xl border border-border/60 bg-card p-3 shadow-sm">
+          {!recentOrders || recentOrders.length === 0 ? (
+            <div className="flex flex-col items-center gap-2 py-12 text-muted-foreground">
+              <History className="size-8 opacity-20" />
+              <p className="text-sm font-semibold">Belum ada pesanan</p>
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              {recentOrders.map((order, i) => {
+                const s = order.status
+                  ? STATUS_MAP[order.status]
+                  : { label: 'Pending', color: 'bg-amber-100 text-amber-600 dark:bg-amber-950 dark:text-amber-400' };
+                const Icon = order.status === 'checkout' ? ShoppingBag : order.status === 'addToChart' ? ShoppingCart : History;
+                return (
+                  <motion.div
+                    key={order.orderId}
+                    initial={{ opacity: 0, x: -8 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.2, delay: i * 0.03 }}
+                  >
                     <Link
-                      key={order.orderId}
                       href={`/dashboard/order-outlet/${order.orderId}`}
-                      className="group flex items-center justify-between p-4 rounded-xl border border-transparent hover:border-muted hover:bg-muted/10 transition-all cursor-pointer"
+                      className="group flex items-center justify-between rounded-2xl p-3 transition-colors hover:bg-muted/40"
                     >
-                      <div className="flex items-center gap-4">
-                        <div
-                          className={`p-2 rounded-lg ${s.color} opacity-80 group-hover:opacity-100 transition-opacity`}
-                        >
-                          <Icon className="h-4 w-4" />
+                      <div className="flex items-center gap-3">
+                        <div className={`flex size-9 items-center justify-center rounded-xl ${s.color}`}>
+                          <Icon className="size-4" />
                         </div>
                         <div>
-                          <p className="text-sm font-bold group-hover:text-blue-600 transition-colors">
+                          <p className="text-sm font-black group-hover:text-blue-600 transition-colors">
                             #{order.orderId.slice(-8).toUpperCase()}
                           </p>
-                          <p className="text-xs text-muted-foreground">
-                            {order.itemCount} item
-                          </p>
+                          <p className="text-xs text-muted-foreground">{order.itemCount} item</p>
                         </div>
                       </div>
-                      <div className="flex items-center gap-6 text-right">
-                        <span className="text-sm font-bold tabular-nums">
-                          {fmtIDR(order.totalAmount)}
-                        </span>
-                        <span
-                          className={`hidden sm:inline-block px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider ${s.color}`}
-                        >
+                      <div className="flex items-center gap-4 text-right">
+                        <span className="text-sm font-black tabular-nums">{fmtIDR(order.totalAmount)}</span>
+                        <span className={`hidden rounded-lg px-2 py-1 text-[10px] font-bold uppercase tracking-wider sm:inline-block ${s.color}`}>
                           {s.label}
                         </span>
                       </div>
                     </Link>
-                  );
-                })
-              )}
+                  </motion.div>
+                );
+              })}
             </div>
           )}
         </div>
-
-        {/* Quick Actions Grid — desktop only */}
-        <div className="hidden lg:block rounded-xl border bg-background/50 p-4 backdrop-blur-sm transition-all hover:bg-background shadow-sm hover:shadow-md">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="text-sm font-bold tracking-tight text-foreground">
-                Quick Actions
-              </h3>
-              <p className="text-[10px] text-muted-foreground uppercase tracking-widest font-bold">
-                System Controls
-              </p>
-            </div>
-            <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            {[
-              {
-                name: 'Add Product',
-                icon: ShoppingBag,
-                color: 'text-blue-600',
-                bg: 'bg-blue-50',
-                border: 'border-blue-100',
-                href: '/dashboard/addproducts',
-              },
-              {
-                name: 'View Reports',
-                icon: TrendingUp,
-                color: 'text-purple-600',
-                bg: 'bg-purple-50',
-                border: 'border-purple-100',
-                href: '/dashboard/reports',
-              },
-              {
-                name: 'Manage Users',
-                icon: User,
-                color: 'text-amber-600',
-                bg: 'bg-amber-50',
-                border: 'border-amber-100',
-                href: '/dashboard/user',
-              },
-              {
-                name: 'Settings',
-                icon: Layers,
-                color: 'text-rose-600',
-                bg: 'bg-rose-50',
-                border: 'border-rose-100',
-                href: '/dashboard/settings',
-              },
-            ].map((action, i) => (
-              <Link
-                key={i}
-                href={action.href}
-                className={`flex flex-col items-center justify-center gap-2 p-3 rounded-xl border ${action.border} bg-background hover:border-blue-600/30 hover:shadow-md transition-all group relative overflow-hidden`}
-              >
-                <div
-                  className={`p-2 rounded-lg ${action.bg} ${action.color} group-hover:scale-110 transition-transform relative z-10`}
-                >
-                  <action.icon className="h-4 w-4" />
-                </div>
-                <span className="text-xs font-bold text-muted-foreground group-hover:text-foreground transition-colors relative z-10">
-                  {action.name}
-                </span>
-                <div className="absolute inset-0 bg-linear-to-br from-transparent to-muted/10 opacity-0 group-hover:opacity-100 transition-opacity" />
-              </Link>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Mobile Quick Actions Bottom Nav */}
-      <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 border-t bg-background/95 backdrop-blur-sm">
-        <div className="flex items-center justify-around ">
-          {[
-            { name: 'Add Product', icon: ShoppingBag, color: 'text-blue-600', href: '/dashboard/addproducts' },
-            { name: 'Reports', icon: TrendingUp, color: 'text-purple-600', href: '/dashboard/reports' },
-            { name: 'Users', icon: User, color: 'text-amber-600', href: '/dashboard/user' },
-            { name: 'Settings', icon: Layers, color: 'text-rose-600', href: '/dashboard/setting' },
-          ].map((action, i) => (
-            <Link
-              key={i}
-              href={action.href}
-              className={`flex flex-col items-center gap-1 py-3 px-4 ${action.color} hover:opacity-70 transition-opacity`}
-            >
-              <action.icon className="h-5 w-5" />
-              <span className="text-[10px] font-semibold text-foreground/70">{action.name}</span>
-            </Link>
-          ))}
-        </div>
-      </nav>
+      </section>
     </main>
   );
 };

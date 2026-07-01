@@ -42,10 +42,14 @@ type ItemInput = {
   description?: string;
   quantity?: number | string;
   unit_price?: number | string;
+  // Per-line discount percentage (0-100); reduces this line before tax.
+  discount_pct?: number | string;
 };
 
 // Compute money for an invoice from its line items. All money is handled as
 // numbers here and stored as numeric strings. tax_rate is a percentage.
+// Each line's percentage discount is applied first (baked into line_total),
+// then the invoice-level `discount` (Rp) is subtracted, then tax.
 function computeTotals(
   items: ItemInput[],
   taxRate: number,
@@ -55,8 +59,9 @@ function computeTotals(
   const lines = items.map((it) => {
     const qty = Number(it.quantity ?? 0);
     const price = Number(it.unit_price ?? 0);
-    const line_total = +(qty * price).toFixed(2);
-    return { qty, price, line_total };
+    const discPct = Math.min(100, Math.max(0, Number(it.discount_pct ?? 0)));
+    const line_total = +(qty * price * (1 - discPct / 100)).toFixed(2);
+    return { qty, price, discPct, line_total };
   });
   const subtotal = +lines.reduce((s, l) => s + l.line_total, 0).toFixed(2);
   const base = Math.max(0, subtotal - discount);
@@ -264,6 +269,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
           description: it.description ?? "",
           quantity: String(lines[i].qty),
           unit_price: String(lines[i].price),
+          discount_pct: String(lines[i].discPct),
           line_total: String(lines[i].line_total),
         })),
       );
@@ -549,6 +555,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
           description: it.description ?? "",
           quantity: String(lines[i].qty),
           unit_price: String(lines[i].price),
+          discount_pct: String(lines[i].discPct),
           line_total: String(lines[i].line_total),
         })),
       );

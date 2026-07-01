@@ -124,3 +124,48 @@ body {
   background-color: #f1f5f9;
   color: #0f172a;
 }
+/* Animated panning gradient — used on the dashboard header so it's not static. */
+@keyframes gradient-pan {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+.animated-gradient {
+  background-image: linear-gradient(
+    90deg,
+    #6b21a8,
+    #4f46e5,
+    #2563eb,
+    #16a34a,
+    #2563eb,
+    #4f46e5,
+    #6b21a8
+  );
+  background-size: 300% 100%;
+  animation: gradient-pan 12s ease infinite;
+}
+/* A slow shine sweeping across the header. */
+@keyframes header-shine {
+  0% { transform: translateX(-120%); }
+  60%, 100% { transform: translateX(220%); }
+}
+.header-shine::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 40%;
+  background: linear-gradient(
+    100deg,
+    transparent,
+    rgba(255, 255, 255, 0.18),
+    transparent
+  );
+  animation: header-shine 6s ease-in-out infinite;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animated-gradient { animation: none; }
+  .header-shine::after { animation: none; display: none; }
+}

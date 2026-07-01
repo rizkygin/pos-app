@@ -38,6 +38,7 @@ import {
   ClipboardList,
   Star,
   History,
+  CalendarClock,
   Megaphone,
   CreditCard,
   Users,
@@ -199,6 +200,13 @@ const invoiceNavSubItems = [
 ];
 
 const customerNavItems: NavItem[] = [
+  {
+    name: 'Terjadwal',
+    url: '/dashboard/scheduled-order',
+    icon: CalendarClock,
+    iconBg: 'bg-blue-100 dark:bg-blue-950',
+    iconColor: 'text-blue-600 dark:text-blue-400',
+  },
   {
     name: 'History Order',
     url: '/dashboard/history-order',

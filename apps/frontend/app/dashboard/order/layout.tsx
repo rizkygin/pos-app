@@ -17,9 +17,12 @@ export default async function OrderLayout({
   // Customers with an in-progress order (not delivered/cancelled) resume it.
   const res = await serverFetch('/api/get-active-order');
   const data = res.ok ? await res.json() : null;
-  if (data?.success && data.order && data.order.status !== 'delivered') {
+
+  //if customer have an active order, they must not able to order another thing. 
+  if (data?.success && data.order && data.order.status !== 'delivered' && data.order.fulfillment !=='service') {
     redirect('/dashboard/activeorder/');
   }
+  
 
   return <>{children}</>;
 }

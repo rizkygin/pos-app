@@ -369,7 +369,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
       outletId: number;
       outletName: string;
       outletAvatar: string;
-      outletFeature: string;
+      productFeature: string[];
       itemCount: number;
       totalAmount: number;
       itemsSummary: string;
@@ -381,7 +381,17 @@ export async function dashboardRoutes(app: FastifyInstance) {
           orderId: ordersTable.id,
           outletId: outletsTable.id,
           outletName: outletsTable.name,
-          outeletFeature: outletsTable.features,
+          // The ordered product's own features drive "Order Lagi" routing — the
+          // outlet may offer several features, but we want the one that was
+          // actually ordered.
+          productFeature: sql<string[] | null>`(
+            SELECT ${productsTable.features}
+            FROM ${orderDetailsTable}
+            JOIN ${productsTable} ON ${productsTable.id} = ${orderDetailsTable.product_id}
+            WHERE ${orderDetailsTable.order_id} = ${ordersTable.id}
+            ORDER BY ${orderDetailsTable.id}
+            LIMIT 1
+          )`,
           outletAvatar: outletsTable.avatar,
           itemCount: sum(orderDetailsTable.quantity).mapWith(Number),
           totalAmount: sum(
@@ -403,7 +413,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
           orderId: o.orderId,
           outletId: o.outletId,
           outletName: o.outletName,
-          outletFeature: o.outeletFeature[0] ?? "food",
+          productFeature: o.productFeature ?? [],
           outletAvatar: o.outletAvatar,
           itemCount: o.itemCount ?? 0,
           totalAmount: o.totalAmount ?? 0,

@@ -30,9 +30,10 @@ const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
                 <AppSidebar isOwner={isOwner} isCourier={isCourier} isCustomer={isCustomer} isAdmin={isAdmin} />
 
                 <AppContent variant="sidebar" className="h-svh overflow-x-hidden overflow-y-auto">
-                    <header className="sticky top-0 z-30 flex h-12 shrink-0 items-center gap-2 border-b bg-background px-3 md:h-10 bg-linear-to-r from-purple-800 to-green-600">
-                        <SidebarTrigger className="size-11 md:size-7" />
-                        <span className="text-sm font-semibold text-amber-50">
+                    <header className="animated-gradient header-shine sticky top-0 z-30 flex h-12 shrink-0 items-center gap-2 overflow-hidden border-b border-white/10 px-3 shadow-sm md:h-10">
+                        <SidebarTrigger className="relative z-10 size-11 text-amber-50 hover:bg-white/15 hover:text-white md:size-7" />
+                        <span className="relative z-10 flex items-center gap-2 text-sm font-semibold text-amber-50 drop-shadow-sm">
+                            <span className="inline-block size-1.5 animate-pulse rounded-full bg-emerald-300 shadow-[0_0_8px_rgba(110,231,183,0.9)]" />
                             {isAdmin ? 'Hello Admin' : isOwner ? 'Dashboard' : isCourier ? 'Kurir' : 'Dashboard'}
                         </span>
                     </header>

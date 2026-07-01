@@ -183,6 +183,13 @@
       "when": 1782885950790,
       "tag": "0025_service_product_and_order_fulfillment",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1782924101053,
+      "tag": "0026_invoice_item_discount_pct",
+      "breakpoints": true
     }
   ]
 }

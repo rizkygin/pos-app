@@ -36,7 +36,7 @@ type LastOrder = {
     outletId: number;
     outletName: string;
     outletAvatar: string;
-    outletFeature: string;
+    productFeature: string[];
     itemCount: number;
     totalAmount: number;
     itemsSummary: string;
@@ -261,7 +261,7 @@ export const CustomerDashboard = ({ lastOrders = [], recommend = [], ads = [], h
                                         {formatCurrency(order.totalAmount)}
                                     </span>
                                     <Button asChild size="sm" className="rounded-full font-black bg-rose-600 hover:bg-rose-700">
-                                        <Link href={`/dashboard/order/${order.outletFeature}/${order.outletId}`}>Order Lagi</Link>
+                                        <Link href={`/dashboard/order/${order.productFeature?.[0] ?? 'food'}/${order.outletId}`}>Order Lagi</Link>
                                     </Button>
                                 </div>
                             </motion.div>

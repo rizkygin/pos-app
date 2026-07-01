@@ -1,7 +1,10 @@
 'use client';
 
 import { motion, AnimatePresence } from 'motion/react';
-import { cancelOrderbyCustomer, acceptServiceOrder } from '@/app/dashboard/activeorder/actions';
+import {
+  cancelOrderbyCustomer,
+  acceptServiceOrder,
+} from '@/app/dashboard/activeorder/actions';
 import { useTransition, useState, useEffect, useCallback } from 'react';
 import QRCode from 'react-qr-code';
 import { QrCode, X, Lock, MapPin } from 'lucide-react';
@@ -443,7 +446,10 @@ export function ActiveOrderAnimation({
 
   const poll = useCallback(async () => {
     try {
-      const res = await fetch(`${API_URL}/api/get-active-order`, { cache: 'no-store', credentials: 'include' });
+      const res = await fetch(`${API_URL}/api/get-active-order`, {
+        cache: 'no-store',
+        credentials: 'include',
+      });
       const data = await res.json();
       if (!data.success) return;
       const next = data.order.status as OrderStatus;
@@ -453,10 +459,9 @@ export function ActiveOrderAnimation({
         if (since) setLiveStatusSince(since);
       }
       if (next === 'delivered')
-        // Service orders have no courier to rate — send them to their history.
         router.push(
           isService
-            ? '/dashboard/history-order'
+            ? `/dashboard/ratings/submit/service/${data.order.id}`
             : `/dashboard/ratings/submit/customer/${data.order.id}`,
         );
     } catch {
@@ -546,8 +551,9 @@ export function ActiveOrderAnimation({
           <motion.form
             action={() =>
               startTransition(async () => {
-                await cancelOrderbyCustomer(orderId);
-                router.push('/dashboard/order');
+                await cancelOrderbyCustomer(orderId).then(() => {
+                  router.push('/dashboard/order');
+                });
               })
             }
             initial={{ opacity: 0 }}
@@ -589,7 +595,7 @@ export function ActiveOrderAnimation({
             onClick={() =>
               startTransition(async () => {
                 await acceptServiceOrder(orderId);
-                router.push('/dashboard/history-order');
+                router.push(`/dashboard/ratings/submit/service/${orderId}`);
               })
             }
             className="w-full py-2.5 rounded-xl bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-60"

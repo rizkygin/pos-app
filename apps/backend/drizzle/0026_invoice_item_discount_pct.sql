@@ -1,0 +1,1 @@
+ALTER TABLE "invoice_items" ADD COLUMN "discount_pct" numeric(5, 2) DEFAULT '0' NOT NULL;

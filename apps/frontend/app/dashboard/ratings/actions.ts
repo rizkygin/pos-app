@@ -1,4 +1,4 @@
-import { API_URL } from '@/lib/api-url';
+import { serverFetch } from '@/lib/server-fetch';
 
 type RatingInput = { rating: number; comment: string };
 type ProductRatingInput = RatingInput & {
@@ -10,11 +10,13 @@ export type SubmitResult =
   | { ok: true }
   | { ok: false; error: 'already_rated' | 'not_found' | 'unknown' };
 
+// These run inside `'use server'` handlers (server-side), so a plain
+// `credentials: 'include'` fetch won't carry the browser's auth cookie. Route
+// through serverFetch, which forwards the incoming cookie to the backend.
 async function postRating(path: string, body: unknown): Promise<SubmitResult> {
   try {
-    const res = await fetch(`${API_URL}${path}`, {
+    const res = await serverFetch(path, {
       method: 'POST',
-      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
@@ -39,4 +41,13 @@ export async function submitCourierRatingAction(
   outletRating: RatingInput,
 ): Promise<SubmitResult> {
   return postRating('/api/ratings/courier', { orderId, customerRating, outletRating });
+}
+
+// Customer rates the provider (owner) + the service product(s) of a service order.
+export async function submitServiceRatingAction(
+  orderId: string,
+  ownerRating: RatingInput,
+  productRatings: ProductRatingInput[],
+): Promise<SubmitResult> {
+  return postRating('/api/ratings/service', { orderId, ownerRating, productRatings });
 }

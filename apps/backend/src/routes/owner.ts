@@ -459,6 +459,155 @@ export async function ownerRoutes(app: FastifyInstance) {
     }
   });
 
+  // Owner reports summary for a period: KPIs (revenue, HPP/cogs, profit, orders,
+  // AOV) with previous-period comparison, daily sales trend, top products by
+  // revenue/profit, and hourly distribution. Sales = non-cancelled, non-pending
+  // orders (matches the dashboard's realized-sales definition).
+  app.get("/api/reports/summary", async (request, reply) => {
+    try {
+      const { period = "30d", timezone = "Asia/Jakarta" } = request.query as Record<string, string>;
+
+      const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+      if (!session?.user) return reply.status(401).send({ success: false });
+
+      const outlet = await getOutletByUserId(session.user.id);
+      if (!outlet) return reply.status(403).send({ success: false, error: "Not an owner" });
+
+      // Local "today" (YYYY-MM-DD) in the outlet's timezone.
+      const now = new Date();
+      const localDateStr = (d: Date) => {
+        const p: any = {};
+        new Intl.DateTimeFormat("en-CA", {
+          timeZone: timezone,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        })
+          .formatToParts(d)
+          .forEach((x) => (p[x.type] = x.value));
+        return `${p.year}-${p.month}-${p.day}`;
+      };
+
+      const today = localDateStr(now);
+      let from: Date;
+      const to = now;
+      if (period === "today") {
+        from = getUTCRangeFromLocalDate(today, timezone).startUTC;
+      } else if (period === "7d") {
+        from = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      } else if (period === "month") {
+        from = getUTCRangeFromLocalDate(`${today.slice(0, 7)}-01`, timezone).startUTC;
+      } else {
+        from = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      }
+      // Previous window of equal length, immediately before `from`.
+      const spanMs = to.getTime() - from.getTime();
+      const prevFrom = new Date(from.getTime() - spanMs);
+      const prevTo = from;
+
+      const scope = (start: Date, end: Date) =>
+        and(
+          eq(productsTable.outlet_id, outlet.id),
+          gte(orderDetailsTable.created_at, start),
+          lt(orderDetailsTable.created_at, end),
+          notInArray(ordersTable.status, ["cancelled", "pending"]),
+        );
+
+      const kpiSelect = {
+        revenue: sql<number>`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric)), 0)`.mapWith(Number),
+        cogs: sql<number>`coalesce(sum(cast(${productsTable.buying_price} as numeric) * ${orderDetailsTable.quantity}), 0)`.mapWith(Number),
+        orders: sql<number>`count(distinct ${orderDetailsTable.order_id})`.mapWith(Number),
+      };
+
+      const [cur, prev, trendRows, topRows, hourRows] = await Promise.all([
+        db
+          .select(kpiSelect)
+          .from(orderDetailsTable)
+          .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
+          .innerJoin(ordersTable, eq(orderDetailsTable.order_id, ordersTable.id))
+          .where(scope(from, to)),
+        db
+          .select(kpiSelect)
+          .from(orderDetailsTable)
+          .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
+          .innerJoin(ordersTable, eq(orderDetailsTable.order_id, ordersTable.id))
+          .where(scope(prevFrom, prevTo)),
+        db
+          .select({
+            day: sql<string>`(${orderDetailsTable.created_at} at time zone ${timezone})::date`,
+            revenue: sql<number>`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric)), 0)`.mapWith(Number),
+          })
+          .from(orderDetailsTable)
+          .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
+          .innerJoin(ordersTable, eq(orderDetailsTable.order_id, ordersTable.id))
+          .where(scope(from, to))
+          .groupBy(sql`1`)
+          .orderBy(sql`1`),
+        db
+          .select({
+            name: productsTable.product_name,
+            qty: sql<number>`coalesce(sum(${orderDetailsTable.quantity}), 0)`.mapWith(Number),
+            revenue: sql<number>`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric)), 0)`.mapWith(Number),
+            profit: sql<number>`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric) - cast(${productsTable.buying_price} as numeric) * ${orderDetailsTable.quantity}), 0)`.mapWith(Number),
+          })
+          .from(orderDetailsTable)
+          .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
+          .innerJoin(ordersTable, eq(orderDetailsTable.order_id, ordersTable.id))
+          .where(scope(from, to))
+          .groupBy(productsTable.id)
+          .orderBy(desc(sql`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric)), 0)`))
+          .limit(8),
+        db
+          .select({
+            hour: sql<number>`extract(hour from (${orderDetailsTable.created_at} at time zone ${timezone}))::int`,
+            orders: sql<number>`count(distinct ${orderDetailsTable.order_id})`.mapWith(Number),
+            revenue: sql<number>`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric)), 0)`.mapWith(Number),
+          })
+          .from(orderDetailsTable)
+          .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
+          .innerJoin(ordersTable, eq(orderDetailsTable.order_id, ordersTable.id))
+          .where(scope(from, to))
+          .groupBy(sql`1`)
+          .orderBy(sql`1`),
+      ]);
+
+      const c = cur[0] ?? { revenue: 0, cogs: 0, orders: 0 };
+      const p = prev[0] ?? { revenue: 0, cogs: 0, orders: 0 };
+      const pct = (a: number, b: number) => (b > 0 ? ((a - b) / b) * 100 : a > 0 ? 100 : 0);
+
+      const hourly = Array.from({ length: 24 }, (_, i) => ({ hour: i, orders: 0, revenue: 0 }));
+      hourRows.forEach((r) => {
+        const h = r.hour ?? 0;
+        if (h >= 0 && h < 24) hourly[h] = { hour: h, orders: r.orders, revenue: Number(r.revenue) };
+      });
+
+      return {
+        success: true,
+        period,
+        kpis: {
+          revenue: c.revenue,
+          cogs: c.cogs,
+          profit: c.revenue - c.cogs,
+          orders: c.orders,
+          aov: c.orders > 0 ? Math.round(c.revenue / c.orders) : 0,
+          revenueDeltaPct: Number(pct(c.revenue, p.revenue).toFixed(1)),
+          profitDeltaPct: Number(pct(c.revenue - c.cogs, p.revenue - p.cogs).toFixed(1)),
+          ordersDeltaPct: Number(pct(c.orders, p.orders).toFixed(1)),
+        },
+        trend: trendRows.map((r) => ({ day: String(r.day), revenue: Number(r.revenue) })),
+        topProducts: topRows.map((r) => ({
+          name: r.name,
+          qty: r.qty,
+          revenue: Number(r.revenue),
+          profit: Number(r.profit),
+        })),
+        hourly,
+      };
+    } catch (error) {
+      return reply.status(500).send({ success: false, error: String(error) });
+    }
+  });
+
   app.get("/api/cashflow", async (request, reply) => {
     try {
       const { month, timezone = "Asia/Jakarta" } = request.query as Record<string, string>;

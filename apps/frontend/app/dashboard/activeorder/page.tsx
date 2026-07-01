@@ -21,11 +21,12 @@ export default async function ActiveOrderPage() {
   const activeOrder = data?.success ? data.order : null;
 
   if (!activeOrder) redirect('/dashboard/order');
+  console.log(activeOrder);
+  if(activeOrder.fulfillment === 'service') redirect ('/dashboard/order');
   if (activeOrder.status === 'delivered')
-    // Service orders have no courier to rate — send them to their history instead.
     redirect(
       activeOrder.fulfillment === 'service'
-        ? '/dashboard/history-order'
+        ? `/dashboard/ratings/submit/service/${activeOrder.id}`
         : `/dashboard/ratings/submit/customer/${activeOrder.id}`,
     );
 

@@ -36,6 +36,9 @@ export const ProductSchema = z.object({
     isRecommended: z.boolean().optional(),
     discountPercent: z.number().optional(),
     features: z.array(z.string()).optional(),
+    // Service products: negotiable price range (null for normal products).
+    lowest_price: z.number().nullable().optional(),
+    highest_price: z.number().nullable().optional(),
 });
 
 export type Product = z.infer<typeof ProductSchema>;

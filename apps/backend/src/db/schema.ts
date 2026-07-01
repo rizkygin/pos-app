@@ -580,6 +580,11 @@ export const invoiceItemsTable = pgTable(
     unit_price: numeric('unit_price', { precision: 14, scale: 2 })
       .notNull()
       .default('0'),
+    // Per-line discount as a percentage (e.g. 10.00 = 10% off this line).
+    // line_total already reflects it: qty * unit_price * (1 - discount_pct/100).
+    discount_pct: numeric('discount_pct', { precision: 5, scale: 2 })
+      .notNull()
+      .default('0'),
     line_total: numeric('line_total', { precision: 14, scale: 2 })
       .notNull()
       .default('0'),

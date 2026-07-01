@@ -15,13 +15,29 @@ import {
   Printer,
   Search,
   ImageIcon,
+  SlidersHorizontal,
+  User,
+  CalendarDays,
+  Percent,
+  Tag,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Sheet,
+  SheetTrigger,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+  SheetFooter,
+  SheetClose,
+} from "@/components/ui/sheet";
 import { DataTable } from "@/app/dashboard/reports/data-table";
 import { API_URL } from "@/lib/api-url";
 import { resolveProductImage, isBackendImage } from "@/lib/image-src";
 import { formatNumberInput, parseNumberInput } from "@/lib/utils/format";
+import { getSalesTerms, setSalesTerms } from "@/lib/invoice-terms";
 import {
   getSalesColumns,
   type SalesRow,
@@ -30,8 +46,15 @@ import {
 } from "./columns";
 
 type Product = { id: string; product_name: string; price: string; image: string; is_for_sale: boolean };
-type CartItem = { product: Product; quantity: number; unit_price: string };
-type DetailItem = { id: number; description: string; quantity: string; unit_price: string; line_total: string };
+type CartItem = { product: Product; quantity: number; unit_price: string; discount_pct: string };
+type DetailItem = {
+  id: number;
+  description: string;
+  quantity: string;
+  unit_price: string;
+  discount_pct: string;
+  line_total: string;
+};
 type DetailInvoice = SalesRow & {
   subtotal: string;
   tax_rate: string;
@@ -65,6 +88,11 @@ export function SalesClient() {
   const [dueDate, setDueDate] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  // Standing Terms & Conditions — persisted per-device (localStorage), not in DB.
+  const [terms, setTerms] = useState("");
+  useEffect(() => {
+    setTerms(getSalesTerms());
+  }, []);
 
   const fetchInvoices = async () => {
     setLoading(true);
@@ -97,7 +125,7 @@ export function SalesClient() {
     setCart((c) => {
       const found = c.find((i) => i.product.id === p.id);
       if (found) return c.map((i) => (i.product.id === p.id ? { ...i, quantity: i.quantity + 1 } : i));
-      return [...c, { product: p, quantity: 1, unit_price: p.price || "0" }];
+      return [...c, { product: p, quantity: 1, unit_price: p.price || "0", discount_pct: "0" }];
     });
   };
   const setQty = (id: string, q: number) =>
@@ -108,13 +136,21 @@ export function SalesClient() {
     );
   const setPrice = (id: string, price: string) =>
     setCart((c) => c.map((i) => (i.product.id === id ? { ...i, unit_price: price } : i)));
+  const setDisc = (id: string, pct: string) => {
+    // Clamp to 0-100; keep empty string as-is while typing.
+    const n = pct === "" ? "" : String(Math.min(100, Math.max(0, Number(pct) || 0)));
+    setCart((c) => c.map((i) => (i.product.id === id ? { ...i, discount_pct: n } : i)));
+  };
+  const lineNet = (i: CartItem) =>
+    i.quantity * Number(i.unit_price || 0) * (1 - Number(i.discount_pct || 0) / 100);
 
   const filtered = useMemo(
     () => products.filter((p) => p.product_name.toLowerCase().includes(search.toLowerCase())),
     [products, search],
   );
   const totals = useMemo(() => {
-    const subtotal = cart.reduce((s, i) => s + i.quantity * Number(i.unit_price || 0), 0);
+    // subtotal is the sum of per-line nets (each line's % discount already applied).
+    const subtotal = cart.reduce((s, i) => s + lineNet(i), 0);
     const disc = Math.min(Number(discount || 0), subtotal); // never exceed subtotal
     const base = subtotal - disc;
     const tax = (base * Number(taxRate || 0)) / 100;
@@ -143,6 +179,7 @@ export function SalesClient() {
             description: i.product.product_name,
             quantity: i.quantity,
             unit_price: Number(i.unit_price),
+            discount_pct: Number(i.discount_pct || 0),
           })),
         }),
       });
@@ -241,6 +278,7 @@ export function SalesClient() {
                     <th className="px-3 py-2 font-medium">Item</th>
                     <th className="px-3 py-2 text-right font-medium">Qty</th>
                     <th className="px-3 py-2 text-right font-medium">Harga</th>
+                    <th className="px-3 py-2 text-right font-medium">Diskon</th>
                     <th className="px-3 py-2 text-right font-medium">Jumlah</th>
                   </tr>
                 </thead>
@@ -250,6 +288,9 @@ export function SalesClient() {
                       <td className="px-3 py-2">{it.description}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{Number(it.quantity)}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{rupiah(it.unit_price)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">
+                        {Number(it.discount_pct) > 0 ? `${Number(it.discount_pct)}%` : "—"}
+                      </td>
                       <td className="px-3 py-2 text-right tabular-nums">{rupiah(it.line_total)}</td>
                     </tr>
                   ))}
@@ -328,7 +369,7 @@ export function SalesClient() {
   // ===================================================================== create
   if (view === "create") {
     return (
-      <div className="flex h-[calc(100svh-3rem)] flex-col p-4 md:p-6">
+      <div className="flex flex-col p-4 md:p-6 lg:h-[calc(100svh-3rem)]">
         <div className="mb-4 flex items-center gap-2">
           <Button variant="ghost" size="icon-sm" onClick={() => setView("list")}>
             <ArrowLeft className="size-4" />
@@ -336,7 +377,7 @@ export function SalesClient() {
           <h1 className="text-xl font-semibold tracking-tight">Faktur Penjualan Baru</h1>
         </div>
 
-        <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[1fr_360px]">
+        <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[1fr_420px]">
           {/* product grid */}
           <div className="flex min-h-0 flex-col">
             <div className="relative mb-3">
@@ -348,14 +389,14 @@ export function SalesClient() {
                 onChange={(e) => setSearch(e.target.value)}
               />
             </div>
-            <div className="grid min-h-0 flex-1 auto-rows-min grid-cols-2 gap-2 overflow-y-auto sm:grid-cols-3 xl:grid-cols-4">
+            <div className="grid max-h-[46vh] min-h-0 flex-1 auto-rows-min grid-cols-2 gap-2 overflow-y-auto lg:max-h-none xl:grid-cols-3">
               {filtered.map((p) => (
                 <button
                   key={p.id}
                   onClick={() => addToCart(p)}
-                  className="group flex flex-col overflow-hidden rounded-xl border bg-card text-left transition-colors hover:border-teal-500"
+                  className="group flex items-center gap-2 rounded-xl border bg-card p-2 text-left transition-colors hover:border-teal-500 sm:gap-3"
                 >
-                  <div className="relative aspect-square w-full bg-muted">
+                  <div className="relative size-10 shrink-0 overflow-hidden rounded-lg bg-muted sm:size-12">
                     {p.image && p.image !== "avatar.png" ? (
                       <Image
                         src={resolveProductImage(p.image)}
@@ -363,23 +404,28 @@ export function SalesClient() {
                         alt={p.product_name}
                         fill
                         className="object-cover"
-                        sizes="200px"
+                        sizes="48px"
                       />
                     ) : (
                       <div className="flex h-full items-center justify-center">
-                        <ImageIcon className="size-7 text-muted-foreground/40" />
+                        <ImageIcon className="size-5 text-muted-foreground/40" />
                       </div>
                     )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="line-clamp-2 text-xs font-medium leading-snug sm:line-clamp-1 sm:text-sm">
+                      {p.product_name}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground tabular-nums sm:text-xs">{rupiah(p.price)}</p>
                     {!p.is_for_sale && (
-                      <span className="absolute left-1 top-1 rounded bg-zinc-900/80 px-1.5 py-0.5 text-[9px] font-medium text-white">
+                      <span className="mt-0.5 inline-block rounded bg-zinc-900/80 px-1.5 py-0.5 text-[9px] font-medium text-white">
                         Inventaris
                       </span>
                     )}
                   </div>
-                  <div className="p-2">
-                    <p className="line-clamp-1 text-xs font-medium">{p.product_name}</p>
-                    <p className="text-[11px] text-muted-foreground tabular-nums">{rupiah(p.price)}</p>
-                  </div>
+                  <span className="flex size-6 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-600 transition-colors group-hover:bg-teal-600 group-hover:text-white dark:bg-teal-950 sm:size-7">
+                    <Plus className="size-3.5 sm:size-4" />
+                  </span>
                 </button>
               ))}
               {filtered.length === 0 && (
@@ -392,87 +438,235 @@ export function SalesClient() {
 
           {/* cart */}
           <div className="flex min-h-0 flex-col rounded-xl border bg-card">
-            <div className="space-y-3 border-b p-3">
-              <label className="block space-y-1">
-                <span className="text-xs font-medium text-muted-foreground">Nama Pelanggan / Toko</span>
-                <Input placeholder="cth. Toko Sebelah" value={party} onChange={(e) => setParty(e.target.value)} />
-              </label>
-              <div className="grid grid-cols-2 gap-2">
-                <label className="block space-y-1">
-                  <span className="text-xs font-medium text-muted-foreground">Jatuh Tempo</span>
-                  <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
-                </label>
-                <label className="block space-y-1">
-                  <span className="text-xs font-medium text-muted-foreground">Pajak (%)</span>
-                  <Input
-                    type="number"
-                    placeholder="0"
-                    value={taxRate}
-                    onChange={(e) => setTaxRate(e.target.value)}
-                  />
-                </label>
+            {/* compact detail summary + slide-over trigger */}
+            <div className="flex items-center justify-between gap-2 border-b p-3">
+              <div className="min-w-0">
+                <p className="flex items-center gap-1.5 truncate text-sm font-semibold">
+                  <User className="size-3.5 shrink-0 text-muted-foreground" />
+                  {party || <span className="font-normal text-muted-foreground">Pelanggan belum diisi</span>}
+                </p>
+                <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                  {dueDate
+                    ? `Jatuh tempo ${new Date(dueDate).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}`
+                    : "Tanpa jatuh tempo"}
+                  {Number(taxRate) > 0 ? ` · Pajak ${taxRate}%` : ""}
+                  {Number(discount) > 0 ? ` · Diskon ${rupiah(discount)}` : ""}
+                </p>
               </div>
-              <label className="block space-y-1">
-                <span className="text-xs font-medium text-muted-foreground">Diskon (Rp)</span>
-                <div className="relative">
-                  <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground">
-                    Rp
-                  </span>
-                  <Input
-                    inputMode="numeric"
-                    value={formatNumberInput(discount)}
-                    onChange={(e) => setDiscount(parseNumberInput(e.target.value))}
-                    className="pl-7"
-                  />
-                </div>
-              </label>
+              <Sheet>
+                <SheetTrigger asChild>
+                  <Button
+                    size="sm"
+                    className="shrink-0 bg-teal-600 text-white shadow-sm hover:bg-teal-700"
+                  >
+                    <SlidersHorizontal className="size-4" />
+                    Detail
+                  </Button>
+                </SheetTrigger>
+                <SheetContent side="right" className="w-full gap-0 sm:max-w-md">
+                  <SheetHeader className="border-b">
+                    <SheetTitle>Detail Faktur</SheetTitle>
+                    <SheetDescription>Pelanggan, jatuh tempo, pajak, diskon, dan ketentuan.</SheetDescription>
+                  </SheetHeader>
+
+                  <div className="flex-1 space-y-4 overflow-y-auto p-4">
+                    <label className="block space-y-1.5">
+                      <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                        <User className="size-3.5" /> Nama Pelanggan / Toko
+                      </span>
+                      <Input placeholder="cth. Toko Sebelah" value={party} onChange={(e) => setParty(e.target.value)} />
+                    </label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="block space-y-1.5">
+                        <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                          <CalendarDays className="size-3.5" /> Jatuh Tempo
+                        </span>
+                        <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+                      </label>
+                      <label className="block space-y-1.5">
+                        <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                          <Percent className="size-3.5" /> Pajak (%)
+                        </span>
+                        <Input
+                          type="number"
+                          placeholder="0"
+                          value={taxRate}
+                          onChange={(e) => setTaxRate(e.target.value)}
+                        />
+                      </label>
+                    </div>
+                    <label className="block space-y-1.5">
+                      <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                        <Tag className="size-3.5" /> Diskon Faktur (Rp)
+                      </span>
+                      <div className="relative">
+                        <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                          Rp
+                        </span>
+                        <Input
+                          inputMode="numeric"
+                          value={formatNumberInput(discount)}
+                          onChange={(e) => setDiscount(parseNumberInput(e.target.value))}
+                          className="pl-8"
+                        />
+                      </div>
+                      <span className="text-[10px] text-muted-foreground">
+                        Diskon keseluruhan, di luar diskon per-produk.
+                      </span>
+                    </label>
+                    <label className="block space-y-1.5">
+                      <span className="text-xs font-medium text-muted-foreground">Syarat &amp; Ketentuan</span>
+                      <textarea
+                        rows={4}
+                        value={terms}
+                        onChange={(e) => {
+                          setTerms(e.target.value);
+                          setSalesTerms(e.target.value);
+                        }}
+                        placeholder="cth. Pembayaran maksimal 7 hari setelah faktur diterbitkan…"
+                        className="w-full resize-none rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                      />
+                      <span className="text-[10px] text-muted-foreground">
+                        Tersimpan di perangkat ini &amp; muncul saat cetak faktur.
+                      </span>
+                    </label>
+                  </div>
+
+                  <SheetFooter className="border-t">
+                    <SheetClose asChild>
+                      <Button className="w-full bg-teal-600 text-white hover:bg-teal-700">Selesai</Button>
+                    </SheetClose>
+                  </SheetFooter>
+                </SheetContent>
+              </Sheet>
             </div>
 
-            <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
+            <div className="flex items-center justify-between px-3 pt-3">
+              <span className="text-xs font-semibold text-muted-foreground">Item Faktur</span>
+              {cart.length > 0 && (
+                <span className="rounded-full bg-teal-50 px-2 py-0.5 text-[11px] font-semibold text-teal-700 dark:bg-teal-950 dark:text-teal-300">
+                  {cart.length} item
+                </span>
+              )}
+            </div>
+
+            <div className="min-h-0 flex-1 space-y-2.5 overflow-y-auto p-3">
               {cart.length === 0 ? (
-                <p className="py-10 text-center text-xs text-muted-foreground">
-                  Ketuk produk untuk menambah ke faktur.
-                </p>
+                <div className="flex h-full min-h-40 flex-col items-center justify-center rounded-xl border border-dashed text-center">
+                  <Receipt className="size-7 text-muted-foreground/40" />
+                  <p className="mt-2 text-xs font-medium text-muted-foreground">Keranjang masih kosong</p>
+                  <p className="mt-0.5 max-w-55 text-[11px] text-muted-foreground/70">
+                    Ketuk produk di sebelah kiri untuk menambahkannya ke faktur.
+                  </p>
+                </div>
               ) : (
                 cart.map((i) => (
-                  <div key={i.product.id} className="rounded-lg border p-2">
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="line-clamp-1 text-xs font-medium">{i.product.product_name}</p>
-                      <button onClick={() => setQty(i.product.id, 0)}>
-                        <Trash2 className="size-3.5 text-destructive" />
+                  <div
+                    key={i.product.id}
+                    className="rounded-xl border bg-background p-3 shadow-sm transition-colors hover:border-teal-500/40"
+                  >
+                    {/* header: thumbnail + name + delete */}
+                    <div className="flex items-start gap-2.5">
+                      <div className="relative size-10 shrink-0 overflow-hidden rounded-lg bg-muted">
+                        {i.product.image && i.product.image !== "avatar.png" ? (
+                          <Image
+                            src={resolveProductImage(i.product.image)}
+                            unoptimized={isBackendImage(i.product.image)}
+                            alt={i.product.product_name}
+                            fill
+                            className="object-cover"
+                            sizes="40px"
+                          />
+                        ) : (
+                          <div className="flex h-full items-center justify-center">
+                            <ImageIcon className="size-4 text-muted-foreground/40" />
+                          </div>
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="line-clamp-2 text-sm font-medium leading-snug">{i.product.product_name}</p>
+                        <p className="mt-0.5 text-[11px] text-muted-foreground tabular-nums">
+                          {rupiah(i.unit_price || 0)} / item
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => setQty(i.product.id, 0)}
+                        className="grid size-7 shrink-0 place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                        aria-label="Hapus item"
+                      >
+                        <Trash2 className="size-4" />
                       </button>
                     </div>
-                    <div className="mt-1.5 flex items-end gap-2">
-                      <div className="space-y-0.5">
-                        <span className="block text-[10px] font-medium text-muted-foreground">Jumlah</span>
-                        <div className="flex items-center rounded-md border">
-                          <button className="px-1.5 py-1" onClick={() => setQty(i.product.id, i.quantity - 1)}>
-                            <Minus className="size-3" />
+
+                    {/* controls */}
+                    <div className="mt-3 grid grid-cols-2 gap-2.5">
+                      <div className="space-y-1">
+                        <span className="block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          Jumlah
+                        </span>
+                        <div className="flex items-center justify-between rounded-lg border bg-card">
+                          <button
+                            className="grid size-8 place-items-center rounded-l-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                            onClick={() => setQty(i.product.id, i.quantity - 1)}
+                          >
+                            <Minus className="size-3.5" />
                           </button>
-                          <span className="w-7 text-center text-xs tabular-nums">{i.quantity}</span>
-                          <button className="px-1.5 py-1" onClick={() => setQty(i.product.id, i.quantity + 1)}>
-                            <Plus className="size-3" />
+                          <span className="min-w-8 text-center text-sm font-semibold tabular-nums">{i.quantity}</span>
+                          <button
+                            className="grid size-8 place-items-center rounded-r-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                            onClick={() => setQty(i.product.id, i.quantity + 1)}
+                          >
+                            <Plus className="size-3.5" />
                           </button>
                         </div>
                       </div>
-                      <div className="flex-1 space-y-0.5">
-                        <span className="block text-[10px] font-medium text-muted-foreground">Harga satuan (Rp)</span>
+                      <div className="space-y-1">
+                        <span className="block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          Diskon (%)
+                        </span>
                         <div className="relative">
-                          <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground">
+                          <Input
+                            inputMode="numeric"
+                            placeholder="0"
+                            value={i.discount_pct}
+                            onChange={(e) => setDisc(i.product.id, e.target.value.replace(/[^\d.]/g, ""))}
+                            className="h-8 w-full pr-6 text-right text-sm tabular-nums"
+                          />
+                          <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                            %
+                          </span>
+                        </div>
+                      </div>
+                      <div className="col-span-2 space-y-1">
+                        <span className="block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          Harga Satuan
+                        </span>
+                        <div className="relative">
+                          <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
                             Rp
                           </span>
                           <Input
                             inputMode="numeric"
                             value={formatNumberInput(i.unit_price)}
                             onChange={(e) => setPrice(i.product.id, parseNumberInput(e.target.value))}
-                            className="h-7 w-full pl-7 text-right text-xs"
+                            className="h-8 w-full pl-8 text-right text-sm tabular-nums"
                           />
                         </div>
                       </div>
                     </div>
-                    <p className="mt-1.5 text-right text-xs font-medium tabular-nums">
-                      Subtotal: {rupiah(i.quantity * Number(i.unit_price || 0))}
-                    </p>
+
+                    {/* line total */}
+                    <div className="mt-3 flex items-center justify-between border-t pt-2.5">
+                      <span className="text-[11px] font-medium text-muted-foreground">Subtotal</span>
+                      <span className="flex items-baseline gap-1.5 tabular-nums">
+                        {Number(i.discount_pct) > 0 && (
+                          <span className="text-[11px] text-muted-foreground line-through">
+                            {rupiah(i.quantity * Number(i.unit_price || 0))}
+                          </span>
+                        )}
+                        <span className="text-sm font-bold">{rupiah(lineNet(i))}</span>
+                      </span>
+                    </div>
                   </div>
                 ))
               )}
@@ -545,16 +739,50 @@ export function SalesClient() {
           </p>
         </div>
       ) : (
-        <DataTable
-          columns={getSalesColumns({ busyId, onAction: action })}
-          data={invoices.slice((page - 1) * limit, page * limit)}
-          page={page}
-          limit={limit}
-          count={invoices.length}
-          setPage={setPage}
-          setLimit={setLimit}
-          onRowClick={(row) => openDetail(row.id)}
-        />
+        <>
+          {/* Mobile: card list */}
+          <div className="space-y-2.5 sm:hidden">
+            {invoices.map((inv) => (
+              <button
+                key={inv.id}
+                onClick={() => openDetail(inv.id)}
+                className="w-full rounded-2xl border bg-card p-3.5 text-left shadow-sm active:scale-[0.99] transition-transform"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <p className="font-mono text-sm font-semibold">{inv.number}</p>
+                  <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${SALES_STATUS_STYLE[inv.status]}`}>
+                    {SALES_STATUS_LABEL[inv.status]}
+                  </span>
+                </div>
+                <p className="mt-1 truncate text-xs text-muted-foreground">
+                  {inv.party_name || "Tanpa nama pelanggan"}
+                </p>
+                <div className="mt-2 flex items-end justify-between">
+                  <span className="text-base font-bold tabular-nums">{rupiah(inv.total)}</span>
+                  {inv.due_date && (
+                    <span className="text-[11px] text-muted-foreground">
+                      Jatuh tempo {new Date(inv.due_date).toLocaleDateString("id-ID", { day: "numeric", month: "short" })}
+                    </span>
+                  )}
+                </div>
+              </button>
+            ))}
+          </div>
+
+          {/* Desktop: table */}
+          <div className="hidden sm:block">
+            <DataTable
+              columns={getSalesColumns({ busyId, onAction: action })}
+              data={invoices.slice((page - 1) * limit, page * limit)}
+              page={page}
+              limit={limit}
+              count={invoices.length}
+              setPage={setPage}
+              setLimit={setLimit}
+              onRowClick={(row) => openDetail(row.id)}
+            />
+          </div>
+        </>
       )}
     </div>
   );
