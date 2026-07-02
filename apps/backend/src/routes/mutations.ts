@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "../db";
 import {
   ordersTable,
@@ -9,6 +9,7 @@ import {
   customersTable,
   usersTable,
   productsTable,
+  stockMovementsTable,
   cashInDetailTable,
   cashInCategoryTable,
   cashFlows,
@@ -19,20 +20,20 @@ import { toWebHeaders } from "../lib/web-headers";
 // Transaction client type (drizzle's tx has the same query builder as `db`).
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-// Record a POS sale as cash-in for the given outlet. Find-or-create the "POS"
+// Record a POS sale as cash-in for the given outlet. Find-or-create the "Kasir"
 // cash-in category so a missing category can't silently drop the cashflow, and
 // attribute it to the actual outlet (was hardcoded to outlet 1).
 async function addPosToCashflowin(tx: Tx, outletId: number, total: number) {
   let [category] = await tx
     .select({ id: cashInCategoryTable.id })
     .from(cashInCategoryTable)
-    .where(eq(cashInCategoryTable.category, "POS"))
+    .where(eq(cashInCategoryTable.category, "Kasir"))
     .limit(1);
 
   if (!category) {
     [category] = await tx
       .insert(cashInCategoryTable)
-      .values({ category: "POS" })
+      .values({ category: "Kasir" })
       .returning({ id: cashInCategoryTable.id });
   }
 
@@ -98,10 +99,11 @@ export async function mutationRoutes(app: FastifyInstance) {
           });
 
           for (const item of body.cart as any[]) {
+            const qty = Number(item.quantity);
             const summary_price =
               item.product.price_mark_down && item.product.price_mark_down !== "0"
-                ? parseFloat(item.product.price_mark_down) * item.quantity
-                : parseFloat(item.product.price) * item.quantity;
+                ? parseFloat(item.product.price_mark_down) * qty
+                : parseFloat(item.product.price) * qty;
 
             await tx.insert(orderDetailsTable).values({
               order_id: new_order_id,
@@ -111,6 +113,28 @@ export async function mutationRoutes(app: FastifyInstance) {
               summary_price: summary_price.toString(),
               status: "checkout",
             });
+
+            // POS is an immediate sale: decrement stock for products that track
+            // it (read track_stock from the DB, not the client) and record a
+            // 'sales' stock movement for the audit trail.
+            const [p] = await tx
+              .select({ track_stock: productsTable.track_stock })
+              .from(productsTable)
+              .where(eq(productsTable.id, item.product.id))
+              .limit(1);
+            if (p?.track_stock) {
+              await tx.insert(stockMovementsTable).values({
+                outlet_id: body.outletId,
+                product_id: item.product.id,
+                qty_change: String(-qty), // negative = stock out
+                reason: "sales",
+                note: `POS ${new_order_id}`,
+              });
+              await tx
+                .update(productsTable)
+                .set({ stock: sql`${productsTable.stock} - ${qty}::numeric` })
+                .where(eq(productsTable.id, item.product.id));
+            }
           }
         }
 
