@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, or, eq, desc, sql, gte, lte, like, count, inArray, isNull, notInArray, lt } from "drizzle-orm";
+import { and, or, eq, desc, sql, gte, lte, like, count, inArray, isNull, notInArray, lt, type AnyColumn } from "drizzle-orm";
 import { db } from "../db";
 import {
   ordersTable,
@@ -20,6 +20,13 @@ import { toWebHeaders } from "../lib/web-headers";
 import { getOutletByUserId } from "../lib/outlet-id";
 import { attachOrderItems } from "../lib/utils/order-items";
 import { getUTCRangeFromLocalDate, getUTCRangeFromLocalMonth } from "../lib/timezone";
+
+// Money columns (summary_price, buying_price) are varchar; a single blank or
+// non-numeric row makes `cast(... as numeric)` throw and kills the whole
+// aggregate ("invalid input syntax for type numeric"). Guard the cast so bad or
+// blank values count as 0 instead of crashing the query.
+const money = (col: AnyColumn) =>
+  sql`(case when ${col} ~ '^\\s*-?[0-9]+(\\.[0-9]+)?\\s*$' then cast(${col} as numeric) else 0 end)`;
 
 export async function ownerRoutes(app: FastifyInstance) {
   app.get("/api/get-outlet-orders", async (request, reply) => {
@@ -61,7 +68,7 @@ export async function ownerRoutes(app: FastifyInstance) {
           .select({
             orderId: orderDetailsTable.order_id,
             itemCount: sql<number>`cast(count(*) as int)`,
-            totalAmount: sql<number>`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric)), 0)`,
+            totalAmount: sql<number>`coalesce(sum(${money(orderDetailsTable.summary_price)}), 0)`,
             status: ordersTable.status,
             createdAt: sql<string>`max(${orderDetailsTable.created_at})::text`,
             customerName: usersTable.name,
@@ -390,7 +397,7 @@ export async function ownerRoutes(app: FastifyInstance) {
       const data = await Promise.all(
         months.map(async ({ start, end, month }) => {
           const [result] = await db
-            .select({ total: sql<string>`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric)), 0)` })
+            .select({ total: sql<string>`coalesce(sum(${money(orderDetailsTable.summary_price)}), 0)` })
             .from(orderDetailsTable)
             .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
             .where(and(eq(productsTable.outlet_id, outlet.id), gte(orderDetailsTable.created_at, start), lt(orderDetailsTable.created_at, end)));
@@ -422,7 +429,7 @@ export async function ownerRoutes(app: FastifyInstance) {
         .select({
           hour: sql<number>`extract(hour from ${orderDetailsTable.created_at} at time zone ${timezone})::int`,
           count: sql<number>`count(distinct ${orderDetailsTable.order_id})`,
-          total: sql<number>`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric)), 0)`,
+          total: sql<number>`coalesce(sum(${money(orderDetailsTable.summary_price)}), 0)`,
         })
         .from(orderDetailsTable)
         .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
@@ -514,8 +521,8 @@ export async function ownerRoutes(app: FastifyInstance) {
         );
 
       const kpiSelect = {
-        revenue: sql<number>`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric)), 0)`.mapWith(Number),
-        cogs: sql<number>`coalesce(sum(cast(${productsTable.buying_price} as numeric) * ${orderDetailsTable.quantity}), 0)`.mapWith(Number),
+        revenue: sql<number>`coalesce(sum(${money(orderDetailsTable.summary_price)}), 0)`.mapWith(Number),
+        cogs: sql<number>`coalesce(sum(${money(productsTable.buying_price)} * ${orderDetailsTable.quantity}), 0)`.mapWith(Number),
         orders: sql<number>`count(distinct ${orderDetailsTable.order_id})`.mapWith(Number),
       };
 
@@ -535,7 +542,7 @@ export async function ownerRoutes(app: FastifyInstance) {
         db
           .select({
             day: sql<string>`(${orderDetailsTable.created_at} at time zone ${timezone})::date`,
-            revenue: sql<number>`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric)), 0)`.mapWith(Number),
+            revenue: sql<number>`coalesce(sum(${money(orderDetailsTable.summary_price)}), 0)`.mapWith(Number),
           })
           .from(orderDetailsTable)
           .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
@@ -547,21 +554,21 @@ export async function ownerRoutes(app: FastifyInstance) {
           .select({
             name: productsTable.product_name,
             qty: sql<number>`coalesce(sum(${orderDetailsTable.quantity}), 0)`.mapWith(Number),
-            revenue: sql<number>`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric)), 0)`.mapWith(Number),
-            profit: sql<number>`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric) - cast(${productsTable.buying_price} as numeric) * ${orderDetailsTable.quantity}), 0)`.mapWith(Number),
+            revenue: sql<number>`coalesce(sum(${money(orderDetailsTable.summary_price)}), 0)`.mapWith(Number),
+            profit: sql<number>`coalesce(sum(${money(orderDetailsTable.summary_price)} - ${money(productsTable.buying_price)} * ${orderDetailsTable.quantity}), 0)`.mapWith(Number),
           })
           .from(orderDetailsTable)
           .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
           .innerJoin(ordersTable, eq(orderDetailsTable.order_id, ordersTable.id))
           .where(scope(from, to))
           .groupBy(productsTable.id)
-          .orderBy(desc(sql`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric)), 0)`))
+          .orderBy(desc(sql`coalesce(sum(${money(orderDetailsTable.summary_price)}), 0)`))
           .limit(8),
         db
           .select({
             hour: sql<number>`extract(hour from (${orderDetailsTable.created_at} at time zone ${timezone}))::int`,
             orders: sql<number>`count(distinct ${orderDetailsTable.order_id})`.mapWith(Number),
-            revenue: sql<number>`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric)), 0)`.mapWith(Number),
+            revenue: sql<number>`coalesce(sum(${money(orderDetailsTable.summary_price)}), 0)`.mapWith(Number),
           })
           .from(orderDetailsTable)
           .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
@@ -821,7 +828,7 @@ export async function ownerRoutes(app: FastifyInstance) {
 
       const [salesResult] = await db
         .select({
-          total: sql<string>`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric)), 0)`,
+          total: sql<string>`coalesce(sum(${money(orderDetailsTable.summary_price)}), 0)`,
           count: sql<number>`count(distinct ${orderDetailsTable.order_id})`,
         })
         .from(orderDetailsTable)
