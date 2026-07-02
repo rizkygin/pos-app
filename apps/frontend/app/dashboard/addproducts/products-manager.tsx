@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import {
   Plus,
   ArrowLeft,
@@ -21,6 +21,8 @@ import {
   X,
   Copy,
   Check,
+  Search,
+  AlertTriangle,
 } from 'lucide-react';
 import QRCode from 'react-qr-code';
 import { Button } from '@/components/ui/button';
@@ -55,9 +57,17 @@ type Product = {
   features: string[];
   is_for_sale: boolean;
   track_stock: boolean;
+  stock: string;
   lowest_price?: string | null;
   highest_price?: string | null;
 };
+
+const rupiah = (v: number | string) =>
+  new Intl.NumberFormat('id-ID', {
+    style: 'currency',
+    currency: 'IDR',
+    minimumFractionDigits: 0,
+  }).format(Number(v) || 0);
 
 type ProductsManagerProps = {
   outletId: number;
@@ -88,6 +98,29 @@ export const ProductsManager = ({
   const [trackStock, setTrackStock] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  // Inventory list filters
+  const [search, setSearch] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('all');
+
+  const productCategories = useMemo(
+    () =>
+      Array.from(
+        new Set(initialProducts.map((p) => p.category).filter(Boolean)),
+      ),
+    [initialProducts],
+  );
+  const filteredProducts = useMemo(
+    () =>
+      initialProducts.filter((p) => {
+        const matchesSearch = p.product_name
+          .toLowerCase()
+          .includes(search.toLowerCase());
+        const matchesCategory =
+          categoryFilter === 'all' || p.category === categoryFilter;
+        return matchesSearch && matchesCategory;
+      }),
+    [initialProducts, search, categoryFilter],
+  );
 
   // Form State
   const [formData, setFormData] = useState({
@@ -300,11 +333,14 @@ export const ProductsManager = ({
     <div className="space-y-6 mt-4">
       {view === 'list' && (
         <>
-          <div className="flex items-center justify-between mb-4 md:mb-8">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4 md:mb-6">
             <div>
               <h2 className="text-xl md:text-3xl font-extrabold tracking-tight text-foreground">
-                Etalase Produk
+                Manajemen Produk
               </h2>
+              <p className="text-sm text-muted-foreground mt-1">
+                {initialProducts.length} produk · kelola harga, stok, &amp; ketersediaan.
+              </p>
             </div>
             <div className="flex items-center gap-2">
               <Button
@@ -346,99 +382,203 @@ export const ProductsManager = ({
                 <Package className="h-8 w-8" />
               </div>
               <h3 className="text-xl font-bold text-foreground">
-                No Products Yet
+                Belum Ada Produk
               </h3>
               <p className="text-muted-foreground max-w-sm text-center mt-2 mb-6">
-                Start building your inventory by adding your first product.
+                Mulai bangun inventaris dengan menambahkan produk pertama Anda.
               </p>
               <Button
                 onClick={() => setView('category')}
                 variant="outline"
                 className="rounded-xl border-dashed hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 transition-colors"
               >
-                Add Your First Product
+                Tambah Produk Pertama
               </Button>
             </div>
           ) : (
-            <div className="grid grid-cols-3 gap-3 lg:grid-cols-4 xl:grid-cols-5 md:gap-6">
-              {initialProducts.map((product) => (
-                <div
-                  key={product.id}
-                  className="group relative overflow-hidden rounded-xl md:rounded-2xl border bg-background p-2 md:p-5 transition-all hover:shadow-xl hover:border-blue-600/30 flex flex-col h-full"
-                >
-                  <div className="flex items-center justify-between mb-1.5 md:mb-2">
-                    <span
-                      className={`px-1.5 py-0.5 rounded-full text-[8px] md:text-[10px] font-bold uppercase tracking-wider ${product.isAvailable ? 'text-emerald-700 bg-emerald-50' : 'text-rose-700 bg-rose-50'}`}
-                    >
-                      {product.isAvailable ? 'In Stock' : 'Out'}
-                    </span>
-                    <div className="flex gap-1">
-                      <button
-                        onClick={() => handleEdit(product)}
-                        className="p-1 md:p-1.5 rounded-lg bg-muted/60 text-muted-foreground hover:text-blue-600 hover:bg-blue-50 transition-colors md:opacity-0 md:group-hover:opacity-100"
-                      >
-                        <Edit className="h-3 w-3 md:h-4 md:w-4" />
-                      </button>
-                      <button
-                        onClick={() => handleDelete(product.id)}
-                        disabled={isSubmitting}
-                        className="p-1 md:p-1.5 rounded-lg bg-muted/60 text-muted-foreground hover:text-rose-600 hover:bg-rose-50 transition-colors md:opacity-0 md:group-hover:opacity-100 disabled:opacity-50"
-                      >
-                        <Trash2 className="h-3 w-3 md:h-4 md:w-4" />
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="relative aspect-[4/3] md:aspect-square rounded-lg md:rounded-xl bg-muted/30 mb-2 md:mb-4 flex items-center justify-center overflow-hidden border">
-                    {product.image && product.image !== 'avatar.png' ? (
-                      <Image
-                        src={resolveProductImage(product.image)}
-                        unoptimized={isBackendImage(product.image)}
-                        fill
-                        className="object-cover group-hover:scale-110 transition-transform duration-500"
-                        alt={product.product_name}
-                      />
-                    ) : (
-                      <Package className="h-6 w-6 md:h-12 md:w-12 text-muted-foreground/50 group-hover:scale-110 transition-transform duration-500" />
-                    )}
-                  </div>
-                  <div className="flex-1 flex flex-col">
-                    <span className="text-[8px] md:text-[10px] font-bold uppercase tracking-wider text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-full w-fit mb-1">
-                      {product.category}
-                    </span>
-                    <h3 className="font-bold text-[11px] md:text-lg leading-tight line-clamp-2 mb-1 md:mb-2 group-hover:text-blue-600 transition-colors">
-                      {product.product_name}
-                    </h3>
-                    <div className="mt-auto pt-2 md:pt-4 flex flex-col gap-0.5 border-t border-muted/50 overflow-hidden">
-                      <span className="text-xs md:text-xl font-extrabold tracking-tight truncate">
-                        {new Intl.NumberFormat('id-ID', {
-                          style: 'currency',
-                          currency: 'IDR',
-                          minimumFractionDigits: 0,
-                        }).format(
-                          Number(
-                            product.price_mark_down &&
-                              product.price_mark_down !== '0'
-                              ? product.price_mark_down
-                              : product.price,
-                          ),
-                        )}
-                      </span>
-                      {product.price_mark_down &&
-                        product.price_mark_down !== '0' && (
-                          <span className="text-[10px] md:text-sm font-medium text-muted-foreground line-through truncate">
-                            {new Intl.NumberFormat('id-ID', {
-                              style: 'currency',
-                              currency: 'IDR',
-                              minimumFractionDigits: 0,
-                            }).format(Number(product.price))}
-                          </span>
-                        )}
-                    </div>
-                  </div>
+            <>
+              {/* Toolbar: search + category filter */}
+              <div className="flex flex-col sm:flex-row gap-2 sm:items-center mb-4">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Cari produk…"
+                    className="h-11 w-full rounded-xl border border-input bg-transparent pl-10 pr-4 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                  />
                 </div>
-              ))}
-            </div>
+                <select
+                  value={categoryFilter}
+                  onChange={(e) => setCategoryFilter(e.target.value)}
+                  className="h-11 rounded-xl border border-input bg-background px-3 text-sm shadow-sm capitalize focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                >
+                  <option value="all">Semua kategori</option>
+                  {productCategories.map((c) => (
+                    <option key={c} value={c} className="capitalize">
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Inventory table */}
+              <div className="rounded-2xl border bg-background overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/30 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                        <th className="px-3 py-2.5 font-semibold">Produk</th>
+                        <th className="px-3 py-2.5 text-right font-semibold">Harga</th>
+                        <th className="px-3 py-2.5 text-right font-semibold">Stok</th>
+                        <th className="hidden md:table-cell px-3 py-2.5 font-semibold">Status</th>
+                        <th className="px-3 py-2.5 text-right font-semibold">Aksi</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredProducts.map((product) => {
+                        const discounted =
+                          !!product.price_mark_down &&
+                          product.price_mark_down !== '0';
+                        const isService =
+                          !!product.lowest_price &&
+                          product.lowest_price !== '0';
+                        const stockNum = Number(product.stock) || 0;
+                        const lowStock = product.track_stock && stockNum <= 5;
+                        return (
+                          <tr
+                            key={product.id}
+                            className="border-b last:border-0 hover:bg-muted/20 transition-colors"
+                          >
+                            {/* Produk */}
+                            <td className="px-3 py-2.5">
+                              <div className="flex items-center gap-3 min-w-0">
+                                <div className="relative h-10 w-10 shrink-0 rounded-lg overflow-hidden border bg-muted/40 flex items-center justify-center">
+                                  {product.image &&
+                                  product.image !== 'avatar.png' ? (
+                                    <Image
+                                      src={resolveProductImage(product.image)}
+                                      unoptimized={isBackendImage(product.image)}
+                                      fill
+                                      className="object-cover"
+                                      alt={product.product_name}
+                                    />
+                                  ) : (
+                                    <Package className="h-5 w-5 text-muted-foreground/40" />
+                                  )}
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="font-semibold truncate">
+                                    {product.product_name}
+                                  </p>
+                                  <span className="text-[11px] text-muted-foreground capitalize">
+                                    {product.category || '—'}
+                                    {!product.is_for_sale && ' · inventaris'}
+                                  </span>
+                                </div>
+                              </div>
+                            </td>
+                            {/* Harga */}
+                            <td className="px-3 py-2.5 text-right tabular-nums whitespace-nowrap">
+                              {isService ? (
+                                <span className="font-semibold">
+                                  {rupiah(product.lowest_price!)}
+                                  {product.highest_price &&
+                                  product.highest_price !== '0'
+                                    ? `–${rupiah(product.highest_price)}`
+                                    : '+'}
+                                </span>
+                              ) : discounted ? (
+                                <div className="flex flex-col items-end">
+                                  <span className="font-semibold">
+                                    {rupiah(product.price_mark_down)}
+                                  </span>
+                                  <span className="text-[11px] text-muted-foreground line-through">
+                                    {rupiah(product.price)}
+                                  </span>
+                                </div>
+                              ) : (
+                                <span className="font-semibold">
+                                  {rupiah(product.price)}
+                                </span>
+                              )}
+                            </td>
+                            {/* Stok */}
+                            <td className="px-3 py-2.5 text-right tabular-nums whitespace-nowrap">
+                              {product.track_stock ? (
+                                <span
+                                  className={`inline-flex items-center justify-end gap-1 font-semibold ${
+                                    stockNum <= 0
+                                      ? 'text-rose-600'
+                                      : lowStock
+                                        ? 'text-amber-600'
+                                        : 'text-foreground'
+                                  }`}
+                                >
+                                  {lowStock && (
+                                    <AlertTriangle className="h-3.5 w-3.5" />
+                                  )}
+                                  {stockNum}
+                                </span>
+                              ) : (
+                                <span
+                                  className="text-muted-foreground"
+                                  title="Tidak dihitung stoknya"
+                                >
+                                  —
+                                </span>
+                              )}
+                            </td>
+                            {/* Status */}
+                            <td className="hidden md:table-cell px-3 py-2.5">
+                              <span
+                                className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                                  product.isAvailable
+                                    ? 'bg-emerald-50 text-emerald-700'
+                                    : 'bg-rose-50 text-rose-600'
+                                }`}
+                              >
+                                {product.isAvailable ? 'Aktif' : 'Nonaktif'}
+                              </span>
+                            </td>
+                            {/* Aksi */}
+                            <td className="px-3 py-2.5">
+                              <div className="flex items-center justify-end gap-1">
+                                <button
+                                  onClick={() => handleEdit(product)}
+                                  className="p-1.5 rounded-lg bg-muted/60 text-muted-foreground hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                                  aria-label="Edit produk"
+                                >
+                                  <Edit className="h-4 w-4" />
+                                </button>
+                                <button
+                                  onClick={() => handleDelete(product.id)}
+                                  disabled={isSubmitting}
+                                  className="p-1.5 rounded-lg bg-muted/60 text-muted-foreground hover:text-rose-600 hover:bg-rose-50 transition-colors disabled:opacity-50"
+                                  aria-label="Hapus produk"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {filteredProducts.length === 0 && (
+                        <tr>
+                          <td
+                            colSpan={5}
+                            className="px-3 py-10 text-center text-sm text-muted-foreground"
+                          >
+                            Tidak ada produk yang cocok dengan pencarian.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
           )}
         </>
       )}

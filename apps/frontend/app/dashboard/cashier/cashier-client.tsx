@@ -16,6 +16,8 @@ import {
   Package,
   LayoutGrid,
   X,
+  ChevronDown,
+  Layers,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatCurrency } from '@/lib/utils/format';
@@ -38,6 +40,30 @@ type CartItem = {
   product: Product;
   quantity: number;
 };
+
+// A parked/held order kept in localStorage so a cashier can juggle several open
+// carts (e.g. one per table) and check out later without losing anything.
+type HeldTab = {
+  id: string;
+  label: string;
+  cart: CartItem[];
+  customerName: string;
+  discountType: 'percentage' | 'amount';
+  discountInput: string;
+  paymentMethod: 'cash' | 'non_cash';
+  amountPaidInput: string;
+};
+
+const newHeldTab = (label: string): HeldTab => ({
+  id: crypto.randomUUID(),
+  label,
+  cart: [],
+  customerName: '',
+  discountType: 'percentage',
+  discountInput: '',
+  paymentMethod: 'cash',
+  amountPaidInput: '0',
+});
 
 type CashierClientProps = {
   outletId: number;
@@ -85,6 +111,155 @@ export const CashierClient = ({
   // clicks / Cmd+Enter key-repeat), state drives the disabled button UI.
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submittingRef = useRef(false);
+
+  // ── Held tabs: multiple parked carts persisted to localStorage (this device) ──
+  const tabsKey = `pos_tabs_${outletId}`;
+  const [tabs, setTabs] = useState<HeldTab[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string>('');
+  const [hydrated, setHydrated] = useState(false);
+  const [tabsMenuOpen, setTabsMenuOpen] = useState(false);
+  // Refs mirror the latest values so tab actions never close over stale state.
+  const tabsRef = useRef<HeldTab[]>([]);
+  const activeIdRef = useRef<string>('');
+  useEffect(() => {
+    tabsRef.current = tabs;
+  }, [tabs]);
+  useEffect(() => {
+    activeIdRef.current = activeTabId;
+  }, [activeTabId]);
+
+  const persistTabs = useCallback(
+    (next: HeldTab[], activeId: string) => {
+      try {
+        localStorage.setItem(tabsKey, JSON.stringify({ tabs: next, activeId }));
+      } catch {
+        /* ignore quota / serialization errors */
+      }
+    },
+    [tabsKey],
+  );
+
+  // Load a tab's saved data into the live editing state.
+  const applyTab = useCallback((t: HeldTab) => {
+    setCart(t.cart);
+    setCustomerName(t.customerName);
+    setDiscountType(t.discountType);
+    setDiscountInput(t.discountInput);
+    setPaymentMethod(t.paymentMethod);
+    setAmountPaidInput(t.amountPaidInput);
+  }, []);
+
+  // Hydrate from localStorage once, client-side (avoids SSR hydration mismatch).
+  useEffect(() => {
+    let loaded: HeldTab[] = [];
+    let activeId = '';
+    try {
+      const raw = localStorage.getItem(tabsKey);
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (Array.isArray(parsed?.tabs)) {
+        loaded = parsed.tabs;
+        activeId = parsed.activeId ?? '';
+      }
+    } catch {
+      /* ignore */
+    }
+    if (loaded.length === 0) loaded = [newHeldTab('Pesanan 1')];
+    const active = loaded.find((t) => t.id === activeId) ?? loaded[0];
+    setTabs(loaded);
+    setActiveTabId(active.id);
+    applyTab(active);
+    setHydrated(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Keep the active tab synced with the live editing state, and persist.
+  useEffect(() => {
+    if (!hydrated) return;
+    const id = activeIdRef.current;
+    if (!id) return;
+    const next = tabsRef.current.map((t) =>
+      t.id === id
+        ? {
+            ...t,
+            cart,
+            customerName,
+            discountType,
+            discountInput,
+            paymentMethod,
+            amountPaidInput,
+          }
+        : t,
+    );
+    setTabs(next);
+    persistTabs(next, id);
+  }, [
+    cart,
+    customerName,
+    discountType,
+    discountInput,
+    paymentMethod,
+    amountPaidInput,
+    hydrated,
+    persistTabs,
+  ]);
+
+  const switchTab = useCallback(
+    (id: string) => {
+      if (id === activeIdRef.current) return;
+      const target = tabsRef.current.find((t) => t.id === id);
+      if (!target) return;
+      setActiveTabId(id);
+      applyTab(target);
+      persistTabs(tabsRef.current, id);
+    },
+    [applyTab, persistTabs],
+  );
+
+  const addTab = useCallback(() => {
+    const t = newHeldTab(`Pesanan ${tabsRef.current.length + 1}`);
+    const next = [...tabsRef.current, t];
+    setTabs(next);
+    setActiveTabId(t.id);
+    applyTab(t);
+    persistTabs(next, t.id);
+  }, [applyTab, persistTabs]);
+
+  const closeTab = useCallback(
+    (id: string) => {
+      const t = tabsRef.current.find((x) => x.id === id);
+      const count = t
+        ? t.cart.reduce((acc, i) => acc + i.quantity, 0)
+        : 0;
+      if (
+        count > 0 &&
+        !window.confirm('Tutup tab ini? Keranjang yang belum dibayar akan hilang.')
+      )
+        return;
+      const remaining = tabsRef.current.filter((x) => x.id !== id);
+      const next = remaining.length ? remaining : [newHeldTab('Pesanan 1')];
+      setTabs(next);
+      if (id === activeIdRef.current || !remaining.length) {
+        const target = next[0];
+        setActiveTabId(target.id);
+        applyTab(target);
+        persistTabs(next, target.id);
+      } else {
+        persistTabs(next, activeIdRef.current);
+      }
+    },
+    [applyTab, persistTabs],
+  );
+
+  // After a paid checkout, drop the tab and move to the next (or a fresh one).
+  const completeActiveTab = useCallback(() => {
+    const remaining = tabsRef.current.filter((t) => t.id !== activeIdRef.current);
+    const next = remaining.length ? remaining : [newHeldTab('Pesanan 1')];
+    const target = next[0];
+    setTabs(next);
+    setActiveTabId(target.id);
+    applyTab(target);
+    persistTabs(next, target.id);
+  }, [applyTab, persistTabs]);
 
   const [categories, setCatagories] = useState(INITIAL_CATEGORIES);
 
@@ -244,10 +419,10 @@ export const CashierClient = ({
             `Server error: ${response.status}`,
         );
       }
-      clearCart();
       setCartOpen(false);
-      setCustomerName('');
-      setPaymentMethod('cash');
+      // Order is paid: drop this tab and jump to the next / a fresh one. This
+      // resets cart, customer, discount, and payment for the new active tab.
+      completeActiveTab();
       setReceipt({
         orderId: data.orderId ?? crypto.randomUUID(),
         customerName: snapshotCustomerName,
@@ -291,6 +466,7 @@ export const CashierClient = ({
     outletAddress,
     outletPhone,
     cashierName,
+    completeActiveTab,
   ]);
 
   // Adds a keyboard shortcut (CMD/Ctrl + Enter) for Checkout
@@ -484,6 +660,90 @@ export const CashierClient = ({
           >
             <X className="h-5 w-5" />
           </button>
+        </div>
+
+        {/* Held-order tabs — collapsed into a popup so its controls can't be
+            fumbled while ringing up an order. */}
+        <div className="relative border-b px-3 py-2">
+          {(() => {
+            const activeTab = tabs.find((t) => t.id === activeTabId);
+            const activeLabel =
+              activeTab?.customerName.trim() || activeTab?.label || 'Pesanan';
+            return (
+              <button
+                onClick={() => setTabsMenuOpen((v) => !v)}
+                className="flex w-full items-center justify-between gap-2 rounded-lg border bg-background px-3 py-2 text-sm font-bold transition-colors hover:bg-muted"
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <Layers className="h-4 w-4 shrink-0 text-blue-600" />
+                  <span className="truncate">{activeLabel}</span>
+                  <span className="shrink-0 rounded-full bg-blue-50 px-1.5 text-[10px] text-blue-700">
+                    {tabs.length} tab
+                  </span>
+                </span>
+                <ChevronDown
+                  className={`h-4 w-4 shrink-0 transition-transform ${tabsMenuOpen ? 'rotate-180' : ''}`}
+                />
+              </button>
+            );
+          })()}
+
+          {tabsMenuOpen && (
+            <>
+              {/* click-away to close */}
+              <div
+                className="fixed inset-0 z-30"
+                onClick={() => setTabsMenuOpen(false)}
+              />
+              <div className="absolute inset-x-3 top-full z-40 mt-1 max-h-72 overflow-y-auto rounded-xl border bg-background p-1.5 shadow-xl">
+                {tabs.map((t) => {
+                  const count = t.cart.reduce((acc, i) => acc + i.quantity, 0);
+                  const label = t.customerName.trim() || t.label;
+                  const active = t.id === activeTabId;
+                  return (
+                    <div
+                      key={t.id}
+                      onClick={() => {
+                        switchTab(t.id);
+                        setTabsMenuOpen(false);
+                      }}
+                      className={`flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-sm transition-colors ${
+                        active
+                          ? 'bg-blue-50 font-bold text-blue-700'
+                          : 'hover:bg-muted'
+                      }`}
+                    >
+                      <span className="flex-1 truncate">{label}</span>
+                      {count > 0 && (
+                        <span className="shrink-0 rounded-full bg-muted px-1.5 text-[10px] font-semibold">
+                          {count} item
+                        </span>
+                      )}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          closeTab(t.id);
+                        }}
+                        className="shrink-0 p-1 text-muted-foreground hover:text-rose-500"
+                        aria-label="Tutup tab"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  );
+                })}
+                <button
+                  onClick={() => {
+                    addTab();
+                    setTabsMenuOpen(false);
+                  }}
+                  className="mt-1 flex w-full items-center gap-2 rounded-lg border border-dashed border-blue-300 px-2 py-2 text-sm font-bold text-blue-600 hover:bg-blue-50"
+                >
+                  <Plus className="h-4 w-4" /> Tab baru
+                </button>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Cart Header */}

@@ -162,6 +162,7 @@ export default function CashflowPage() {
     const posCashIn = dailyTransactions.find(
       (t) => t.category === CATEGORY_IN[0],
     );
+
     const rest = dailyTransactions
       .filter((t) => t.category !== CATEGORY_IN[0])
       .sort((a, b) => {
@@ -170,7 +171,7 @@ export default function CashflowPage() {
         return aKey.localeCompare(bKey);
       });
     if (posCashIn) {
-      return [{ ...posCashIn, note: 'Dari Sistem Cashier' }, ...rest];
+      return [{ ...posCashIn, note: 'Dari Faktur Penjualan' }, ...rest];
     }
     return rest;
   }, [transactions, dailyTransactions]);
@@ -479,7 +480,7 @@ export default function CashflowPage() {
                             {formatCurrency(balance)}
                           </TableCell>
                           <TableCell className="text-right">
-                            {t.category !== CATEGORY_IN[0] && (
+                            {(t.category !== CATEGORY_IN[0] && t.category !== CATEGORY_IN[13] && t.category !== CATEGORY_OUT[1]) &&  (
                               <Button
                                 variant="ghost"
                                 size="icon"
