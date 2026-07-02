@@ -565,6 +565,81 @@ export async function invoiceRoutes(app: FastifyInstance) {
     return reply.status(201).send({ success: true, data: created });
   });
 
+  // Edit a draft sales invoice: replace header fields + line items and recompute
+  // totals. Only a draft may be edited (posted/paid invoices are immutable —
+  // void and recreate instead).
+  app.put("/api/sales-invoices/:id", async (request, reply) => {
+    const outlet = await getOwnerOutlet(request, reply);
+    if (!outlet) return;
+    const id = Number((request.params as { id: string }).id);
+    const body = request.body as {
+      customer_id?: number | null;
+      party_name?: string;
+      issue_date?: string;
+      due_date?: string;
+      tax_rate?: number | string;
+      discount?: number | string;
+      notes?: string;
+      items?: ItemInput[];
+    };
+
+    const items = Array.isArray(body.items) ? body.items : [];
+    if (items.length === 0) return reply.status(400).send({ success: false, error: "Minimal satu item" });
+
+    const taxRate = Number(body.tax_rate ?? 0);
+    const discount = Number(body.discount ?? 0);
+    const { lines, subtotal, tax_amount, total } = computeTotals(items, taxRate, discount, false);
+
+    try {
+      const result = await db.transaction(async (tx) => {
+        const [invoice] = await tx
+          .select()
+          .from(invoicesTable)
+          .where(and(eq(invoicesTable.id, id), eq(invoicesTable.outlet_id, outlet.id), eq(invoicesTable.type, "sales")))
+          .limit(1);
+        if (!invoice) throw new Error("NOT_FOUND");
+        if (invoice.status !== "draft") throw new Error("NOT_DRAFT");
+
+        const [updated] = await tx
+          .update(invoicesTable)
+          .set({
+            customer_id: body.customer_id ?? null,
+            party_name: body.party_name ?? "",
+            ...(body.issue_date ? { issue_date: new Date(body.issue_date) } : {}),
+            due_date: body.due_date ? new Date(body.due_date) : null,
+            subtotal: String(subtotal),
+            tax_rate: String(taxRate),
+            tax_amount: String(tax_amount),
+            discount: String(discount),
+            total: String(total),
+            notes: body.notes ?? "",
+          })
+          .where(eq(invoicesTable.id, id))
+          .returning();
+
+        await tx.delete(invoiceItemsTable).where(eq(invoiceItemsTable.invoice_id, id));
+        await tx.insert(invoiceItemsTable).values(
+          items.map((it, i) => ({
+            invoice_id: id,
+            product_id: it.product_id ?? null,
+            description: it.description ?? "",
+            quantity: String(lines[i].qty),
+            unit_price: String(lines[i].price),
+            discount_pct: String(lines[i].discPct),
+            line_total: String(lines[i].line_total),
+          })),
+        );
+        return updated;
+      });
+      return { success: true, data: result };
+    } catch (e) {
+      const msg = String(e instanceof Error ? e.message : e);
+      if (msg.includes("NOT_FOUND")) return reply.status(404).send({ success: false, error: "Faktur tidak ditemukan" });
+      if (msg.includes("NOT_DRAFT")) return reply.status(409).send({ success: false, error: "Hanya draft yang bisa diubah" });
+      return reply.status(500).send({ success: false, error: msg });
+    }
+  });
+
   // Post: stock OUT. Overselling is allowed but reported in `warnings`.
   app.post("/api/sales-invoices/:id/post", async (request, reply) => {
     const outlet = await getOwnerOutlet(request, reply);

@@ -2,7 +2,7 @@
 
 import { ColumnDef } from "@tanstack/react-table";
 import { Button } from "@/components/ui/button";
-import { ArrowUpDown, Loader2, CheckCircle2, Wallet, Ban, Printer } from "lucide-react";
+import { ArrowUpDown, Loader2, CheckCircle2, Wallet, Ban, Printer, Pencil } from "lucide-react";
 import { fmtIDR } from "@/lib/utils/format";
 
 export type SalesRow = {
@@ -46,6 +46,7 @@ const sortHeader = (label: string) =>
 export function getSalesColumns(opts: {
   busyId: number | null;
   onAction: (id: number, kind: InvoiceAction) => void;
+  onEdit: (id: number) => void;
 }): ColumnDef<SalesRow>[] {
   // Buttons stop propagation so clicking an action never triggers the row click.
   const stop = (e: React.MouseEvent) => e.stopPropagation();
@@ -94,6 +95,18 @@ export function getSalesColumns(opts: {
         }
         return (
           <div className="flex justify-end gap-1">
+            {inv.status === "draft" && (
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={(e) => {
+                  stop(e);
+                  opts.onEdit(inv.id);
+                }}
+              >
+                <Pencil className="size-3.5" /> Ubah
+              </Button>
+            )}
             {inv.status === "draft" && (
               <Button
                 size="xs"

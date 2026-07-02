@@ -13,6 +13,7 @@ import {
   Wallet,
   Ban,
   Printer,
+  Pencil,
   Search,
   ImageIcon,
   SlidersHorizontal,
@@ -49,6 +50,7 @@ type Product = { id: string; product_name: string; price: string; image: string;
 type CartItem = { product: Product; quantity: number; unit_price: string; discount_pct: string };
 type DetailItem = {
   id: number;
+  product_id: string | null;
   description: string;
   quantity: string;
   unit_price: string;
@@ -79,6 +81,8 @@ export function SalesClient() {
   const [detail, setDetail] = useState<DetailInvoice | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
+  // When set, the create view is in "edit" mode for this draft invoice id.
+  const [editId, setEditId] = useState<number | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [search, setSearch] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -109,6 +113,7 @@ export function SalesClient() {
   }, []);
 
   const openCreate = async () => {
+    setEditId(null);
     setCart([]);
     setParty("");
     setTaxRate("0");
@@ -118,6 +123,48 @@ export function SalesClient() {
     const res = await fetch(`${API_URL}/api/products/mine`, { credentials: "include" });
     const json = await res.json();
     setProducts(json.products ?? []);
+    setView("create");
+  };
+
+  // Open the create form pre-filled with a draft's data for editing.
+  const openEdit = async (id: number) => {
+    setError("");
+    setEditId(id);
+    const [pRes, dRes] = await Promise.all([
+      fetch(`${API_URL}/api/products/mine`, { credentials: "include" }),
+      fetch(`${API_URL}/api/sales-invoices/${id}`, { credentials: "include" }),
+    ]);
+    const prods: Product[] = (await pRes.json()).products ?? [];
+    setProducts(prods);
+    const dJson = await dRes.json();
+    if (dJson.success) {
+      const d = dJson.data as DetailInvoice & { items: DetailItem[] };
+      setParty(d.party_name || "");
+      setTaxRate(String(Number(d.tax_rate) || 0));
+      setDiscount(String(Number(d.discount) || 0));
+      setDueDate(d.due_date ? String(d.due_date).slice(0, 10) : "");
+      setCart(
+        d.items.map((it) => {
+          // Reuse the live product (image, name) when it still exists; otherwise
+          // synthesize a minimal one from the stored line so the row survives.
+          const prod =
+            prods.find((p) => p.id === it.product_id) ??
+            ({
+              id: it.product_id ?? `line-${it.id}`,
+              product_name: it.description,
+              price: it.unit_price,
+              image: "",
+              is_for_sale: true,
+            } as Product);
+          return {
+            product: prod,
+            quantity: Number(it.quantity),
+            unit_price: String(Number(it.unit_price)),
+            discount_pct: String(Number(it.discount_pct) || 0),
+          };
+        }),
+      );
+    }
     setView("create");
   };
 
@@ -165,29 +212,33 @@ export function SalesClient() {
     setSaving(true);
     setError("");
     try {
-      const res = await fetch(`${API_URL}/api/sales-invoices`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          party_name: party,
-          due_date: dueDate || null,
-          tax_rate: Number(taxRate || 0),
-          discount: Number(discount || 0),
-          items: cart.map((i) => ({
-            product_id: i.product.id,
-            description: i.product.product_name,
-            quantity: i.quantity,
-            unit_price: Number(i.unit_price),
-            discount_pct: Number(i.discount_pct || 0),
-          })),
-        }),
-      });
+      const res = await fetch(
+        editId ? `${API_URL}/api/sales-invoices/${editId}` : `${API_URL}/api/sales-invoices`,
+        {
+          method: editId ? "PUT" : "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            party_name: party,
+            due_date: dueDate || null,
+            tax_rate: Number(taxRate || 0),
+            discount: Number(discount || 0),
+            items: cart.map((i) => ({
+              product_id: i.product.id,
+              description: i.product.product_name,
+              quantity: i.quantity,
+              unit_price: Number(i.unit_price),
+              discount_pct: Number(i.discount_pct || 0),
+            })),
+          }),
+        },
+      );
       const json = await res.json();
       if (!json.success) {
         setError(json.error || "Gagal menyimpan faktur.");
         return;
       }
+      setEditId(null);
       setView("list");
       await fetchInvoices();
     } catch {
@@ -325,6 +376,11 @@ export function SalesClient() {
               ) : (
                 <>
                   {detail.status === "draft" && (
+                    <Button variant="outline" onClick={() => openEdit(detail.id)}>
+                      <Pencil className="size-4" /> Ubah
+                    </Button>
+                  )}
+                  {detail.status === "draft" && (
                     <Button variant="outline" onClick={() => action(detail.id, "post")}>
                       <CheckCircle2 className="size-4" /> Posting
                     </Button>
@@ -371,10 +427,19 @@ export function SalesClient() {
     return (
       <div className="flex flex-col p-4 md:p-6 lg:h-[calc(100svh-3rem)]">
         <div className="mb-4 flex items-center gap-2">
-          <Button variant="ghost" size="icon-sm" onClick={() => setView("list")}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => {
+              setEditId(null);
+              setView("list");
+            }}
+          >
             <ArrowLeft className="size-4" />
           </Button>
-          <h1 className="text-xl font-semibold tracking-tight">Faktur Penjualan Baru</h1>
+          <h1 className="text-xl font-semibold tracking-tight">
+            {editId ? "Edit Faktur Penjualan" : "Faktur Penjualan Baru"}
+          </h1>
         </div>
 
         <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[1fr_420px]">
@@ -698,7 +763,7 @@ export function SalesClient() {
                 className="mt-2 w-full bg-teal-600 text-white hover:bg-teal-700"
               >
                 {saving && <Loader2 className="size-4 animate-spin" />}
-                Simpan sebagai Draft
+                {editId ? "Simpan Perubahan" : "Simpan sebagai Draft"}
               </Button>
             </div>
           </div>
@@ -743,9 +808,14 @@ export function SalesClient() {
           {/* Mobile: card list */}
           <div className="space-y-2.5 sm:hidden">
             {invoices.map((inv) => (
-              <button
+              <div
                 key={inv.id}
+                role="button"
+                tabIndex={0}
                 onClick={() => openDetail(inv.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") openDetail(inv.id);
+                }}
                 className="w-full rounded-2xl border bg-card p-3.5 text-left shadow-sm active:scale-[0.99] transition-transform"
               >
                 <div className="flex items-center justify-between gap-2">
@@ -765,14 +835,29 @@ export function SalesClient() {
                     </span>
                   )}
                 </div>
-              </button>
+                {inv.status === "draft" && (
+                  <div className="mt-3 border-t pt-2.5">
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      className="w-full"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openEdit(inv.id);
+                      }}
+                    >
+                      <Pencil className="size-3.5" /> Ubah Draft
+                    </Button>
+                  </div>
+                )}
+              </div>
             ))}
           </div>
 
           {/* Desktop: table */}
           <div className="hidden sm:block">
             <DataTable
-              columns={getSalesColumns({ busyId, onAction: action })}
+              columns={getSalesColumns({ busyId, onAction: action, onEdit: openEdit })}
               data={invoices.slice((page - 1) * limit, page * limit)}
               page={page}
               limit={limit}

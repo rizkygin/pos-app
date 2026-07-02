@@ -64,6 +64,19 @@ function Watermark({ src }: { src: string }) {
   );
 }
 
+/* Small "Powered by Ulun Pesan" credit shown at the bottom of every theme. */
+function PoweredBy() {
+  return (
+    <div className="mt-8 flex items-center justify-center gap-1.5 text-zinc-400">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src="/icons/icon-192x192.png" alt="Ulun Pesan" className="size-4 rounded object-contain" />
+      <span className="text-[10px] font-medium tracking-wide">
+        Powered by <span className="font-semibold text-zinc-500">Ulun Pesan</span>
+      </span>
+    </div>
+  );
+}
+
 function Row({ label, value, muted }: { label: string; value: string; muted?: boolean }) {
   return (
     <div className={`flex justify-between ${muted ? "text-zinc-500" : ""}`}>
@@ -133,28 +146,31 @@ function ModernInvoice({ inv, terms, accent }: { inv: Invoice; terms: string; ac
           </div>
         </div>
 
-        <table className="mt-6 w-full text-sm">
-          <thead>
-            <tr className="text-left text-[11px] uppercase tracking-wide text-zinc-400">
-              <th className="rounded-l-lg bg-zinc-50 px-3 py-2 font-medium">Item</th>
-              <th className="bg-zinc-50 px-3 py-2 text-right font-medium">Qty</th>
-              <th className="bg-zinc-50 px-3 py-2 text-right font-medium">Harga</th>
-              <th className="bg-zinc-50 px-3 py-2 text-right font-medium">Diskon</th>
-              <th className="rounded-r-lg bg-zinc-50 px-3 py-2 text-right font-medium">Jumlah</th>
-            </tr>
-          </thead>
-          <tbody>
-            {inv.items.map((it) => (
-              <tr key={it.id} className="border-b border-zinc-100">
-                <td className="px-3 py-2.5">{it.description}</td>
-                <td className="px-3 py-2.5 text-right tabular-nums">{Number(it.quantity)}</td>
-                <td className="px-3 py-2.5 text-right tabular-nums">{rupiah(it.unit_price)}</td>
-                <td className="px-3 py-2.5 text-right tabular-nums">{discLabel(it.discount_pct)}</td>
-                <td className="px-3 py-2.5 text-right font-medium tabular-nums">{rupiah(it.line_total)}</td>
+        {/* Wrap in a scroll container so the full table is reachable on narrow screens. */}
+        <div className="mt-6 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-[11px] uppercase tracking-wide text-zinc-400">
+                <th className="rounded-l-lg bg-zinc-50 px-3 py-2 font-medium">Item</th>
+                <th className="bg-zinc-50 px-3 py-2 text-right font-medium">Qty</th>
+                <th className="bg-zinc-50 px-3 py-2 text-right font-medium">Harga</th>
+                <th className="bg-zinc-50 px-3 py-2 text-right font-medium">Diskon</th>
+                <th className="rounded-r-lg bg-zinc-50 px-3 py-2 text-right font-medium">Jumlah</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {inv.items.map((it) => (
+                <tr key={it.id} className="border-b border-zinc-100">
+                  <td className="px-3 py-2.5">{it.description}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums">{Number(it.quantity)}</td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">{rupiah(it.unit_price)}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums">{discLabel(it.discount_pct)}</td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-right font-medium tabular-nums">{rupiah(it.line_total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
 
         <div className="mt-5 flex justify-end">
           <div className="w-full max-w-[240px] space-y-1.5 text-sm">
@@ -175,6 +191,7 @@ function ModernInvoice({ inv, terms, accent }: { inv: Invoice; terms: string; ac
         </div>
 
         <Footer inv={inv} terms={terms} accent={accent} />
+        <PoweredBy />
       </div>
     </div>
   );
@@ -183,27 +200,31 @@ function ModernInvoice({ inv, terms, accent }: { inv: Invoice; terms: string; ac
 /* ─────────────────────────────── Classic (unchanged) ────────────────── */
 function ClassicInvoice({ inv, terms }: { inv: Invoice; terms: string }) {
   return (
-    <div className="border-[3px] border-double border-zinc-900 bg-white p-6 font-serif text-zinc-900 md:p-8">
+    <div className="overflow-hidden border-[3px] border-double border-zinc-900 bg-white p-4 font-serif text-zinc-900 sm:p-6 md:p-8">
       <div className="text-center">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={logoSrc(inv.outlet)} alt={inv.outlet.name} className="mx-auto size-14 object-contain" />
-        <h1 className="mt-2 text-2xl font-bold uppercase tracking-[0.2em]">{inv.outlet.name}</h1>
-        <p className="text-xs text-zinc-600">{inv.outlet.address}</p>
-        <p className="text-xs text-zinc-600">
+        <img src={logoSrc(inv.outlet)} alt={inv.outlet.name} className="mx-auto size-12 object-contain sm:size-14" />
+        <h1 className="mt-2 text-lg font-bold uppercase tracking-[0.12em] sm:text-2xl sm:tracking-[0.2em]">
+          {inv.outlet.name}
+        </h1>
+        <p className="text-[11px] text-zinc-600 sm:text-xs">{inv.outlet.address}</p>
+        <p className="wrap-break-word text-[11px] text-zinc-600 sm:text-xs">
           {inv.outlet.phone}
           {inv.outlet.email ? ` · ${inv.outlet.email}` : ""}
         </p>
       </div>
 
       <div className="my-4 border-t-2 border-zinc-900" />
-      <p className="text-center text-sm font-bold uppercase tracking-[0.35em]">Faktur Penjualan</p>
+      <p className="text-center text-xs font-bold uppercase tracking-[0.2em] sm:text-sm sm:tracking-[0.35em]">
+        Faktur Penjualan
+      </p>
 
-      <div className="mt-5 flex justify-between text-sm">
+      <div className="mt-5 flex flex-col gap-3 text-sm sm:flex-row sm:justify-between sm:gap-4">
         <div>
           <p className="text-xs uppercase tracking-wide text-zinc-500">Kepada</p>
           <p className="font-semibold">{inv.party_name || "—"}</p>
         </div>
-        <div className="text-right">
+        <div className="sm:text-right">
           <p>No: <span className="font-semibold">{inv.number}</span></p>
           <p>Tanggal: {tgl(inv.issue_date)}</p>
           <p>Jatuh tempo: {tgl(inv.due_date)}</p>
@@ -211,31 +232,34 @@ function ClassicInvoice({ inv, terms }: { inv: Invoice; terms: string }) {
         </div>
       </div>
 
-      <table className="mt-5 w-full border-collapse text-sm">
-        <thead>
-          <tr className="border-y-2 border-zinc-900 text-left uppercase">
-            <th className="px-2 py-2 font-semibold">Keterangan</th>
-            <th className="px-2 py-2 text-right font-semibold">Qty</th>
-            <th className="px-2 py-2 text-right font-semibold">Harga</th>
-            <th className="px-2 py-2 text-right font-semibold">Diskon</th>
-            <th className="px-2 py-2 text-right font-semibold">Jumlah</th>
-          </tr>
-        </thead>
-        <tbody>
-          {inv.items.map((it) => (
-            <tr key={it.id} className="border-b border-zinc-300">
-              <td className="px-2 py-2">{it.description}</td>
-              <td className="px-2 py-2 text-right tabular-nums">{Number(it.quantity)}</td>
-              <td className="px-2 py-2 text-right tabular-nums">{rupiah(it.unit_price)}</td>
-              <td className="px-2 py-2 text-right tabular-nums">{discLabel(it.discount_pct)}</td>
-              <td className="px-2 py-2 text-right tabular-nums">{rupiah(it.line_total)}</td>
+      {/* Horizontal scroll on small screens so the 5-col table never breaks the layout. */}
+      <div className="mt-5 overflow-x-auto">
+        <table className="w-full border-collapse text-xs sm:text-sm">
+          <thead>
+            <tr className="border-y-2 border-zinc-900 text-left uppercase">
+              <th className="px-1.5 py-2 font-semibold sm:px-2">Keterangan</th>
+              <th className="px-1.5 py-2 text-right font-semibold sm:px-2">Qty</th>
+              <th className="px-1.5 py-2 text-right font-semibold sm:px-2">Harga</th>
+              <th className="px-1.5 py-2 text-right font-semibold sm:px-2">Diskon</th>
+              <th className="px-1.5 py-2 text-right font-semibold sm:px-2">Jumlah</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {inv.items.map((it) => (
+              <tr key={it.id} className="border-b border-zinc-300">
+                <td className="px-1.5 py-2 sm:px-2">{it.description}</td>
+                <td className="px-1.5 py-2 text-right tabular-nums sm:px-2">{Number(it.quantity)}</td>
+                <td className="whitespace-nowrap px-1.5 py-2 text-right tabular-nums sm:px-2">{rupiah(it.unit_price)}</td>
+                <td className="px-1.5 py-2 text-right tabular-nums sm:px-2">{discLabel(it.discount_pct)}</td>
+                <td className="whitespace-nowrap px-1.5 py-2 text-right tabular-nums sm:px-2">{rupiah(it.line_total)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
       <div className="mt-3 flex justify-end">
-        <div className="w-full max-w-[240px] space-y-1 text-sm">
+        <div className="w-full space-y-1 text-sm sm:max-w-[240px]">
           <Row label="Subtotal" value={rupiah(inv.subtotal)} />
           {Number(inv.discount) > 0 && <Row label="Diskon" value={`-${rupiah(inv.discount)}`} />}
           <Row label={`Pajak (${Number(inv.tax_rate)}%)`} value={rupiah(inv.tax_amount)} />
@@ -249,17 +273,19 @@ function ClassicInvoice({ inv, terms }: { inv: Invoice; terms: string }) {
       {terms.trim() && (
         <div className="mt-6 text-[11px] leading-relaxed text-zinc-600">
           <p className="font-semibold uppercase tracking-wide">Syarat &amp; Ketentuan</p>
-          <p className="mt-1 whitespace-pre-wrap">{terms}</p>
+          <p className="mt-1 whitespace-pre-wrap wrap-break-word">{terms}</p>
         </div>
       )}
 
-      <div className="mt-10 flex justify-end">
+      <div className="mt-10 flex justify-center sm:justify-end">
         <div className="text-center text-sm">
           <p>Hormat kami,</p>
           <div className="mt-12 border-t border-zinc-900 px-6" />
           <p className="mt-1 font-semibold">{inv.outlet.name}</p>
         </div>
       </div>
+
+      <PoweredBy />
     </div>
   );
 }
@@ -309,28 +335,31 @@ function ElegantInvoice({ inv, terms, c1, c2 }: { inv: Invoice; terms: string; c
           </div>
         </div>
 
-        <table className="mt-6 w-full text-sm">
-          <thead>
-            <tr className="text-left text-[11px] uppercase tracking-widest" style={{ color: c1 }}>
-              <th className="border-b-2 py-2 font-semibold" style={{ borderColor: `${c1}44` }}>Item</th>
-              <th className="border-b-2 py-2 text-right font-semibold" style={{ borderColor: `${c1}44` }}>Qty</th>
-              <th className="border-b-2 py-2 text-right font-semibold" style={{ borderColor: `${c1}44` }}>Harga</th>
-              <th className="border-b-2 py-2 text-right font-semibold" style={{ borderColor: `${c1}44` }}>Diskon</th>
-              <th className="border-b-2 py-2 text-right font-semibold" style={{ borderColor: `${c1}44` }}>Jumlah</th>
-            </tr>
-          </thead>
-          <tbody>
-            {inv.items.map((it) => (
-              <tr key={it.id} className="border-b border-zinc-100">
-                <td className="py-2.5">{it.description}</td>
-                <td className="py-2.5 text-right tabular-nums">{Number(it.quantity)}</td>
-                <td className="py-2.5 text-right tabular-nums">{rupiah(it.unit_price)}</td>
-                <td className="py-2.5 text-right tabular-nums">{discLabel(it.discount_pct)}</td>
-                <td className="py-2.5 text-right font-medium tabular-nums">{rupiah(it.line_total)}</td>
+        {/* Wrap in a scroll container so the full table is reachable on narrow screens. */}
+        <div className="mt-6 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-[11px] uppercase tracking-widest" style={{ color: c1 }}>
+                <th className="border-b-2 py-2 font-semibold" style={{ borderColor: `${c1}44` }}>Item</th>
+                <th className="border-b-2 py-2 text-right font-semibold" style={{ borderColor: `${c1}44` }}>Qty</th>
+                <th className="border-b-2 py-2 text-right font-semibold" style={{ borderColor: `${c1}44` }}>Harga</th>
+                <th className="border-b-2 py-2 text-right font-semibold" style={{ borderColor: `${c1}44` }}>Diskon</th>
+                <th className="border-b-2 py-2 text-right font-semibold" style={{ borderColor: `${c1}44` }}>Jumlah</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {inv.items.map((it) => (
+                <tr key={it.id} className="border-b border-zinc-100">
+                  <td className="py-2.5 pr-3">{it.description}</td>
+                  <td className="py-2.5 text-right tabular-nums">{Number(it.quantity)}</td>
+                  <td className="whitespace-nowrap py-2.5 pl-3 text-right tabular-nums">{rupiah(it.unit_price)}</td>
+                  <td className="py-2.5 pl-3 text-right tabular-nums">{discLabel(it.discount_pct)}</td>
+                  <td className="whitespace-nowrap py-2.5 pl-3 text-right font-medium tabular-nums">{rupiah(it.line_total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
 
         <div className="mt-6 flex justify-end">
           <div className="w-full max-w-[260px] space-y-1.5 rounded-2xl p-4 text-sm" style={{ backgroundImage: `linear-gradient(135deg, ${c1}14, ${c2}14)` }}>
@@ -358,6 +387,7 @@ function ElegantInvoice({ inv, terms, c1, c2 }: { inv: Invoice; terms: string; c
         <p className="mt-6 text-center font-serif text-sm italic" style={{ color: c2 }}>
           Terima kasih atas kepercayaan Anda ✨
         </p>
+        <PoweredBy />
       </div>
     </div>
   );
@@ -414,6 +444,25 @@ export function PrintClient() {
     persist(THEME_KEY, t);
   };
 
+  // Browsers use document.title as the default "Save as PDF" filename. Set it to
+  // [date][customer] (falling back to the outlet name if no customer was entered),
+  // then restore the original title once the print dialog closes.
+  const handlePrint = () => {
+    if (!inv) return;
+    const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const name = (inv.party_name?.trim() || inv.outlet.name || "Faktur")
+      .replace(/[\\/:*?"<>|\r\n]+/g, " ") // strip filesystem-unsafe chars
+      .trim();
+    const prev = document.title;
+    const restore = () => {
+      document.title = prev;
+      window.removeEventListener("afterprint", restore);
+    };
+    document.title = `${date}-${name}`;
+    window.addEventListener("afterprint", restore);
+    window.print();
+  };
+
   if (loading) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center text-muted-foreground">
@@ -433,14 +482,19 @@ export function PrintClient() {
           #invoice-print, #invoice-print * { visibility: visible !important; }
           #invoice-print {
             position: absolute; left: 0; top: 0; width: 100%; padding: 0; border: 0;
-            -webkit-print-color-adjust: exact; print-color-adjust: exact;
+          }
+          /* print-color-adjust is NOT inherited — apply it to every element so
+             backgrounds, gradients, and the gradient-clipped Total (background-clip:text)
+             render in the PDF exactly like the on-screen preview. */
+          #invoice-print, #invoice-print * {
+            -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important;
           }
           #invoice-print img { display: block !important; }
           .no-print { display: none !important; }
         }
       `}</style>
 
-      <div className="mx-auto max-w-2xl p-4 md:p-6">
+      <div className="mx-auto w-full max-w-2xl p-4 md:p-6">
         {/* Toolbar (not printed): theme + colors + print */}
         <div className="no-print mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
@@ -502,7 +556,7 @@ export function PrintClient() {
           </div>
 
           <button
-            onClick={() => window.print()}
+            onClick={handlePrint}
             className="inline-flex items-center gap-1.5 rounded-xl bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700"
           >
             <Printer className="size-4" /> Cetak / Simpan PDF
