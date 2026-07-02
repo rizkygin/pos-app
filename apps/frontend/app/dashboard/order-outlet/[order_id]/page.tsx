@@ -9,8 +9,11 @@ import { DashboardHeader } from "@/components/dashboard-header";
 import { API_URL } from "@/lib/api-url";
 import {
     ChevronLeft,
-    ShoppingCart,
     CheckCircle2,
+    ChefHat,
+    Bike,
+    ShoppingBag,
+    XCircle,
     Clock,
     User,
     Phone,
@@ -26,9 +29,17 @@ import {
     Globe,
 } from "lucide-react";
 
+type OrderStatus = "pending" | "confirmed" | "preparing" | "ready" | "on_delivery" | "delivered" | "cancelled";
+
+// Keyed by orders.status (the API returns the order lifecycle status here).
 const STATUS_MAP = {
-    addToChart: { label: "Diproses", icon: ShoppingCart, className: "bg-blue-100 text-blue-700" },
-    checkout: { label: "Selesai", icon: CheckCircle2, className: "bg-emerald-100 text-emerald-700" },
+    pending:     { label: "Menunggu",     icon: Clock,        className: "bg-amber-100 text-amber-700" },
+    confirmed:   { label: "Dikonfirmasi", icon: CheckCircle2, className: "bg-blue-100 text-blue-700" },
+    preparing:   { label: "Disiapkan",    icon: ChefHat,      className: "bg-violet-100 text-violet-700" },
+    ready:       { label: "Siap",         icon: Package,      className: "bg-cyan-100 text-cyan-700" },
+    on_delivery: { label: "Diantar",      icon: Bike,         className: "bg-orange-100 text-orange-700" },
+    delivered:   { label: "Selesai",      icon: ShoppingBag,  className: "bg-emerald-100 text-emerald-700" },
+    cancelled:   { label: "Dibatalkan",   icon: XCircle,      className: "bg-red-100 text-red-700" },
 } as const;
 
 function fmtIDR(n: number) {
@@ -40,7 +51,7 @@ type Item = {
     quantity: number | null;
     note: string | null;
     summaryPrice: string | number | null;
-    status: "addToChart" | "checkout" | null;
+    status: OrderStatus | null;
     createdAt: Date | string | null;
     productId: string;
     productName: string | null;
@@ -108,14 +119,15 @@ export default function OrderDetailPage() {
 
     const totalAmount = items.reduce((sum, i) => sum + Number(i.summaryPrice), 0);
     const firstItem = items[0];
-    const orderStatus = firstItem.status;
-    const orderDate = firstItem.createdAt
+    const orderStatus = firstItem?.status;
+    const orderDate = firstItem?.createdAt
         ? format(new Date(firstItem.createdAt), "d MMMM yyyy, HH:mm", { locale: idLocale })
         : "-";
 
-    const s = orderStatus
-        ? STATUS_MAP[orderStatus]
-        : { label: "Pending", icon: Clock, className: "bg-amber-100 text-amber-700" };
+    // Fall back safely when the status is missing OR not a known STATUS_MAP key
+    // (e.g. a service/materials order), otherwise `s.icon` crashes the page.
+    const s =
+        (orderStatus && STATUS_MAP[orderStatus]) || STATUS_MAP.pending;
     const StatusIcon = s.icon;
 
     return (
