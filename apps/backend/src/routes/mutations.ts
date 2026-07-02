@@ -9,26 +9,34 @@ import {
   customersTable,
   usersTable,
   productsTable,
+  cashInDetailTable,
+  cashInCategoryTable,
+  cashFlows,
 } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 
-async function addPosToCashflowin(total: number) {
-  const { cashInDetailTable, cashInCategoryTable, cashFlows } = await import("../db/schema").then((m) => ({
-    cashInDetailTable: m.cashInDetailTable,
-    cashInCategoryTable: m.cashInCategoryTable,
-    cashFlows: m.cashFlows,
-  }));
+// Transaction client type (drizzle's tx has the same query builder as `db`).
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-  const [category] = await db
+// Record a POS sale as cash-in for the given outlet. Find-or-create the "POS"
+// cash-in category so a missing category can't silently drop the cashflow, and
+// attribute it to the actual outlet (was hardcoded to outlet 1).
+async function addPosToCashflowin(tx: Tx, outletId: number, total: number) {
+  let [category] = await tx
     .select({ id: cashInCategoryTable.id })
     .from(cashInCategoryTable)
     .where(eq(cashInCategoryTable.category, "POS"))
     .limit(1);
 
-  if (!category) return;
+  if (!category) {
+    [category] = await tx
+      .insert(cashInCategoryTable)
+      .values({ category: "POS" })
+      .returning({ id: cashInCategoryTable.id });
+  }
 
-  const [detail] = await db
+  const [detail] = await tx
     .insert(cashInDetailTable)
     .values({
       category_id: category.id,
@@ -37,8 +45,8 @@ async function addPosToCashflowin(total: number) {
     })
     .returning();
 
-  await db.insert(cashFlows).values({
-    outlet_id: 1,
+  await tx.insert(cashFlows).values({
+    outlet_id: outletId,
     cash_in_detail_id: detail.id,
   });
 }
@@ -106,7 +114,7 @@ export async function mutationRoutes(app: FastifyInstance) {
           }
         }
 
-        await addPosToCashflowin(body.total);
+        await addPosToCashflowin(tx, body.outletId, body.total);
       });
 
       return { success: true, message: "Order created successfully", orderId: new_order_id };
@@ -122,7 +130,7 @@ export async function mutationRoutes(app: FastifyInstance) {
 
       const body = (request.body as any) || {};
 
-      await addPosToCashflowin(body.total);
+      await db.transaction((tx) => addPosToCashflowin(tx, body.outletId, body.total));
 
       return { success: true };
     } catch (error: any) {
