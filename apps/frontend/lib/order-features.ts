@@ -1,4 +1,4 @@
-import { Utensils, Coffee, Wrench, ShoppingBag, PackageOpen, Sparkles, Bike, Scissors } from "lucide-react";
+import { Utensils, Coffee, Wrench, ShoppingBag, PackageOpen, Sparkles, Bike, Scissors, HardHat } from "lucide-react";
 
 export type OrderFeature = {
     slug: string;
@@ -123,5 +123,18 @@ export const ORDER_FEATURES: OrderFeature[] = [
         count: "Coming soon",
         isAvailable: false,
         color: 'text-indigo-600'
+    },
+    {
+        slug: "building-materials",
+        category: 'bahan bangunan',
+        label: "Bahan Bangunan",
+        description: "Semen, cat, besi, keramik, dan material konstruksi",
+        icon: HardHat,
+        gradient: "from-orange-50 to-amber-50",
+        iconBg: "bg-orange-100",
+        iconColor: "text-orange-600",
+        count: "Material",
+        isAvailable: true,
+        color: "text-orange-600"
     },
 ];
