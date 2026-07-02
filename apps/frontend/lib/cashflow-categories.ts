@@ -12,7 +12,7 @@ export const CATEGORY_IN = [
     "Penjualan kendaraan operasional",
     "Penjualan mesin/peralatan",
     "Penjualan stok lama/scrap",
-    "POS",
+    "Kasir",
     "Lain-lain",
 ];
 
