@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, or, eq, desc, sql, gte, lte, like, count, inArray, isNull, notInArray, lt, type AnyColumn } from "drizzle-orm";
+import { and, or, eq, desc, sql, gte, lte, ilike, count, inArray, isNull, notInArray, lt, type AnyColumn } from "drizzle-orm";
 import { db } from "../db";
 import {
   ordersTable,
@@ -62,7 +62,7 @@ export async function ownerRoutes(app: FastifyInstance) {
       const baseFilter = and(
         eq(productsTable.outlet_id, outlet.id),
         statusFilter,
-        search ? or(like(usersTable.name, `%${search}%`), like(orderDetailsTable.order_id, `%${search}%`)) : undefined,
+        search ? or(ilike(usersTable.name, `%${search}%`), ilike(orderDetailsTable.order_id, `%${search}%`)) : undefined,
         dateStart ? gte(orderDetailsTable.created_at, dateStart) : undefined,
         dateEnd ? lte(orderDetailsTable.created_at, dateEnd) : undefined,
       );
@@ -311,7 +311,7 @@ export async function ownerRoutes(app: FastifyInstance) {
         .where(
           and(
             eq(productsTable.outlet_id, outlet.id),
-            search ? like(productsTable.product_name, `%${search}%`) : undefined,
+            search ? ilike(productsTable.product_name, `%${search}%`) : undefined,
             dateStart ? gte(orderDetailsTable.created_at, dateStart) : undefined,
             dateEnd ? lte(orderDetailsTable.created_at, dateEnd) : undefined,
             notInArray(ordersTable.status, ["cancelled"]),
