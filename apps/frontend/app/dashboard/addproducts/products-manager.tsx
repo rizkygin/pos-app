@@ -39,6 +39,7 @@ import { useRouter } from 'next/navigation';
 import { DashboardHeader } from '@/components/dashboard-header';
 import { ORDER_FEATURES } from '@/lib/order-features';
 import { resolveProductImage, isBackendImage } from '@/lib/image-src';
+import { formatNumberInput, parseNumberInput } from '@/lib/utils/format';
 
 type Product = {
   id: string;
@@ -83,8 +84,8 @@ export const ProductsManager = ({
   const [imageUrl, setImageUrl] = useState<string>('');
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [selectedFeatures, setSelectedFeatures] = useState<string[]>([]);
-  const [isForSale, setIsForSale] = useState(true);
-  const [trackStock, setTrackStock] = useState(true);
+  const [isForSale, setIsForSale] = useState(false);
+  const [trackStock, setTrackStock] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -106,8 +107,8 @@ export const ProductsManager = ({
 
   const handleCategorySelect = (category: string) => {
     setSelectedCategory(category);
-    setIsForSale(true);
-    setTrackStock(true);
+    setIsForSale(false);
+    setTrackStock(false);
     setView('form');
   };
 
@@ -116,6 +117,12 @@ export const ProductsManager = ({
   ) => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
+  };
+
+  // Money inputs: show thousand separators (Rupiah) while storing raw digits.
+  const handleMoneyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setFormData((prev) => ({ ...prev, [name]: parseNumberInput(value) }));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -151,7 +158,6 @@ export const ProductsManager = ({
     }
 
     setIsSubmitting(false);
-    
 
     if (result.success) {
       // Reset and go back to list
@@ -292,7 +298,6 @@ export const ProductsManager = ({
 
   return (
     <div className="space-y-6 mt-4">
-      
       {view === 'list' && (
         <>
           <div className="flex items-center justify-between mb-4 md:mb-8">
@@ -479,9 +484,13 @@ export const ProductsManager = ({
                 >
                   <cat.icon className="h-6 w-6 md:h-10 md:w-10" />
                 </div>
-                <span className={`font-bold text-sm md:text-lg relative z-10 transition-colors text-center ${
-                  !cat.isAvailable ? 'text-muted-foreground' : 'text-foreground group-hover:text-blue-600'
-                }`}>
+                <span
+                  className={`font-bold text-sm md:text-lg relative z-10 transition-colors text-center ${
+                    !cat.isAvailable
+                      ? 'text-muted-foreground'
+                      : 'text-foreground group-hover:text-blue-600'
+                  }`}
+                >
                   {cat.label}
                 </span>
                 {cat.isAvailable && (
@@ -513,10 +522,10 @@ export const ProductsManager = ({
               </div>
               <div>
                 <h2 className="text-2xl font-bold tracking-tight">
-                  {editingProductId ? 'Edit' : 'Add New'} {selectedCategory}
+                  {editingProductId ? 'Edit' : 'Tambah produk'} {selectedCategory}
                 </h2>
                 <p className="text-muted-foreground text-sm font-medium">
-                  Fill in the details below to{' '}
+                  Tambahkan sesuai yang sebenarnya{' '}
                   {editingProductId ? 'update' : 'add to'} your inventory.
                 </p>
               </div>
@@ -526,7 +535,7 @@ export const ProductsManager = ({
               <div className="space-y-2">
                 <label className="text-sm font-bold flex items-center gap-2">
                   <Tag className="h-4 w-4 text-muted-foreground" />
-                  Product Name
+                  Nama Produk
                 </label>
                 <input
                   required
@@ -553,11 +562,11 @@ export const ProductsManager = ({
                         <input
                           required
                           name="lowest_price"
-                          type="number"
-                          value={formData.lowest_price}
-                          onChange={handleInputChange}
+                          inputMode="numeric"
+                          value={formatNumberInput(formData.lowest_price)}
+                          onChange={handleMoneyChange}
                           className="flex h-12 w-full rounded-xl border border-input bg-transparent pl-12 pr-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-                          placeholder="50000"
+                          placeholder="50.000"
                         />
                       </div>
                     </div>
@@ -573,17 +582,18 @@ export const ProductsManager = ({
                         <input
                           required
                           name="highest_price"
-                          type="number"
-                          value={formData.highest_price}
-                          onChange={handleInputChange}
+                          inputMode="numeric"
+                          value={formatNumberInput(formData.highest_price)}
+                          onChange={handleMoneyChange}
                           className="flex h-12 w-full rounded-xl border border-input bg-transparent pl-12 pr-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-                          placeholder="150000"
+                          placeholder="150.000"
                         />
                       </div>
                     </div>
                     <p className="col-span-2 -mt-1 text-xs text-muted-foreground">
                       Layanan jasa memakai rentang harga. Nanti pian pilih harga
-                      pasti (di antara terendah &amp; tertinggi) saat menerima order.
+                      pasti (di antara terendah &amp; tertinggi) saat menerima
+                      order.
                     </p>
                   </>
                 ) : (
@@ -599,11 +609,11 @@ export const ProductsManager = ({
                       <input
                         required
                         name="price"
-                        type="number"
-                        value={formData.price}
-                        onChange={handleInputChange}
+                        inputMode="numeric"
+                        value={formatNumberInput(formData.price)}
+                        onChange={handleMoneyChange}
                         className="flex h-12 w-full rounded-xl border border-input bg-transparent pl-12 pr-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-                        placeholder="25000"
+                        placeholder="25.000"
                       />
                     </div>
                   </div>
@@ -619,15 +629,17 @@ export const ProductsManager = ({
                     </span>
                     <input
                       name="buying_price"
-                      type="number"
-                      value={formData.buying_price}
-                      onChange={handleInputChange}
+                      inputMode="numeric"
+                      value={formatNumberInput(formData.buying_price)}
+                      onChange={handleMoneyChange}
                       className="flex h-12 w-full rounded-xl border border-amber-200 bg-amber-50/30 pl-12 pr-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
-                      placeholder="15000"
+                      placeholder="15.000"
                     />
                   </div>
                 </div>
-                <div className={`col-span-2 space-y-3 ${isServiceCategory ? 'hidden' : ''}`}>
+                <div
+                  className={`col-span-2 space-y-3 ${isServiceCategory ? 'hidden' : ''}`}
+                >
                   <label className="flex items-center justify-between cursor-pointer">
                     <span className="text-sm font-bold text-muted-foreground">
                       Ada Diskon?
@@ -652,9 +664,9 @@ export const ProductsManager = ({
                       <input
                         required
                         name="price_mark_down"
-                        type="number"
-                        value={formData.price_mark_down}
-                        onChange={handleInputChange}
+                        inputMode="numeric"
+                        value={formatNumberInput(formData.price_mark_down)}
+                        onChange={handleMoneyChange}
                         className="flex h-12 w-full rounded-xl border border-emerald-300 bg-emerald-50/40 pl-12 pr-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
                         placeholder="Harga setelah diskon"
                       />
@@ -680,7 +692,7 @@ export const ProductsManager = ({
               <div className="space-y-2">
                 <label className="text-sm font-bold flex items-center gap-2">
                   <Layers className="h-4 w-4 text-muted-foreground" />
-                  Jual ke pelanggan
+                  Jual ke pelanggan online?
                 </label>
                 <button
                   type="button"
@@ -714,11 +726,56 @@ export const ProductsManager = ({
                   </span>
                 </button>
               </div>
+              {isForSale && (
+                <div className="space-y-3">
+                  <label className="text-sm font-bold flex items-center gap-2">
+                    <Tag className="h-4 w-4 text-muted-foreground" />
+                    Fitur Produk
+                    <span className="text-xs font-light text-muted-foreground ml-2">
+                      Pilih fitur produk untuk memudahkan pelanggan menemukan
+                      produk Anda.
+                    </span>
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {CATEGORIES.map((f) => {
+                      const active = selectedFeatures.includes(f.id);
+                      return (
+                        <button
+                          key={f.id}
+                          type="button"
+                          disabled={!f.isAvailable}
+                          onClick={() =>
+                            setSelectedFeatures((prev) =>
+                              prev.includes(f.id)
+                                ? prev.filter((x) => x !== f.id)
+                                : [...prev, f.id],
+                            )
+                          }
+                          className={`px-3 py-1.5 rounded-full text-xs font-bold border-2 transition-all duration-150 ${
+                            !f.isAvailable
+                              ? 'border-border bg-muted/30 text-muted-foreground/40 cursor-not-allowed'
+                              : active
+                                ? 'border-blue-500 bg-blue-500 text-white shadow-sm'
+                                : 'border-border bg-background text-muted-foreground hover:border-blue-300 hover:text-blue-600'
+                          }`}
+                        >
+                          {f.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {selectedFeatures.length > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      {selectedFeatures.length} fitur dipilih
+                    </p>
+                  )}
+                </div>
+              )}
 
               <div className="space-y-2">
                 <label className="text-sm font-bold flex items-center gap-2">
                   <Layers className="h-4 w-4 text-muted-foreground" />
-                  Kelola stok
+                  Apakah Produk ini dapat dikelola stoknya?
                 </label>
                 <button
                   type="button"
@@ -731,17 +788,21 @@ export const ProductsManager = ({
                 >
                   <span>
                     <span className="block text-sm font-semibold">
-                      {trackStock ? 'Punya stok sendiri' : 'Tanpa stok (resep/jasa)'}
+                      {trackStock
+                        ? 'Punya stok sendiri'
+                        : 'Tanpa stok (resep/jasa)'}
                     </span>
                     <span className="block text-xs text-muted-foreground">
                       {trackStock
-                        ? 'Stok bertambah/berkurang lewat faktur & opname.'
+                        ? 'Stok bertambah/berkurang lewat kasir, faktur & opname.'
                         : 'Produk olahan dari bahan, atau jasa — tidak dihitung stoknya.'}
                     </span>
                   </span>
                   <span
                     className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
-                      trackStock ? 'bg-teal-600' : 'bg-zinc-300 dark:bg-zinc-700'
+                      trackStock
+                        ? 'bg-teal-600'
+                        : 'bg-zinc-300 dark:bg-zinc-700'
                     }`}
                   >
                     <span
@@ -751,50 +812,6 @@ export const ProductsManager = ({
                     />
                   </span>
                 </button>
-              </div>
-
-              <div className="space-y-3">
-                <label className="text-sm font-bold flex items-center gap-2">
-                  <Tag className="h-4 w-4 text-muted-foreground" />
-                  Fitur Produk
-                  <span className="text-xs font-light text-muted-foreground ml-2">
-                    Pilih fitur produk untuk memudahkan pelanggan menemukan
-                    produk Anda.
-                  </span>
-                </label>
-                <div className="flex flex-wrap gap-2">
-                  {CATEGORIES.map((f) => {
-                    const active = selectedFeatures.includes(f.id);
-                    return (
-                      <button
-                        key={f.id}
-                        type="button"
-                        disabled={!f.isAvailable}
-                        onClick={() =>
-                          setSelectedFeatures((prev) =>
-                            prev.includes(f.id)
-                              ? prev.filter((x) => x !== f.id)
-                              : [...prev, f.id],
-                          )
-                        }
-                        className={`px-3 py-1.5 rounded-full text-xs font-bold border-2 transition-all duration-150 ${
-                          !f.isAvailable
-                            ? 'border-border bg-muted/30 text-muted-foreground/40 cursor-not-allowed'
-                            : active
-                              ? 'border-blue-500 bg-blue-500 text-white shadow-sm'
-                              : 'border-border bg-background text-muted-foreground hover:border-blue-300 hover:text-blue-600'
-                        }`}
-                      >
-                        {f.label}
-                      </button>
-                    );
-                  })}
-                </div>
-                {selectedFeatures.length > 0 && (
-                  <p className="text-xs text-muted-foreground">
-                    {selectedFeatures.length} fitur dipilih
-                  </p>
-                )}
               </div>
 
               <div className="space-y-2">
@@ -880,7 +897,11 @@ export const ProductsManager = ({
             <div className="flex justify-center mb-5">
               <div className="rounded-xl bg-white p-3 shadow-lg border">
                 <QRCode
-                  value={typeof window !== 'undefined' ? `${window.location.origin}/menu/${outletId}` : ''}
+                  value={
+                    typeof window !== 'undefined'
+                      ? `${window.location.origin}/menu/${outletId}`
+                      : ''
+                  }
                   size={160}
                 />
               </div>
@@ -888,20 +909,28 @@ export const ProductsManager = ({
 
             <div className="flex items-center gap-2 rounded-xl border bg-muted/30 px-3 py-2.5">
               <p className="flex-1 truncate text-xs text-muted-foreground">
-                {typeof window !== 'undefined' ? `${window.location.origin}/menu/${outletId}` : ''}
+                {typeof window !== 'undefined'
+                  ? `${window.location.origin}/menu/${outletId}`
+                  : ''}
               </p>
               <button
                 onClick={async () => {
-                  await navigator.clipboard.writeText(`${window.location.origin}/menu/${outletId}`);
+                  await navigator.clipboard.writeText(
+                    `${window.location.origin}/menu/${outletId}`,
+                  );
                   setCopied(true);
                   setTimeout(() => setCopied(false), 2000);
                 }}
                 className="shrink-0 inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-bold text-white transition-colors hover:bg-blue-700"
               >
                 {copied ? (
-                  <><Check className="h-3.5 w-3.5" /> Copied!</>
+                  <>
+                    <Check className="h-3.5 w-3.5" /> Copied!
+                  </>
                 ) : (
-                  <><Copy className="h-3.5 w-3.5" /> Copy</>
+                  <>
+                    <Copy className="h-3.5 w-3.5" /> Copy
+                  </>
                 )}
               </button>
             </div>
