@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { ReceiptModal, type ReceiptData } from './receipt-modal';
 import Image from 'next/image';
 import {
@@ -81,6 +81,10 @@ export const CashierClient = ({
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'non_cash'>(
     'cash',
   );
+  // Blocks duplicate checkouts: ref guards synchronously against re-entry (rapid
+  // clicks / Cmd+Enter key-repeat), state drives the disabled button UI.
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const submittingRef = useRef(false);
 
   const [categories, setCatagories] = useState(INITIAL_CATEGORIES);
 
@@ -197,6 +201,11 @@ export const CashierClient = ({
 
   const handleCheckout = useCallback(async () => {
     if (cart.length === 0 || isInsufficient) return;
+    // Guard against duplicate submissions (double-click / Cmd+Enter key-repeat):
+    // the ref flips synchronously so a second call bails before any await.
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    setIsSubmitting(true);
     // Capture snapshot before any async work so state changes mid-flight don't corrupt it
     const snapshot = [...cart];
     const snapshotTotal = cartTotal;
@@ -263,6 +272,9 @@ export const CashierClient = ({
       });
     } catch (error: any) {
       alert(error.message);
+    } finally {
+      submittingRef.current = false;
+      setIsSubmitting(false);
     }
   }, [
     cart,
@@ -704,11 +716,11 @@ export const CashierClient = ({
             )}
             <Button
               onClick={handleCheckout}
-              disabled={checkoutDisabled}
+              disabled={checkoutDisabled || isSubmitting}
               className="h-12 flex-1 rounded-2xl text-lg font-bold shadow-xl shadow-blue-600/20 bg-blue-600 hover:bg-blue-700 transition-all hover:-translate-y-1 relative group"
             >
               <CreditCard className="mr-2 h-5 w-5" />
-              Checkout Now
+              {isSubmitting ? 'Processing…' : 'Checkout Now'}
               <span className="absolute right-4 text-xs font-medium text-white/50 bg-white/10 px-2 py-1 rounded hidden lg:block group-hover:bg-white/20 transition-colors">
                 ⌘ ↵
               </span>
