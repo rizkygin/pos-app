@@ -28,6 +28,10 @@ import { getUTCRangeFromLocalDate, getUTCRangeFromLocalMonth } from "../lib/time
 const money = (col: AnyColumn) =>
   sql`(case when ${col} ~ '^\\s*-?[0-9]+(\\.[0-9]+)?\\s*$' then cast(${col} as numeric) else 0 end)`;
 
+// POS/cashier orders are attached to this hardcoded "offline" customer (see
+// mutations.ts /api/add-order-detail). Matches admin.ts OFFLINE_CUSTOMER_EMAIL.
+const OFFLINE_CUSTOMER_EMAIL = "rizkygin1@gmail.com";
+
 export async function ownerRoutes(app: FastifyInstance) {
   app.get("/api/get-outlet-orders", async (request, reply) => {
     try {
@@ -216,29 +220,63 @@ export async function ownerRoutes(app: FastifyInstance) {
       const outlet = await getOutletByUserId(session.user.id);
       if (!outlet) return reply.status(403).send({ success: false, error: "Not an owner" });
 
-      const items = await db
+      // Order header + customer (user) info, scoped to this owner's outlet.
+      const [order] = await db
         .select({
+          status: ordersTable.status,
+          note: ordersTable.note,
+          customerName: usersTable.name,
+          customerEmail: usersTable.email,
+          customerPhone: usersTable.phone,
+        })
+        .from(ordersTable)
+        .leftJoin(customersTable, eq(ordersTable.customer_id, customersTable.id))
+        .leftJoin(usersTable, eq(customersTable.user_id, usersTable.id))
+        .where(and(eq(ordersTable.id, order_id), eq(ordersTable.outlet_id, outlet.id)))
+        .limit(1);
+
+      if (!order) return reply.status(404).send({ success: false, error: "Order not found" });
+
+      const rows = await db
+        .select({
+          detailId: orderDetailsTable.id,
+          quantity: orderDetailsTable.quantity,
+          note: orderDetailsTable.note_product,
+          summaryPrice: orderDetailsTable.summary_price,
+          createdAt: orderDetailsTable.created_at,
           productId: productsTable.id,
           productName: productsTable.product_name,
-          quantity: orderDetailsTable.quantity,
-          price: orderDetailsTable.summary_price,
+          price: productsTable.price,
+          category: productsTable.category,
+          unit: productsTable.unit,
           image: productsTable.image,
-          note: orderDetailsTable.note_product,
-          status: ordersTable.status,
         })
         .from(orderDetailsTable)
         .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
-        .innerJoin(ordersTable, eq(orderDetailsTable.order_id, ordersTable.id))
-        .where(and(eq(orderDetailsTable.order_id, order_id), eq(productsTable.outlet_id, outlet.id)))
+        .where(eq(orderDetailsTable.order_id, order_id))
         .orderBy(desc(orderDetailsTable.created_at));
 
-      if (items.length === 0) return reply.status(404).send({ success: false, error: "Order not found" });
+      const isOfflineOrder = order.customerEmail === OFFLINE_CUSTOMER_EMAIL;
 
-      const status = items[0].status;
       return {
         success: true,
-        items: items.map((i) => ({ ...i, image: i.image || "not-found.webp" })),
-        status,
+        outlet: { id: String(outlet.id), name: outlet.name },
+        items: rows.map((i) => ({
+          ...i,
+          detailId: String(i.detailId),
+          status: order.status,
+          image: i.image || "not-found.webp",
+        })),
+        customer: isOfflineOrder
+          ? null
+          : {
+              name: order.customerName ?? null,
+              email: order.customerEmail ?? null,
+              phone: order.customerPhone ?? null,
+              address: null,
+            },
+        isOfflineOrder,
+        offlineNote: isOfflineOrder ? order.note : null,
       };
     } catch (error) {
       return reply.status(500).send({ success: false, error: String(error) });
