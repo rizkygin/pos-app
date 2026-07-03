@@ -293,19 +293,25 @@ export function ReceiptModal({ data, onClose }: Props) {
 
     // Prefer ThermalBridge, fall back to RawBT. Navigating to a custom scheme
     // nobody handles is a silent no-op in Android Chrome, so "installed" is
-    // detected by the tab being backgrounded (app opened) before the timer fires.
+    // detected by the page losing focus before the timer fires: ThermalBridge's
+    // print popup only blurs the page (it stays visible underneath), while a
+    // full app switch also hides it — watch for either.
     const openPrintApp = (thermalBridgeUrl: string, rawbtUrl: string) => {
-        const onHide = () => {
-            if (document.hidden) {
-                window.clearTimeout(timer);
-                document.removeEventListener("visibilitychange", onHide);
-            }
+        const cancel = () => {
+            window.clearTimeout(timer);
+            window.removeEventListener("blur", cancel);
+            document.removeEventListener("visibilitychange", onVisibility);
+        };
+        const onVisibility = () => {
+            if (document.hidden) cancel();
         };
         const timer = window.setTimeout(() => {
-            document.removeEventListener("visibilitychange", onHide);
+            window.removeEventListener("blur", cancel);
+            document.removeEventListener("visibilitychange", onVisibility);
             window.location.href = rawbtUrl;
         }, 1500);
-        document.addEventListener("visibilitychange", onHide);
+        window.addEventListener("blur", cancel);
+        document.addEventListener("visibilitychange", onVisibility);
         window.location.href = thermalBridgeUrl;
     };
 
