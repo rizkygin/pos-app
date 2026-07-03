@@ -15,9 +15,7 @@ export default async function CashierPage() {
     // items, so drop anything flagged not-for-sale.
     const res = await serverFetch("/api/products/mine");
     const { outlet, products } = res.ok ? await res.json() : { outlet: null, products: [] };
-    const sellableProducts = (products ?? []).filter(
-        (p: { is_for_sale?: boolean }) => p.is_for_sale !== false,
-    );
+    const sellableProducts = products;
 
     if (!outlet) {
         return (
@@ -37,6 +35,7 @@ export default async function CashierPage() {
                 outletName={outlet.name}
                 outletAddress={outlet.address}
                 outletPhone={outlet.phone}
+                outletLogo={outlet.avatar ?? ""}
                 cashierName={session.user.name ?? "Cashier"}
                 initialProducts={sellableProducts}
             />

@@ -70,6 +70,7 @@ type CashierClientProps = {
   outletName: string;
   outletAddress: string;
   outletPhone: string;
+  outletLogo: string;
   cashierName: string;
   initialProducts: Product[];
 };
@@ -90,6 +91,7 @@ export const CashierClient = ({
   outletName,
   outletAddress,
   outletPhone,
+  outletLogo,
   cashierName,
   initialProducts,
 }: CashierClientProps) => {
@@ -443,6 +445,7 @@ export const CashierClient = ({
         outletName,
         outletAddress,
         outletPhone,
+        outletLogo,
         cashierName,
       });
     } catch (error: any) {
@@ -465,6 +468,7 @@ export const CashierClient = ({
     outletName,
     outletAddress,
     outletPhone,
+    outletLogo,
     cashierName,
     completeActiveTab,
   ]);
