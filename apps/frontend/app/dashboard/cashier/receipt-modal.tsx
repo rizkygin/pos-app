@@ -155,12 +155,19 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
 
     for (const item of data.items) {
         const isDiscount = !!item.price_mark_down && item.price_mark_down !== "0";
+        const original = parseFloat(item.price);
         const unit = parseFloat(isDiscount ? item.price_mark_down : item.price);
-        const sub = unit * item.quantity;
         bold(true);
         line(item.product_name);
         bold(false);
-        row(`${item.quantity} x ${fmt(unit)}`, fmt(sub));
+        if (isDiscount) {
+            // Original price up top, discount subtracted below, so the item
+            // nets to unit*qty and the printed numbers sum to Subtotal.
+            row(`${item.quantity} x ${fmt(original)}`, fmt(original * item.quantity));
+            row("  Diskon item", `-${fmt((original - unit) * item.quantity)}`);
+        } else {
+            row(`${item.quantity} x ${fmt(unit)}`, fmt(unit * item.quantity));
+        }
     }
     divider();
 
@@ -226,9 +233,13 @@ export function ReceiptModal({ data, onClose }: Props) {
                 const isDiscount = !!item.price_mark_down && item.price_mark_down !== "0";
                 const original = parseFloat(item.price);
                 const unit = parseFloat(isDiscount ? item.price_mark_down : item.price);
-                const sub = unit * item.quantity;
-                return `<div class="item"><div class="name">${esc(item.product_name)}</div>` +
-                    `<div class="row"><span>${item.quantity} x ${fmt(unit)}${isDiscount ? ` <s>${fmt(original)}</s>` : ""}</span><span>${fmt(sub)}</span></div></div>`;
+                // Mirrors the ESC/POS layout: original price up top, discount
+                // subtracted below, so the printed numbers sum to Subtotal.
+                const priceRows = isDiscount
+                    ? `<div class="row"><span>${item.quantity} x ${fmt(original)}</span><span>${fmt(original * item.quantity)}</span></div>` +
+                      `<div class="row"><span>&nbsp;&nbsp;Diskon item</span><span>-${fmt((original - unit) * item.quantity)}</span></div>`
+                    : `<div class="row"><span>${item.quantity} x ${fmt(unit)}</span><span>${fmt(unit * item.quantity)}</span></div>`;
+                return `<div class="item"><div class="name">${esc(item.product_name)}</div>${priceRows}</div>`;
             })
             .join("");
 
@@ -253,7 +264,6 @@ export function ReceiptModal({ data, onClose }: Props) {
   .row span:last-child { text-align: right; white-space: nowrap; }
   .item { margin: 3px 0; }
   .item .name { font-weight: bold; word-break: break-word; }
-  s { text-decoration: line-through; }
   .logo { display: block; margin: 0 auto 2mm; width: 20mm; height: 20mm; object-fit: contain; }
 </style></head><body>
   ${logoSrc ? `<img class="logo" src="${logoSrc}" alt="">` : ""}
