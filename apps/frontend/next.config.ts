@@ -17,21 +17,6 @@ const nextConfig: NextConfig = {
   },
   allowedDevOrigins: ['192.168.1.7', 'breeder-enduring-manpower.ngrok-free.dev'],
   devIndicators: false,
-  async headers() {
-    return [
-      {
-        // Static downloadable binaries (e.g. thermalbridge.apk) — Next's default
-        // for /public is "no-cache, must-revalidate", so every request (incl.
-        // repeat downloads across outlets) re-hits this single origin container.
-        // Filenames here are re-copied manually on update (no content hash), so
-        // cache for a week rather than marking immutable forever.
-        source: "/downloads/:path*",
-        headers: [
-          { key: "Cache-Control", value: "public, max-age=604800" },
-        ],
-      },
-    ];
-  },
   experimental: {
     // The dashboard is auth-gated, so every page is dynamically rendered. By
     // default `staleTimes.dynamic` is 0, meaning the client router caches dynamic

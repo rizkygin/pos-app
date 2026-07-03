@@ -183,9 +183,10 @@ export const OwnerDashboard = ({
       {/* ── App Downloads ─────────────────────────────────────────── */}
       <section className="mt-8">
         <h3 className="mb-4 text-lg font-black tracking-tight">Aplikasi Pendukung Printer</h3>
+        {/* Served from GitHub Releases (CDN, resumable) — not self-hosted:
+            Railway's single origin made the 29MB download slow and flaky. */}
         <a
-          href="/downloads/thermalbridge.apk"
-          download
+          href="https://github.com/rizkygin/thermalbridge-releases/releases/latest/download/thermalbridge.apk"
           className="group flex items-center gap-4 rounded-3xl border border-border/60 bg-card p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
         >
           <div className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-linear-to-br from-slate-700 to-slate-900 text-white shadow-lg">
