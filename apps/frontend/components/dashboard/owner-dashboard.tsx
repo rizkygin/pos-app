@@ -22,6 +22,8 @@ import {
   Settings,
   ClipboardList,
   Sparkles,
+  Download,
+  Printer,
 } from 'lucide-react';
 
 type RecentOrder = {
@@ -176,6 +178,30 @@ export const OwnerDashboard = ({
             </motion.div>
           ))}
         </div>
+      </section>
+
+      {/* ── App Downloads ─────────────────────────────────────────── */}
+      <section className="mt-8">
+        <h3 className="mb-4 text-lg font-black tracking-tight">Aplikasi Pendukung</h3>
+        <a
+          href="/downloads/thermalbridge.apk"
+          download
+          className="group flex items-center gap-4 rounded-3xl border border-border/60 bg-card p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
+        >
+          <div className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-linear-to-br from-slate-700 to-slate-900 text-white shadow-lg">
+            <Printer className="size-5" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-black">ThermalBridge</p>
+            <p className="truncate text-xs text-muted-foreground">
+              Cetak struk ke printer thermal Bluetooth/USB dari HP kasir
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5 rounded-2xl bg-muted px-3.5 py-2 text-xs font-bold text-foreground transition-colors group-hover:bg-blue-600 group-hover:text-white">
+            <Download className="size-3.5" />
+            APK
+          </div>
+        </a>
       </section>
 
       {/* ── Recent Orders ─────────────────────────────────────────── */}

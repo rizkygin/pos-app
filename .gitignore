@@ -45,3 +45,8 @@ apps/backend/uploads/
 
 # local backups & DB dumps (sensitive — never commit)
 /backups/
+
+# large downloadable binaries served statically — kept out of git history,
+# but present on disk so `railway up` (see .railwayignore) bundles them into
+# the deploy. Only this machine's working copy has these; redeploy from here.
+apps/frontend/public/downloads/
