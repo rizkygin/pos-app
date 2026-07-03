@@ -182,7 +182,7 @@ export const OwnerDashboard = ({
 
       {/* ── App Downloads ─────────────────────────────────────────── */}
       <section className="mt-8">
-        <h3 className="mb-4 text-lg font-black tracking-tight">Aplikasi Pendukung</h3>
+        <h3 className="mb-4 text-lg font-black tracking-tight">Aplikasi Pendukung Printer</h3>
         <a
           href="/downloads/thermalbridge.apk"
           download
@@ -193,8 +193,8 @@ export const OwnerDashboard = ({
           </div>
           <div className="min-w-0 flex-1">
             <p className="text-sm font-black">ThermalBridge</p>
-            <p className="truncate text-xs text-muted-foreground">
-              Cetak struk ke printer thermal Bluetooth/USB dari HP kasir
+            <p className="truncate text-xs text-muted-foreground max-sm flex-wrap">
+              Cetak struk ke printer <br /> thermal Bluetooth/USB <br /> dari HP kasir
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-1.5 rounded-2xl bg-muted px-3.5 py-2 text-xs font-bold text-foreground transition-colors group-hover:bg-blue-600 group-hover:text-white">
