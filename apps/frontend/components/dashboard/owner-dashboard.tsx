@@ -197,6 +197,9 @@ export const OwnerDashboard = ({
             <p className="text-xs text-muted-foreground">
               Cetak struk ke printer thermal Bluetooth/USB dari HP kasir
             </p>
+            <p className="mt-0.5 text-[11px] font-medium text-muted-foreground/80">
+              ±29 MB — disarankan unduh lewat Wi&#8209;Fi
+            </p>
           </div>
           <div className="flex shrink-0 items-center gap-1.5 rounded-2xl bg-muted px-3.5 py-2 text-xs font-bold text-foreground transition-colors group-hover:bg-blue-600 group-hover:text-white">
             <Download className="size-3.5" />
