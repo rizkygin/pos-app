@@ -47,10 +47,17 @@ const PAPER_KEY = "pos_paper_width";
 // Font A characters per line: 32 on 58mm paper, 48 on 80mm.
 const LINE_CHARS: Record<PaperWidth, number> = { "58": 32, "80": 48 };
 
+// Full print-head width in dots at 203dpi: 384 on 58mm paper, 576 on 80mm.
+const PAPER_DOTS: Record<PaperWidth, number> = { "58": 384, "80": 576 };
+
 // Rasterize the outlet logo into an ESC/POS "GS v 0" raster block (1-bit).
+// The bitmap spans the full paper width with the logo centered in white
+// padding: ESC a centering is firmware-dependent for raster images (cheap
+// boards rotate the row buffer instead of padding it, smearing the logo), so
+// the centering is baked into the pixels and the printer has nothing to shift.
 // Throws when the logo can't be loaded or read (missing, CORS-tainted canvas);
 // the caller treats that as "print without a logo".
-async function buildLogoEscposBytes(src: string): Promise<number[]> {
+async function buildLogoEscposBytes(src: string, paper: PaperWidth): Promise<number[]> {
     const img = await new Promise<HTMLImageElement>((resolve, reject) => {
         const el = new window.Image();
         el.crossOrigin = "anonymous";
@@ -59,8 +66,9 @@ async function buildLogoEscposBytes(src: string): Promise<number[]> {
         el.src = src;
     });
 
-    const width = 192; // dots (~24mm at 203dpi) — header-sized on both papers
-    const height = Math.max(8, Math.round(((img.height || width) / (img.width || width)) * width));
+    const logoWidth = 192; // dots (~24mm at 203dpi) — header-sized on both papers
+    const width = PAPER_DOTS[paper];
+    const height = Math.max(8, Math.round(((img.height || logoWidth) / (img.width || logoWidth)) * logoWidth));
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
@@ -69,7 +77,7 @@ async function buildLogoEscposBytes(src: string): Promise<number[]> {
     // Composite over white so transparent pixels print as paper, not black.
     ctx.fillStyle = "#fff";
     ctx.fillRect(0, 0, width, height);
-    ctx.drawImage(img, 0, 0, width, height);
+    ctx.drawImage(img, (width - logoWidth) / 2, 0, logoWidth, height);
     const { data: px } = ctx.getImageData(0, 0, width, height);
 
     const bytesPerRow = width / 8;
@@ -335,7 +343,7 @@ export function ReceiptModal({ data, onClose }: Props) {
             let logoBytes: number[] = [];
             if (logoSrc) {
                 try {
-                    logoBytes = await buildLogoEscposBytes(logoSrc);
+                    logoBytes = await buildLogoEscposBytes(logoSrc, paperWidth);
                 } catch {
                     // Logo unavailable (load/CORS failure) — print without it.
                 }
