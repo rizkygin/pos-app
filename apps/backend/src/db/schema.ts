@@ -478,6 +478,8 @@ export const verification = pgTable('verification', {
 //                          non-stock charges like ongkir/jasa)
 //   - stockMovementsTable: append-only inventory ledger; productsTable.stock is
 //                          the cached running balance.
+//   - recipeItemsTable   : optional bill-of-materials for menu items; a sale of
+//                          a track_stock=false product consumes its ingredients.
 //
 // Money uses numeric(14,2) for correct tax/sum math (products & cashflow store
 // money as varchar strings; values are cast at the cashflow boundary).
@@ -623,5 +625,41 @@ export const stockMovementsTable = pgTable(
       table.reason,
       table.created_at,
     ),
+  ],
+);
+
+// Optional bill-of-materials: what one sold unit of `product_id` consumes.
+// Only consulted when the sold product has track_stock=false (a menu item with
+// no countable stock of its own); a menu item with no rows here moves no stock
+// at all — recipes are strictly opt-in per product. Rows are kept (dormant) if
+// the owner toggles track_stock back on. Hard-deleted, replace-on-save.
+export const recipeItemsTable = pgTable(
+  'recipe_items',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    outlet_id: integer('outlet_id')
+      .notNull()
+      .references(() => outletsTable.id),
+    // The menu item being sold (track_stock = false).
+    product_id: text('product_id')
+      .notNull()
+      .references(() => productsTable.id, { onDelete: 'cascade' }),
+    // The ingredient consumed (track_stock = true), in its own stock unit.
+    ingredient_id: text('ingredient_id')
+      .notNull()
+      .references(() => productsTable.id, { onDelete: 'cascade' }),
+    // Consumed per ONE unit sold. Scale 3 (not 2) so gram/ml-size amounts of
+    // kg/L-stocked ingredients fit, e.g. 0.005 kg of garlic per portion.
+    qty: numeric('qty', { precision: 12, scale: 3 }).notNull(),
+    created_at: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex('recipe_items_product_ingredient_idx').on(
+      table.product_id,
+      table.ingredient_id,
+    ),
+    index('recipe_items_outlet_idx').on(table.outlet_id),
   ],
 );

@@ -16,6 +16,7 @@ import {
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 import { getOutletByUserId } from "../lib/outlet-id";
+import { applySaleStockOut } from "../lib/stock";
 
 // Cashflow categories used when an invoice is paid (seeded in CATEGORY_OUT/IN).
 const PURCHASE_CASH_CATEGORY = "Pembelian stok barang dagang";
@@ -659,27 +660,16 @@ export async function invoiceRoutes(app: FastifyInstance) {
         const warnings: string[] = [];
         for (const it of items) {
           if (!it.product_id) continue;
-          const [p] = await tx
-            .select({ stock: productsTable.stock, name: productsTable.product_name, track_stock: productsTable.track_stock })
-            .from(productsTable)
-            .where(eq(productsTable.id, it.product_id))
-            .limit(1);
-          // Recipe/service items don't track their own stock — nothing to move.
-          if (!p?.track_stock) continue;
-          if (Number(p.stock) < Number(it.quantity)) {
-            warnings.push(`${p.name}: stok ${p.stock}, terjual ${it.quantity}`);
-          }
-          await tx.insert(stockMovementsTable).values({
-            outlet_id: outlet.id,
-            product_id: it.product_id,
-            qty_change: String(-Number(it.quantity)), // negative = stock out
-            reason: "sales",
-            invoice_id: id,
-          });
-          await tx
-            .update(productsTable)
-            .set({ stock: sql`${productsTable.stock} - ${it.quantity}::numeric` })
-            .where(eq(productsTable.id, it.product_id));
+          // Own stock for track_stock products, ingredient stock for recipe
+          // products; movements carry invoice_id so void can reverse them.
+          warnings.push(
+            ...(await applySaleStockOut(tx, {
+              outletId: outlet.id,
+              productId: it.product_id,
+              qty: Number(it.quantity),
+              invoiceId: id,
+            })),
+          );
         }
 
         const [updated] = await tx

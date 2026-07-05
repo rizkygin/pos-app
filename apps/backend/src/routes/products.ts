@@ -1,10 +1,11 @@
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import path from "node:path";
 import fs from "node:fs/promises";
 import sharp from "sharp";
 import { db } from "../db";
-import { productsTable, outletsTable } from "../db/schema";
+import { productsTable, outletsTable, recipeItemsTable } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 
@@ -255,5 +256,103 @@ export async function productRoutes(app: FastifyInstance) {
       app.log.error(error, "Failed to update product");
       return reply.status(500).send({ success: false, message: "Failed to update product." });
     }
+  });
+
+  // ── Recipe (bill-of-materials) ─────────────────────────────────────────
+  // Strictly opt-in: only track_stock=false products can have one, and a
+  // product without recipe rows simply moves no stock when sold.
+
+  // Recipe rows + ingredient display info for the product-form editor.
+  app.get("/api/products/:id/recipe", async (request, reply) => {
+    const session = await requireUser(request, reply);
+    if (!session) return;
+    const productId = (request.params as { id: string }).id;
+
+    const [product] = await db
+      .select({ outlet_id: productsTable.outlet_id, track_stock: productsTable.track_stock })
+      .from(productsTable)
+      .innerJoin(outletsTable, eq(outletsTable.id, productsTable.outlet_id))
+      .where(and(eq(productsTable.id, productId), eq(outletsTable.user_id, session.user.id)))
+      .limit(1);
+    if (!product) return reply.status(404).send({ success: false, message: "Product not found" });
+
+    const ingredient = alias(productsTable, "ingredient");
+    const items = await db
+      .select({
+        ingredient_id: recipeItemsTable.ingredient_id,
+        qty: recipeItemsTable.qty,
+        name: ingredient.product_name,
+        unit: ingredient.unit,
+        stock: ingredient.stock,
+      })
+      .from(recipeItemsTable)
+      .innerJoin(ingredient, eq(ingredient.id, recipeItemsTable.ingredient_id))
+      .where(eq(recipeItemsTable.product_id, productId));
+
+    return reply.send({ success: true, items });
+  });
+
+  // Replace-on-save: the submitted list becomes the whole recipe (empty list
+  // clears it). Rejected for track_stock products — one stock mode at a time.
+  app.put("/api/products/:id/recipe", async (request, reply) => {
+    const session = await requireUser(request, reply);
+    if (!session) return;
+    const productId = (request.params as { id: string }).id;
+    const body = (request.body as { items?: { ingredient_id?: string; qty?: number | string }[] }) ?? {};
+    const items = Array.isArray(body.items) ? body.items : [];
+
+    const [product] = await db
+      .select({ outlet_id: productsTable.outlet_id, track_stock: productsTable.track_stock })
+      .from(productsTable)
+      .innerJoin(outletsTable, eq(outletsTable.id, productsTable.outlet_id))
+      .where(and(eq(productsTable.id, productId), eq(outletsTable.user_id, session.user.id)))
+      .limit(1);
+    if (!product) return reply.status(404).send({ success: false, message: "Product not found" });
+    if (product.track_stock && items.length > 0) {
+      return reply.status(409).send({
+        success: false,
+        message: "Produk dengan stok sendiri tidak bisa punya resep — matikan 'lacak stok' dulu.",
+      });
+    }
+
+    // Validate every line against the caller's own products before writing.
+    const clean: { ingredient_id: string; qty: string }[] = [];
+    for (const it of items) {
+      const qty = Number(it.qty);
+      if (!it.ingredient_id || !Number.isFinite(qty) || qty <= 0) {
+        return reply.status(400).send({ success: false, message: "Setiap bahan butuh qty > 0" });
+      }
+      if (it.ingredient_id === productId) {
+        return reply.status(400).send({ success: false, message: "Produk tidak bisa jadi bahan dirinya sendiri" });
+      }
+      const [ing] = await db
+        .select({ track_stock: productsTable.track_stock, outlet_id: productsTable.outlet_id })
+        .from(productsTable)
+        .where(eq(productsTable.id, it.ingredient_id))
+        .limit(1);
+      if (!ing || ing.outlet_id !== product.outlet_id) {
+        return reply.status(400).send({ success: false, message: "Bahan tidak ditemukan di outlet ini" });
+      }
+      if (!ing.track_stock) {
+        return reply.status(400).send({ success: false, message: "Bahan harus produk yang melacak stok" });
+      }
+      clean.push({ ingredient_id: it.ingredient_id, qty: qty.toFixed(3) });
+    }
+
+    await db.transaction(async (tx) => {
+      await tx.delete(recipeItemsTable).where(eq(recipeItemsTable.product_id, productId));
+      if (clean.length) {
+        await tx.insert(recipeItemsTable).values(
+          clean.map((c) => ({
+            outlet_id: product.outlet_id,
+            product_id: productId,
+            ingredient_id: c.ingredient_id,
+            qty: c.qty,
+          })),
+        );
+      }
+    });
+
+    return reply.send({ success: true });
   });
 }

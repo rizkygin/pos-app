@@ -190,6 +190,13 @@
       "when": 1782924101053,
       "tag": "0026_invoice_item_discount_pct",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1783244303503,
+      "tag": "0027_recipe_items",
+      "breakpoints": true
     }
   ]
 }

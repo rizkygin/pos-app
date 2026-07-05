@@ -8,14 +8,13 @@ import {
   couriersTable,
   customersTable,
   usersTable,
-  productsTable,
-  stockMovementsTable,
   cashInDetailTable,
   cashInCategoryTable,
   cashFlows,
 } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
+import { applySaleStockOut } from "../lib/stock";
 
 // Transaction client type (drizzle's tx has the same query builder as `db`).
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -114,27 +113,16 @@ export async function mutationRoutes(app: FastifyInstance) {
               status: "checkout",
             });
 
-            // POS is an immediate sale: decrement stock for products that track
-            // it (read track_stock from the DB, not the client) and record a
-            // 'sales' stock movement for the audit trail.
-            const [p] = await tx
-              .select({ track_stock: productsTable.track_stock })
-              .from(productsTable)
-              .where(eq(productsTable.id, item.product.id))
-              .limit(1);
-            if (p?.track_stock) {
-              await tx.insert(stockMovementsTable).values({
-                outlet_id: body.outletId,
-                product_id: item.product.id,
-                qty_change: String(-qty), // negative = stock out
-                reason: "sales",
-                note: `POS ${new_order_id}`,
-              });
-              await tx
-                .update(productsTable)
-                .set({ stock: sql`${productsTable.stock} - ${qty}::numeric` })
-                .where(eq(productsTable.id, item.product.id));
-            }
+            // POS is an immediate sale: move stock (own stock for track_stock
+            // products, ingredients for recipe products) with an audit trail.
+            // Oversell warnings are ignored here — a POS sale must never fail
+            // because stock records lag reality.
+            await applySaleStockOut(tx, {
+              outletId: body.outletId,
+              productId: item.product.id,
+              qty,
+              note: `POS ${new_order_id}`,
+            });
           }
         }
 
