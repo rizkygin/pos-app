@@ -38,8 +38,24 @@ type HistoryRow = {
   unit: string;
 };
 
+type FlowRow = {
+  id: number;
+  qty_change: string;
+  reason: "purchase" | "sales" | "adjustment" | "void";
+  note: string | null;
+  created_at: string;
+  invoice_number: string | null;
+};
+
+const FLOW_REASON: Record<FlowRow["reason"], { label: string; cls: string }> = {
+  purchase: { label: "Pembelian", cls: "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300" },
+  sales: { label: "Penjualan", cls: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300" },
+  adjustment: { label: "Opname", cls: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300" },
+  void: { label: "Pembatalan", cls: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300" },
+};
+
 export function StockClient() {
-  const [view, setView] = useState<"list" | "opname" | "history">("list");
+  const [view, setView] = useState<"list" | "opname" | "history" | "flow">("list");
   const [rows, setRows] = useState<StockRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -50,6 +66,11 @@ export function StockClient() {
   const [counts, setCounts] = useState<Record<string, string>>({});
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
+
+  // per-item flow state
+  const [flowProduct, setFlowProduct] = useState<StockRow | null>(null);
+  const [flowRows, setFlowRows] = useState<FlowRow[]>([]);
+  const [flowLoading, setFlowLoading] = useState(false);
 
   // history state (default window: last 30 days)
   const [history, setHistory] = useState<HistoryRow[]>([]);
@@ -129,6 +150,35 @@ export function StockClient() {
     loadHistory(histFrom, histTo);
   };
 
+  const openFlow = async (row: StockRow) => {
+    setFlowProduct(row);
+    setFlowRows([]);
+    setView("flow");
+    setFlowLoading(true);
+    try {
+      const res = await fetch(
+        `${API_URL}/api/stock/movements?productId=${encodeURIComponent(row.id)}`,
+        { credentials: "include" },
+      );
+      const json = await res.json();
+      if (json.success) setFlowRows(json.data);
+    } finally {
+      setFlowLoading(false);
+    }
+  };
+
+  // Rows are newest-first, so the balance AFTER the newest row is the current
+  // stock; each older row's after-balance is the newer one minus its change.
+  const flowWithBalance = useMemo(() => {
+    let bal = flowProduct ? flowProduct.stock : 0;
+    return flowRows.map((r) => {
+      const after = +bal.toFixed(3);
+      bal -= Number(r.qty_change);
+      bal = +bal.toFixed(3);
+      return { ...r, after };
+    });
+  }, [flowRows, flowProduct]);
+
   // Group adjustment history into per-day buckets (preserving newest-first order).
   const historyByDay = useMemo(() => {
     const groups: { day: string; items: HistoryRow[] }[] = [];
@@ -165,6 +215,93 @@ export function StockClient() {
       setSaving(false);
     }
   };
+
+  // ======================================================================= flow
+  if (view === "flow" && flowProduct) {
+    return (
+      <div className="p-4 md:p-6 space-y-5">
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="icon-sm" onClick={() => setView("list")}>
+            <ArrowLeft className="size-4" />
+          </Button>
+          <div>
+            <h1 className="text-xl font-semibold tracking-tight">Alur Stok — {flowProduct.product_name}</h1>
+            <p className="text-sm text-muted-foreground">
+              Stok saat ini:{" "}
+              <span className="font-semibold tabular-nums text-foreground">
+                {flowProduct.stock} {flowProduct.unit}
+              </span>
+            </p>
+          </div>
+        </div>
+
+        {flowLoading ? (
+          <div className="flex items-center justify-center py-16 text-muted-foreground">
+            <Loader2 className="size-5 animate-spin" />
+          </div>
+        ) : flowWithBalance.length === 0 ? (
+          <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border/70 bg-muted/20 px-6 py-16 text-center">
+            <History className="size-8 text-muted-foreground/50" />
+            <p className="mt-3 text-sm font-medium">Belum ada pergerakan stok</p>
+            <p className="mt-1 max-w-sm text-xs text-muted-foreground">
+              Pembelian, penjualan, dan opname untuk produk ini akan tercatat di sini.
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto rounded-xl border">
+            <table className="w-full text-sm">
+              <thead className="border-b bg-muted/30 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2 font-medium">Waktu</th>
+                  <th className="px-3 py-2 font-medium">Jenis</th>
+                  <th className="px-3 py-2 font-medium">Keterangan</th>
+                  <th className="px-3 py-2 text-right font-medium">Perubahan</th>
+                  <th className="px-3 py-2 text-right font-medium">Sisa</th>
+                </tr>
+              </thead>
+              <tbody>
+                {flowWithBalance.map((m) => {
+                  const delta = Number(m.qty_change);
+                  const reason = FLOW_REASON[m.reason] ?? FLOW_REASON.adjustment;
+                  return (
+                    <tr key={m.id} className="border-b last:border-0">
+                      <td className="px-3 py-2 text-xs tabular-nums whitespace-nowrap text-muted-foreground">
+                        {new Date(m.created_at).toLocaleString("id-ID", {
+                          day: "2-digit",
+                          month: "short",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${reason.cls}`}>
+                          {reason.label}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-xs text-muted-foreground">
+                        {[m.invoice_number, m.note].filter(Boolean).join(" · ") || "—"}
+                      </td>
+                      <td
+                        className={`px-3 py-2 text-right font-medium tabular-nums whitespace-nowrap ${
+                          delta < 0 ? "text-destructive" : delta > 0 ? "text-green-600 dark:text-green-400" : "text-muted-foreground"
+                        }`}
+                      >
+                        {delta > 0 ? "+" : ""}
+                        {delta} {flowProduct.unit}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">
+                        {m.after} {flowProduct.unit}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   // ==================================================================== history
   if (view === "history") {
@@ -410,7 +547,7 @@ export function StockClient() {
         </div>
       ) : (
         <DataTable
-          columns={stockColumns}
+          columns={stockColumns(openFlow)}
           data={pageData}
           page={page}
           limit={limit}

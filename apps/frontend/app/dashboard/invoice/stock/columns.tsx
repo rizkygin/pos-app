@@ -2,7 +2,7 @@
 
 import { ColumnDef } from "@tanstack/react-table";
 import { Button } from "@/components/ui/button";
-import { ArrowUpDown } from "lucide-react";
+import { ArrowUpDown, History } from "lucide-react";
 import { fmtIDR } from "@/lib/utils/format";
 
 export type StockRow = {
@@ -24,7 +24,11 @@ const sortHeader = (label: string) =>
     );
   };
 
-export const stockColumns: ColumnDef<StockRow>[] = [
+// Factory instead of a static array: the last column needs the client's
+// "open per-item flow" callback.
+export const stockColumns = (
+  onFlow: (row: StockRow) => void,
+): ColumnDef<StockRow>[] => [
   {
     accessorKey: "product_name",
     header: sortHeader("Produk"),
@@ -70,5 +74,19 @@ export const stockColumns: ColumnDef<StockRow>[] = [
     accessorKey: "value",
     header: sortHeader("Nilai"),
     cell: ({ row }) => <span className="tabular-nums">{fmtIDR(row.original.value)}</span>,
+  },
+  {
+    id: "flow",
+    header: () => <span className="px-3">Alur</span>,
+    cell: ({ row }) => (
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => onFlow(row.original)}
+        className="text-teal-700 hover:bg-teal-50 hover:text-teal-800 dark:text-teal-400"
+      >
+        <History className="size-4" /> Alur Stok
+      </Button>
+    ),
   },
 ];

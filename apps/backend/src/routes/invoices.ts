@@ -893,4 +893,37 @@ export async function invoiceRoutes(app: FastifyInstance) {
       .limit(1000); // hard cap; narrow the date range if you hit it
     return { success: true, data: rows };
   });
+
+  // Per-product ledger for the Stok page drill-down: every movement
+  // (purchase / sales / adjustment / void), newest first, with the invoice
+  // number when one caused it. Outlet scoping comes from the movement rows
+  // themselves, so a foreign productId simply returns nothing.
+  app.get("/api/stock/movements", async (request, reply) => {
+    const outlet = await getOwnerOutlet(request, reply);
+    if (!outlet) return;
+    const { productId, limit } = request.query as { productId?: string; limit?: string };
+    if (!productId) return reply.status(400).send({ success: false, error: "Missing productId" });
+    const cap = Math.min(Number(limit) || 200, 500);
+
+    const rows = await db
+      .select({
+        id: stockMovementsTable.id,
+        qty_change: stockMovementsTable.qty_change,
+        reason: stockMovementsTable.reason,
+        note: stockMovementsTable.note,
+        created_at: stockMovementsTable.created_at,
+        invoice_number: invoicesTable.number,
+      })
+      .from(stockMovementsTable)
+      .leftJoin(invoicesTable, eq(stockMovementsTable.invoice_id, invoicesTable.id))
+      .where(
+        and(
+          eq(stockMovementsTable.outlet_id, outlet.id),
+          eq(stockMovementsTable.product_id, productId),
+        ),
+      )
+      .orderBy(desc(stockMovementsTable.created_at), desc(stockMovementsTable.id))
+      .limit(cap);
+    return { success: true, data: rows };
+  });
 }
