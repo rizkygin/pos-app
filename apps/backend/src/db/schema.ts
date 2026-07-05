@@ -195,7 +195,9 @@ export const productsTable = pgTable(
     // Cached on-hand quantity. Source of truth is the stockMovementsTable ledger;
     // this column is the running balance kept in sync when a movement is posted.
     // numeric (not integer) so weight/volume units (kg, liter) can be fractional.
-    stock: numeric('stock', { precision: 12, scale: 2 }).notNull().default('0'),
+    // Scale 3 matches recipe_items.qty so gram/ml-size recipe decrements
+    // (e.g. 0.005 kg per portion) survive the write without rounding.
+    stock: numeric('stock', { precision: 12, scale: 3 }).notNull().default('0'),
     ...timestamps,
   },
   (table) => [
@@ -606,7 +608,8 @@ export const stockMovementsTable = pgTable(
       .notNull()
       .references(() => productsTable.id),
     // Signed: positive = stock in (purchase), negative = stock out (sales).
-    qty_change: numeric('qty_change', { precision: 12, scale: 2 }).notNull(),
+    // Scale 3 to carry recipe-precision decrements losslessly.
+    qty_change: numeric('qty_change', { precision: 12, scale: 3 }).notNull(),
     reason: STOCK_MOVEMENT_REASON('reason').notNull(),
     // The invoice that caused this movement (null for manual adjustments).
     invoice_id: integer('invoice_id').references(() => invoicesTable.id),
