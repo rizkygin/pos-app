@@ -231,6 +231,7 @@ type Role = {
     title: string;
     description: string;
     illustration: React.ReactNode;
+    disabled?: boolean;
 };
 
 const roles: Role[] = [
@@ -239,6 +240,7 @@ const roles: Role[] = [
         title: "Customer",
         description: "Belanja barang barang favorite di area sekitar mu.",
         illustration: <CustomerIllustration />,
+        disabled: true,
     },
     {
         id: "owner",
@@ -470,8 +472,8 @@ const RoleCard = ({ role, index, onSelect }: { role: Role; index: number; onSele
             initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, delay: index * 0.15 }}
-            whileHover={{ y: -10, transition: { duration: 0.2 } }}
-            className="group relative flex flex-col items-center p-2.5 sm:p-8 rounded-2xl sm:rounded-[2.5rem] bg-card border border-border/50 shadow-xl hover:shadow-2xl transition-all duration-300 w-full max-w-90 mx-auto overflow-hidden cursor-default"
+            whileHover={role.disabled ? undefined : { y: -10, transition: { duration: 0.2 } }}
+            className={`group relative flex flex-col items-center p-2.5 sm:p-8 rounded-2xl sm:rounded-[2.5rem] bg-card border border-border/50 shadow-xl transition-all duration-300 w-full max-w-90 mx-auto overflow-hidden cursor-default ${role.disabled ? "opacity-50 grayscale" : "hover:shadow-2xl"}`}
         >
             <div className="absolute inset-0 bg-linear-to-b from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
 
@@ -486,14 +488,15 @@ const RoleCard = ({ role, index, onSelect }: { role: Role; index: number; onSele
 
             <div className="relative z-20 w-full mt-2 sm:mt-8">
                 <Button
+                    disabled={role.disabled}
                     onClick={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
                         onSelect();
                     }}
-                    className="w-full rounded-lg sm:rounded-2xl py-1.5 sm:py-6 text-[10px] sm:text-base font-semibold group-hover:scale-[1.02] transition-transform relative z-30"
+                    className={`w-full rounded-lg sm:rounded-2xl py-1.5 sm:py-6 text-[10px] sm:text-base font-semibold transition-transform relative z-30 ${role.disabled ? "" : "group-hover:scale-[1.02]"}`}
                 >
-                    {role.title.split(" ").pop()}
+                    {role.disabled ? "Segera Hadir" : role.title.split(" ").pop()}
                 </Button>
             </div>
         </motion.div>
