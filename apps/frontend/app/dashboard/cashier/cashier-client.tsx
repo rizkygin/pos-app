@@ -263,41 +263,34 @@ export const CashierClient = ({
     persistTabs(next, target.id);
   }, [applyTab, persistTabs]);
 
-  const [categories, setCatagories] = useState(INITIAL_CATEGORIES);
-
-  const fetchCategories = async () => {
-    try {
-      // GET requests cannot have a body, so we pass outletId as a query parameter
-      const res = await fetch(`${API_URL}/api/get-categories?outletId=${outletId}`, { credentials: 'include' });
-      if (!res.ok) {
-        throw new Error('Failed to fetch categories');
-      }
-      const { data } = await res.json();
-
-      const waitAllCategories = data?.map((category: any) => {
-        return {
-          id: category.category,
-          label: category.category,
-          icon: LayoutGrid,
-          color: 'text-black-500 m-2',
-          bg: 'bg-green-50',
-          border: 'border-green-200',
-        };
-      });
-      setCatagories([...INITIAL_CATEGORIES, ...waitAllCategories]);
-    } catch (err) {
-      console.error(err);
-    }
-  };
-  // Fetch categories
-  useEffect(() => {
-    fetchCategories();
-  }, []);
+  // Tabs come straight from the products the cashier already has (the customer
+  // menu uses /api/get-categories instead, is_for_sale only). 'bahan' gets no
+  // tab: raw ingredients are stock material, not something rung up at the POS.
+  const categories = useMemo(() => {
+    const distinct = Array.from(
+      new Set(initialProducts.map((p) => p.category).filter(Boolean)),
+    ).filter((category) => category !== 'bahan');
+    return [
+      ...INITIAL_CATEGORIES,
+      ...distinct.map((category) => ({
+        id: category,
+        label: category,
+        icon: LayoutGrid,
+        color: 'text-black-500 m-2',
+        bg: 'bg-green-50',
+        border: 'border-green-200',
+      })),
+    ];
+  }, [initialProducts]);
 
   const filteredProducts = useMemo(() => {
     return initialProducts.filter((product) => {
+      // 'bahan' products never appear at the POS (no tab either — see the
+      // categories memo): ingredients are consumed via recipes, not sold.
       const matchesCategory =
-        selectedCategory === 'All' || product.category === selectedCategory;
+        selectedCategory === 'All'
+          ? product.category !== 'bahan'
+          : product.category === selectedCategory;
       const matchesSearch = product.product_name
         .toLowerCase()
         .includes(searchQuery.toLowerCase());

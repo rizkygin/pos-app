@@ -39,6 +39,7 @@ import {
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { DashboardHeader } from '@/components/dashboard-header';
+import { RecipeEditor } from './recipe-editor';
 import { ORDER_FEATURES } from '@/lib/order-features';
 import { resolveProductImage, isBackendImage } from '@/lib/image-src';
 import { formatNumberInput, parseNumberInput } from '@/lib/utils/format';
@@ -82,6 +83,29 @@ const CATEGORIES = ORDER_FEATURES.map((feature) => ({
   isAvailable: feature.isAvailable,
 })).sort((a, b) => Number(b.isAvailable) - Number(a.isAvailable));
 
+// Picker-only category, deliberately NOT in ORDER_FEATURES: ingredients are
+// internal stock (recipe material), never a customer-facing service tile.
+// The cashier groups them under their own "bahan" tab, out of the All grid.
+const INGREDIENT_CATEGORY = {
+  id: 'ingredient',
+  label: 'Bahan (Stok Dapur)',
+  category: 'bahan',
+  icon: Package,
+  isAvailable: true,
+};
+
+// Distinct available categories for the in-form "Kategori" dropdown, so an
+// existing product can be re-categorized while editing (several features can
+// share one category value — dedupe on it).
+const categoryOptions = (() => {
+  const seen = new Set<string>();
+  return [...CATEGORIES, INGREDIENT_CATEGORY].filter((c) => {
+    if (!c.isAvailable || seen.has(c.category)) return false;
+    seen.add(c.category);
+    return true;
+  });
+})();
+
 export const ProductsManager = ({
   outletId,
   initialProducts,
@@ -122,6 +146,21 @@ export const ProductsManager = ({
     [initialProducts, search, categoryFilter],
   );
 
+  // Ingredient candidates for the recipe editor: the outlet's stock-tracked
+  // products (a menu item can't be its own ingredient).
+  const recipeIngredientOptions = useMemo(
+    () =>
+      initialProducts
+        .filter((p) => p.track_stock && p.id !== editingProductId)
+        .map((p) => ({
+          id: p.id,
+          product_name: p.product_name,
+          unit: p.unit,
+          stock: p.stock,
+        })),
+    [initialProducts, editingProductId],
+  );
+
   // Form State
   const [formData, setFormData] = useState({
     product_name: '',
@@ -141,7 +180,8 @@ export const ProductsManager = ({
   const handleCategorySelect = (category: string) => {
     setSelectedCategory(category);
     setIsForSale(false);
-    setTrackStock(false);
+    // Ingredients exist to be counted: default them to tracked stock.
+    setTrackStock(category === 'bahan');
     setView('form');
   };
 
@@ -604,7 +644,7 @@ export const ProductsManager = ({
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-6">
-            {CATEGORIES.map((cat) => (
+            {[...CATEGORIES, INGREDIENT_CATEGORY].map((cat) => (
               <button
                 key={cat.id}
                 disabled={!cat.isAvailable}
@@ -685,6 +725,30 @@ export const ProductsManager = ({
                   className="flex h-12 w-full rounded-xl border border-input bg-transparent px-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
                   placeholder="e.g. Signature Iced Latte"
                 />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-bold flex items-center gap-2">
+                  <Layers className="h-4 w-4 text-muted-foreground" />
+                  Kategori
+                </label>
+                <select
+                  value={selectedCategory}
+                  onChange={(e) => setSelectedCategory(e.target.value)}
+                  className="flex h-12 w-full rounded-xl border border-input bg-background px-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                >
+                  {categoryOptions.map((c) => (
+                    <option key={c.category} value={c.category}>
+                      {c.label} ({c.category})
+                    </option>
+                  ))}
+                  {/* Legacy/renamed category no longer in the option list —
+                      keep it selectable so an edit doesn't silently move it. */}
+                  {selectedCategory &&
+                    !categoryOptions.some((c) => c.category === selectedCategory) && (
+                      <option value={selectedCategory}>{selectedCategory}</option>
+                    )}
+                </select>
               </div>
 
               <div className="grid grid-cols-2 gap-4 md:gap-6">
@@ -813,6 +877,37 @@ export const ProductsManager = ({
                     </div>
                   )}
                 </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-bold flex items-center gap-2">
+                  <Package className="h-4 w-4 text-muted-foreground" />
+                  Satuan
+                </label>
+                <input
+                  name="unit"
+                  value={formData.unit}
+                  onChange={handleInputChange}
+                  maxLength={10}
+                  list="unit-suggestions"
+                  className="flex h-12 w-full rounded-xl border border-input bg-transparent px-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                  placeholder="pcs, ml, kg, porsi…"
+                />
+                {/* Free text — the list is just autocomplete suggestions. */}
+                <datalist id="unit-suggestions">
+                  <option value="pcs" />
+                  <option value="porsi" />
+                  <option value="ml" />
+                  <option value="liter" />
+                  <option value="gram" />
+                  <option value="kg" />
+                  <option value="pack" />
+                  <option value="lusin" />
+                  <option value="meter" />
+                </datalist>
+                <p className="text-xs text-muted-foreground">
+                  Satuan hitung stok & resep (maks. 10 huruf) — bebas diisi.
+                </p>
               </div>
 
               <div className="space-y-2">
@@ -953,6 +1048,19 @@ export const ProductsManager = ({
                   </span>
                 </button>
               </div>
+
+              {/* Recipe editor: only for saved products without own stock, and
+                  only when the outlet has stock-tracked products to use as
+                  ingredients. Absence of a recipe is a valid permanent state,
+                  so nothing is shown or nagged otherwise. */}
+              {!trackStock &&
+                editingProductId &&
+                recipeIngredientOptions.length > 0 && (
+                  <RecipeEditor
+                    productId={editingProductId}
+                    ingredients={recipeIngredientOptions}
+                  />
+                )}
 
               <div className="space-y-2">
                 <label className="text-sm font-bold flex items-center gap-2">
