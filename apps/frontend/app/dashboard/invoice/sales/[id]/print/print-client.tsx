@@ -34,9 +34,12 @@ const THEME_KEY = "pos_invoice_theme";
 const MODERN_COLOR_KEY = "pos_invoice_modern_color";
 const ELEGANT_C1_KEY = "pos_invoice_elegant_c1";
 const ELEGANT_C2_KEY = "pos_invoice_elegant_c2";
+const ELEGANT_TOTAL_BG_KEY = "pos_invoice_elegant_total_bg";
 const DEFAULT_MODERN = "#0d9488"; // teal-600
 const DEFAULT_C1 = "#f43f5e"; // rose-500
 const DEFAULT_C2 = "#4f46e5"; // indigo-600
+// Matches the look of the old gradient tint (DEFAULT_C1 at ~8% over white).
+const DEFAULT_TOTAL_BG = "#fef0f2";
 
 const THEMES: { key: Theme; label: string; icon: typeof Layout }[] = [
   { key: "modern", label: "Modern", icon: Layout },
@@ -291,7 +294,7 @@ function ClassicInvoice({ inv, terms }: { inv: Invoice; terms: string }) {
 }
 
 /* ─────────────────────────────── Elegant ────────────────────────────── */
-function ElegantInvoice({ inv, terms, c1, c2 }: { inv: Invoice; terms: string; c1: string; c2: string }) {
+function ElegantInvoice({ inv, terms, c1, c2, totalBg }: { inv: Invoice; terms: string; c1: string; c2: string; totalBg: string }) {
   return (
     <div className="relative overflow-hidden rounded-3xl bg-white text-zinc-900 shadow-[0_10px_40px_-12px_rgba(0,0,0,0.2)]">
       {/* Gradient header band (owner's 2 colors) */}
@@ -362,7 +365,7 @@ function ElegantInvoice({ inv, terms, c1, c2 }: { inv: Invoice; terms: string; c
         </div>
 
         <div className="mt-6 flex justify-end">
-          <div className="w-full max-w-[260px] space-y-1.5 rounded-2xl p-4 text-sm" style={{ backgroundImage: `linear-gradient(135deg, ${c1}14, ${c2}14)` }}>
+          <div className="w-full max-w-[260px] space-y-1.5 rounded-2xl p-4 text-sm" style={{ backgroundColor: totalBg }}>
             <Row label="Subtotal" value={rupiah(inv.subtotal)} muted />
             {Number(inv.discount) > 0 && <Row label="Diskon" value={`-${rupiah(inv.discount)}`} muted />}
             <Row label={`Pajak (${Number(inv.tax_rate)}%)`} value={rupiah(inv.tax_amount)} muted />
@@ -403,6 +406,7 @@ export function PrintClient() {
   const [modernColor, setModernColor] = useState(DEFAULT_MODERN);
   const [c1, setC1] = useState(DEFAULT_C1);
   const [c2, setC2] = useState(DEFAULT_C2);
+  const [totalBg, setTotalBg] = useState(DEFAULT_TOTAL_BG);
 
   useEffect(() => {
     setTerms(getSalesTerms());
@@ -415,6 +419,8 @@ export function PrintClient() {
       if (a) setC1(a);
       const b = localStorage.getItem(ELEGANT_C2_KEY);
       if (b) setC2(b);
+      const t2 = localStorage.getItem(ELEGANT_TOTAL_BG_KEY);
+      if (t2) setTotalBg(t2);
     } catch {
       /* ignore */
     }
@@ -553,6 +559,22 @@ export function PrintClient() {
                 />
               </div>
             )}
+
+            {/* Elegant: solid background of the totals box */}
+            {theme === "elegant" && (
+              <label className="flex items-center gap-1.5 rounded-2xl border bg-card px-2.5 py-1.5 text-xs font-bold">
+                <span className="text-muted-foreground">Total</span>
+                <input
+                  type="color"
+                  value={totalBg}
+                  onChange={(e) => {
+                    setTotalBg(e.target.value);
+                    persist(ELEGANT_TOTAL_BG_KEY, e.target.value);
+                  }}
+                  className="size-6 cursor-pointer rounded-md border-0 bg-transparent p-0"
+                />
+              </label>
+            )}
           </div>
 
           <button
@@ -567,7 +589,7 @@ export function PrintClient() {
           {theme === "classic" ? (
             <ClassicInvoice inv={inv} terms={terms} />
           ) : theme === "elegant" ? (
-            <ElegantInvoice inv={inv} terms={terms} c1={c1} c2={c2} />
+            <ElegantInvoice inv={inv} terms={terms} c1={c1} c2={c2} totalBg={totalBg} />
           ) : (
             <ModernInvoice inv={inv} terms={terms} accent={modernColor} />
           )}
