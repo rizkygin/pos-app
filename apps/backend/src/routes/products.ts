@@ -1,11 +1,20 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import path from "node:path";
 import fs from "node:fs/promises";
 import sharp from "sharp";
 import { db } from "../db";
-import { productsTable, outletsTable, recipeItemsTable } from "../db/schema";
+import {
+  productsTable,
+  outletsTable,
+  recipeItemsTable,
+  orderDetailsTable,
+  invoiceItemsTable,
+  stockMovementsTable,
+  ratingsTable,
+  productAdsTable,
+} from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 
@@ -75,7 +84,12 @@ export async function productRoutes(app: FastifyInstance) {
     const products = await db
       .select()
       .from(productsTable)
-      .where(eq(productsTable.outlet_id, outlet.id));
+      .where(
+        and(
+          eq(productsTable.outlet_id, outlet.id),
+          isNull(productsTable.deletedAt),
+        ),
+      );
 
     return reply.send({ outlet, products });
   });
@@ -189,6 +203,12 @@ export async function productRoutes(app: FastifyInstance) {
     }
   });
 
+  // Products with history (orders, invoices, stock ledger, ratings, ads, or
+  // used as someone's recipe ingredient) are SOFT-deleted: deletedAt is set,
+  // listings hide them, but old receipts/reports keep resolving their name —
+  // deleting a product must never rewrite financial history. Only a product
+  // nothing references is hard-deleted (image file included). Its own recipe
+  // rows cascade with the row; an ingredient in use never reaches this path.
   app.post("/api/products/delete", async (request, reply) => {
     if (!(await requireUser(request, reply))) return;
     try {
@@ -200,9 +220,31 @@ export async function productRoutes(app: FastifyInstance) {
         .from(productsTable)
         .where(eq(productsTable.id, productId))
         .limit(1);
+      if (!product) return reply.send({ success: false, message: "Product not found" });
 
-      // Best-effort delete of a backend-served image file
-      if (product?.image?.startsWith(PRODUCTS_URL_PREFIX)) {
+      const referenced = (
+        await Promise.all([
+          db.select({ id: orderDetailsTable.id }).from(orderDetailsTable).where(eq(orderDetailsTable.product_id, productId)).limit(1),
+          db.select({ id: invoiceItemsTable.id }).from(invoiceItemsTable).where(eq(invoiceItemsTable.product_id, productId)).limit(1),
+          db.select({ id: stockMovementsTable.id }).from(stockMovementsTable).where(eq(stockMovementsTable.product_id, productId)).limit(1),
+          db.select({ id: ratingsTable.id }).from(ratingsTable).where(eq(ratingsTable.product_id, productId)).limit(1),
+          db.select({ id: productAdsTable.id }).from(productAdsTable).where(eq(productAdsTable.product_id, productId)).limit(1),
+          db.select({ id: recipeItemsTable.id }).from(recipeItemsTable).where(eq(recipeItemsTable.ingredient_id, productId)).limit(1),
+        ])
+      ).some((rows) => rows.length > 0);
+
+      if (referenced) {
+        await db
+          .update(productsTable)
+          .set({ deletedAt: new Date() })
+          .where(eq(productsTable.id, productId));
+        return reply.send({ success: true, message: "Product archived (punya riwayat penjualan)." });
+      }
+
+      await db.delete(productsTable).where(eq(productsTable.id, productId));
+      // Unlink the image only after the row delete succeeded, so a failed
+      // delete can't orphan the product from its picture.
+      if (product.image?.startsWith(PRODUCTS_URL_PREFIX)) {
         const filename = product.image.slice(PRODUCTS_URL_PREFIX.length);
         try {
           await fs.unlink(path.join(PRODUCTS_DIR, filename));
@@ -210,8 +252,6 @@ export async function productRoutes(app: FastifyInstance) {
           app.log.error(err, "Failed to delete product image file");
         }
       }
-
-      await db.delete(productsTable).where(eq(productsTable.id, productId));
       return reply.send({ success: true, message: "Product deleted successfully." });
     } catch (error) {
       app.log.error(error, "Failed to delete product");
