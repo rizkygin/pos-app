@@ -164,7 +164,7 @@ export default function ReportsPage() {
               <span className="flex size-9 items-center justify-center rounded-xl bg-white/20 backdrop-blur">
                 <BarChart3 className="size-5" />
               </span>
-              <h1 className="text-xl font-black tracking-tight md:text-2xl">Laporan Bisnis</h1>
+              <h1 className="text-xl font-black tracking-tight md:text-2xl">Laporan Pesanan</h1>
             </div>
             {/* Period selector */}
             <div className="flex gap-1 rounded-2xl bg-white/15 p-1 backdrop-blur">

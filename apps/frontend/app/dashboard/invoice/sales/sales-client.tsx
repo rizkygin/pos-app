@@ -50,7 +50,16 @@ import {
 } from "./columns";
 
 type Product = { id: string; product_name: string; price: string; image: string; is_for_sale: boolean };
-type CartItem = { product: Product; quantity: number; unit_price: string; discount_pct: string };
+type CartItem = {
+  product: Product;
+  quantity: number;
+  unit_price: string;
+  // Per-line discount: the user enters EITHER a percentage or a Rupiah amount
+  // (mirrors the cashier's %/Rp toggle). We convert to a percentage — the only
+  // shape the backend stores — at save time via lineDiscountPct().
+  discountMode: "pct" | "amount";
+  discountInput: string;
+};
 type DetailItem = {
   id: number;
   product_id: string | null;
@@ -196,11 +205,15 @@ export function SalesClient() {
               image: "",
               is_for_sale: true,
             } as Product);
+          const pct = Number(it.discount_pct) || 0;
           return {
             product: prod,
             quantity: Number(it.quantity),
             unit_price: String(Number(it.unit_price)),
-            discount_pct: String(Number(it.discount_pct) || 0),
+            // Stored invoices only carry a percentage, so a line saved in
+            // amount-mode reloads as its equivalent percentage.
+            discountMode: "pct" as const,
+            discountInput: pct > 0 ? String(pct) : "",
           };
         }),
       );
@@ -212,7 +225,7 @@ export function SalesClient() {
     setCart((c) => {
       const found = c.find((i) => i.product.id === p.id);
       if (found) return c.map((i) => (i.product.id === p.id ? { ...i, quantity: i.quantity + 1 } : i));
-      return [...c, { product: p, quantity: 1, unit_price: p.price || "0", discount_pct: "0" }];
+      return [...c, { product: p, quantity: 1, unit_price: p.price || "0", discountMode: "pct", discountInput: "" }];
     });
   };
   const setQty = (id: string, q: number) =>
@@ -223,13 +236,37 @@ export function SalesClient() {
     );
   const setPrice = (id: string, price: string) =>
     setCart((c) => c.map((i) => (i.product.id === id ? { ...i, unit_price: price } : i)));
-  const setDisc = (id: string, pct: string) => {
-    // Clamp to 0-100; keep empty string as-is while typing.
-    const n = pct === "" ? "" : String(Math.min(100, Math.max(0, Number(pct) || 0)));
-    setCart((c) => c.map((i) => (i.product.id === id ? { ...i, discount_pct: n } : i)));
+  // Switch a line between percentage and Rupiah discount; clear the value so a
+  // "50" doesn't silently jump from 50% to Rp 50 (or clamp to 100%) on toggle.
+  const setDiscMode = (id: string, mode: "pct" | "amount") =>
+    setCart((c) => c.map((i) => (i.product.id === id ? { ...i, discountMode: mode, discountInput: "" } : i)));
+  const setDiscInput = (id: string, raw: string) =>
+    setCart((c) =>
+      c.map((i) => {
+        if (i.product.id !== id) return i;
+        if (i.discountMode === "pct") {
+          // Clamp to 0-100; keep empty string as-is while typing.
+          const cleaned = raw.replace(/[^\d.]/g, "");
+          const n = cleaned === "" ? "" : String(Math.min(100, Math.max(0, Number(cleaned) || 0)));
+          return { ...i, discountInput: n };
+        }
+        return { ...i, discountInput: parseNumberInput(raw) };
+      }),
+    );
+
+  const lineGross = (i: CartItem) => i.quantity * Number(i.unit_price || 0);
+  // Effective per-line discount as a percentage (0-100), whichever mode it's in.
+  // An amount discount is capped at the line's gross (can't exceed it).
+  const lineDiscountPct = (i: CartItem) => {
+    const gross = lineGross(i);
+    const v = Number(i.discountInput || 0);
+    if (!(v > 0) || gross <= 0) return 0;
+    return i.discountMode === "amount"
+      ? Math.min(100, (Math.min(v, gross) / gross) * 100)
+      : Math.min(100, Math.max(0, v));
   };
-  const lineNet = (i: CartItem) =>
-    i.quantity * Number(i.unit_price || 0) * (1 - Number(i.discount_pct || 0) / 100);
+  const lineDiscountAmount = (i: CartItem) => lineGross(i) * (lineDiscountPct(i) / 100);
+  const lineNet = (i: CartItem) => lineGross(i) - lineDiscountAmount(i);
 
   const filtered = useMemo(
     () => products.filter((p) => p.product_name.toLowerCase().includes(search.toLowerCase())),
@@ -269,7 +306,7 @@ export function SalesClient() {
               description: i.product.product_name,
               quantity: i.quantity,
               unit_price: Number(i.unit_price),
-              discount_pct: Number(i.discount_pct || 0),
+              discount_pct: lineDiscountPct(i),
             })),
           }),
         },
@@ -941,20 +978,55 @@ export function SalesClient() {
                         </div>
                       </div>
                       <div className="space-y-1">
-                        <span className="block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                          Diskon (%)
-                        </span>
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            Diskon
+                          </span>
+                          <div className="flex items-center overflow-hidden rounded-md border">
+                            <button
+                              type="button"
+                              onClick={() => setDiscMode(i.product.id, "pct")}
+                              className={`px-1.5 py-0.5 text-[10px] font-bold transition-colors ${
+                                i.discountMode === "pct"
+                                  ? "bg-teal-600 text-white"
+                                  : "bg-background text-muted-foreground hover:bg-muted"
+                              }`}
+                            >
+                              %
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setDiscMode(i.product.id, "amount")}
+                              className={`px-1.5 py-0.5 text-[10px] font-bold transition-colors ${
+                                i.discountMode === "amount"
+                                  ? "bg-teal-600 text-white"
+                                  : "bg-background text-muted-foreground hover:bg-muted"
+                              }`}
+                            >
+                              Rp
+                            </button>
+                          </div>
+                        </div>
                         <div className="relative">
+                          {i.discountMode === "amount" && (
+                            <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                              Rp
+                            </span>
+                          )}
                           <Input
                             inputMode="numeric"
                             placeholder="0"
-                            value={i.discount_pct}
-                            onChange={(e) => setDisc(i.product.id, e.target.value.replace(/[^\d.]/g, ""))}
-                            className="h-8 w-full pr-6 text-right text-sm tabular-nums"
+                            value={i.discountMode === "amount" ? formatNumberInput(i.discountInput) : i.discountInput}
+                            onChange={(e) => setDiscInput(i.product.id, e.target.value)}
+                            className={`h-8 w-full text-right text-sm tabular-nums ${
+                              i.discountMode === "amount" ? "pl-7" : "pr-6"
+                            }`}
                           />
-                          <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
-                            %
-                          </span>
+                          {i.discountMode === "pct" && (
+                            <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                              %
+                            </span>
+                          )}
                         </div>
                       </div>
                       <div className="col-span-2 space-y-1">
@@ -979,9 +1051,9 @@ export function SalesClient() {
                     <div className="mt-3 flex items-center justify-between border-t pt-2.5">
                       <span className="text-[11px] font-medium text-muted-foreground">Subtotal</span>
                       <span className="flex items-baseline gap-1.5 tabular-nums">
-                        {Number(i.discount_pct) > 0 && (
+                        {lineDiscountAmount(i) > 0 && (
                           <span className="text-[11px] text-muted-foreground line-through">
-                            {rupiah(i.quantity * Number(i.unit_price || 0))}
+                            {rupiah(lineGross(i))}
                           </span>
                         )}
                         <span className="text-sm font-bold">{rupiah(lineNet(i))}</span>

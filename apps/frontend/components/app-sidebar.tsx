@@ -44,6 +44,7 @@ import {
   Users,
   Calculator,
   FileText,
+  FileBarChart,
   ShoppingBag,
   Boxes,
   Truck,
@@ -195,6 +196,7 @@ const ratingNavItem: NavItem = {
 const invoiceNavSubItems = [
   { name: 'Faktur Penjualan', url: '/dashboard/invoice/sales', icon: Receipt },
   { name: 'Faktur Pembelian', url: '/dashboard/invoice/purchase', icon: ShoppingBag },
+  { name: 'Laporan Faktur', url: '/dashboard/invoice/reports', icon: FileBarChart },
   { name: 'Stok', url: '/dashboard/invoice/stock', icon: Boxes },
   { name: 'Supplier', url: '/dashboard/invoice/supplier', icon: Truck },
 ];

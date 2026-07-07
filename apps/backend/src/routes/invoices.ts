@@ -948,6 +948,138 @@ export async function invoiceRoutes(app: FastifyInstance) {
     }
   });
 
+  // ============================================================ invoice report
+  // KPIs for the "Laporan Faktur" page, covering BOTH invoice types.
+  // "Billed" = posted/partial/paid (drafts and voids don't count as sales).
+  // Period (by issue_date) applies to the billed KPIs; outstanding (piutang/
+  // hutang) and late are point-in-time; trend is always the last 6 months.
+  app.get("/api/invoices/report", async (request, reply) => {
+    const outlet = await getOwnerOutlet(request, reply);
+    if (!outlet) return;
+    const { period = "30d" } = request.query as { period?: string };
+
+    const now = new Date();
+    let from: Date;
+    if (period === "today") {
+      from = new Date(now);
+      from.setHours(0, 0, 0, 0);
+    } else if (period === "7d") {
+      from = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    } else if (period === "month") {
+      from = new Date(now.getFullYear(), now.getMonth(), 1);
+    } else {
+      from = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    }
+
+    const BILLED = ["posted", "partial", "paid"] as const;
+    const OPEN = ["posted", "partial"] as const;
+    const base = [eq(invoicesTable.outlet_id, outlet.id), isNull(invoicesTable.deletedAt)];
+    const remainingSql = sql<string>`coalesce(sum(${invoicesTable.total} - ${invoicesTable.amount_paid}), 0)`;
+
+    const trendStart = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+    const [kpiRows, openRows, lateRows, trendRows, topSales, topPurchase] = await Promise.all([
+      // Billed in the selected period.
+      db
+        .select({
+          type: invoicesTable.type,
+          count: sql<number>`count(*)::int`,
+          total: sql<string>`coalesce(sum(${invoicesTable.total}), 0)`,
+          paid: sql<string>`coalesce(sum(${invoicesTable.amount_paid}), 0)`,
+        })
+        .from(invoicesTable)
+        .where(and(...base, inArray(invoicesTable.status, [...BILLED]), gte(invoicesTable.issue_date, from)))
+        .groupBy(invoicesTable.type),
+      // Open balance right now (piutang for sales, hutang for purchase).
+      db
+        .select({ type: invoicesTable.type, count: sql<number>`count(*)::int`, outstanding: remainingSql })
+        .from(invoicesTable)
+        .where(and(...base, inArray(invoicesTable.status, [...OPEN])))
+        .groupBy(invoicesTable.type),
+      // The overdue slice of that open balance.
+      db
+        .select({ type: invoicesTable.type, count: sql<number>`count(*)::int`, outstanding: remainingSql })
+        .from(invoicesTable)
+        .where(and(...base, inArray(invoicesTable.status, [...OPEN]), lt(invoicesTable.due_date, sql`CURRENT_DATE`)))
+        .groupBy(invoicesTable.type),
+      // Billed totals per month, last 6 months.
+      db
+        .select({
+          type: invoicesTable.type,
+          month: sql<string>`to_char(date_trunc('month', ${invoicesTable.issue_date}), 'YYYY-MM')`,
+          total: sql<string>`coalesce(sum(${invoicesTable.total}), 0)`,
+        })
+        .from(invoicesTable)
+        .where(and(...base, inArray(invoicesTable.status, [...BILLED]), gte(invoicesTable.issue_date, trendStart)))
+        .groupBy(invoicesTable.type, sql`2`),
+      // Largest open invoices per side, for the follow-up lists.
+      db
+        .select({
+          id: invoicesTable.id,
+          number: invoicesTable.number,
+          party_name: invoicesTable.party_name,
+          due_date: invoicesTable.due_date,
+          total: invoicesTable.total,
+          amount_paid: invoicesTable.amount_paid,
+          status: invoicesTable.status,
+        })
+        .from(invoicesTable)
+        .where(and(...base, eq(invoicesTable.type, "sales"), inArray(invoicesTable.status, [...OPEN])))
+        .orderBy(desc(sql`${invoicesTable.total} - ${invoicesTable.amount_paid}`))
+        .limit(8),
+      db
+        .select({
+          id: invoicesTable.id,
+          number: invoicesTable.number,
+          party_name: sql<string>`coalesce(nullif(${invoicesTable.party_name}, ''), ${suppliersTable.name}, '')`,
+          due_date: invoicesTable.due_date,
+          total: invoicesTable.total,
+          amount_paid: invoicesTable.amount_paid,
+          status: invoicesTable.status,
+        })
+        .from(invoicesTable)
+        .leftJoin(suppliersTable, eq(invoicesTable.supplier_id, suppliersTable.id))
+        .where(and(...base, eq(invoicesTable.type, "purchase"), inArray(invoicesTable.status, [...OPEN])))
+        .orderBy(desc(sql`${invoicesTable.total} - ${invoicesTable.amount_paid}`))
+        .limit(8),
+    ]);
+
+    const side = (type: "sales" | "purchase", top: typeof topSales) => {
+      const kpi = kpiRows.find((r) => r.type === type);
+      const open = openRows.find((r) => r.type === type);
+      const late = lateRows.find((r) => r.type === type);
+      return {
+        billed_count: kpi?.count ?? 0,
+        billed_total: Number(kpi?.total ?? 0),
+        paid_total: Number(kpi?.paid ?? 0),
+        outstanding_count: open?.count ?? 0,
+        outstanding: Number(open?.outstanding ?? 0),
+        late_count: late?.count ?? 0,
+        late_outstanding: Number(late?.outstanding ?? 0),
+        top_outstanding: top,
+      };
+    };
+
+    // Assemble a dense 6-month series (months with no invoices stay 0).
+    const byKey = new Map(trendRows.map((r) => [`${r.type}:${r.month}`, Number(r.total)]));
+    const trend = Array.from({ length: 6 }, (_, i) => {
+      const d = new Date(now.getFullYear(), now.getMonth() - 5 + i, 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      return {
+        month: d.toLocaleString("id-ID", { month: "short" }),
+        sales: byKey.get(`sales:${key}`) ?? 0,
+        purchase: byKey.get(`purchase:${key}`) ?? 0,
+      };
+    });
+
+    return {
+      success: true,
+      period,
+      sales: side("sales", topSales),
+      purchase: side("purchase", topPurchase),
+      trend,
+    };
+  });
+
   // ============================================================ stock opname
   // Absolute physical count: for each tracked product the client sends the
   // counted quantity; the server computes delta = counted - current and records
