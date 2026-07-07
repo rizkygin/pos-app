@@ -159,22 +159,15 @@ export default function CashflowPage() {
   const monthlyNet = monthlyIn - monthlyOut;
 
   const displayList = useMemo(() => {
-    const posCashIn = dailyTransactions.find(
-      (t) => t.category === CATEGORY_IN[0],
-    );
-
-    const rest = dailyTransactions
-      .filter((t) => t.category !== CATEGORY_IN[0])
-      .sort((a, b) => {
-        const aKey = `${a.date} ${a.time ?? ''}`;
-        const bKey = `${b.date} ${b.time ?? ''}`;
-        return aKey.localeCompare(bKey);
-      });
-    if (posCashIn) {
-      return [{ ...posCashIn, note: 'Dari Faktur Penjualan' }, ...rest];
-    }
-    return rest;
-  }, [transactions, dailyTransactions]);
+    // Show every payment as its own row (a sales invoice can have several: DP,
+    // installments, settlement). Each row carries the source invoice number in
+    // `note` so the money is visually traceable back to its invoice.
+    return [...dailyTransactions].sort((a, b) => {
+      const aKey = `${a.date} ${a.time ?? ''}`;
+      const bKey = `${b.date} ${b.time ?? ''}`;
+      return aKey.localeCompare(bKey);
+    });
+  }, [dailyTransactions]);
 
   return (
     <div className="flex-1 space-y-6 p-8 pt-6">
@@ -312,11 +305,13 @@ export default function CashflowPage() {
                           </option>
                         ),
                       )
-                    : CATEGORY_OUT.map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
+                    : CATEGORY_OUT.filter((c) => c !== CATEGORY_OUT[1]).map(
+                        (c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ),
+                      )}
                 </select>
               </div>
 
@@ -348,7 +343,9 @@ export default function CashflowPage() {
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm font-medium leading-none">Tanggal</label>
+                <label className="text-sm font-medium leading-none">
+                  Tanggal
+                </label>
                 <Popover>
                   <PopoverTrigger asChild>
                     <Button
@@ -480,16 +477,18 @@ export default function CashflowPage() {
                             {formatCurrency(balance)}
                           </TableCell>
                           <TableCell className="text-right">
-                            {(t.category !== CATEGORY_IN[0] && t.category !== CATEGORY_IN[13] && t.category !== CATEGORY_OUT[1]) &&  (
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                                onClick={() => handleDelete(t.id)}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            )}
+                            {t.category !== CATEGORY_IN[0] &&
+                              t.category !== CATEGORY_IN[13] &&
+                              t.category !== CATEGORY_OUT[1] && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                                  onClick={() => handleDelete(t.id)}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              )}
                           </TableCell>
                         </TableRow>
                       ))}

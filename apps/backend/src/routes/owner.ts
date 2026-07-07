@@ -14,6 +14,8 @@ import {
   cashOutCategoryTable,
   cashInDetailTable,
   cashOutDetailTable,
+  invoicePaymentsTable,
+  invoicesTable,
 } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
@@ -678,12 +680,25 @@ export async function ownerRoutes(app: FastifyInstance) {
           out_category: cashOutCategoryTable.category,
           out_amount: cashOutDetailTable.money_amount,
           out_date: cashOutDetailTable.created_at,
+          invoice_number: invoicesTable.number,
         })
         .from(cashFlows)
         .leftJoin(cashInDetailTable, eq(cashFlows.cash_in_detail_id, cashInDetailTable.id))
         .leftJoin(cashInCategoryTable, eq(cashInDetailTable.category_id, cashInCategoryTable.id))
         .leftJoin(cashOutDetailTable, eq(cashFlows.cash_out_detail_id, cashOutDetailTable.id))
         .leftJoin(cashOutCategoryTable, eq(cashOutDetailTable.category_id, cashOutCategoryTable.id))
+        // Invoice payments link back to their invoice via invoice_payments —
+        // sales cash-ins through cash_in_detail_id, purchase cash-outs through
+        // cash_out_detail_id. Surface the invoice number as the row note so each
+        // payment is traceable to its invoice.
+        .leftJoin(
+          invoicePaymentsTable,
+          or(
+            eq(invoicePaymentsTable.cash_in_detail_id, cashInDetailTable.id),
+            eq(invoicePaymentsTable.cash_out_detail_id, cashOutDetailTable.id),
+          ),
+        )
+        .leftJoin(invoicesTable, eq(invoicesTable.id, invoicePaymentsTable.invoice_id))
         .where(
           and(
             eq(cashFlows.outlet_id, outlet.id),
@@ -706,7 +721,7 @@ export async function ownerRoutes(app: FastifyInstance) {
           amount: Number(row.in_amount ?? row.out_amount ?? "0"),
           date: dateFormatter.format(date),
           time: timeFormatter.format(date),
-          note: "",
+          note: row.invoice_number ?? "",
         };
       });
 
