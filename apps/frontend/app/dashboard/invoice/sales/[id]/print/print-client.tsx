@@ -24,6 +24,7 @@ type Invoice = {
   discount: string;
   total: string;
   amount_paid: string;
+  down_payment: string;
   notes: string | null;
   items: Item[];
   outlet: Outlet;
@@ -89,6 +90,31 @@ function Row({ label, value, muted }: { label: string; value: string; muted?: bo
   );
 }
 
+/* Payment breakdown under the Total in every theme: the down payment
+   (down_payment) and any payment beyond it (amount_paid - down_payment) are
+   separate rows, followed by the remaining balance. On a draft the DP isn't
+   booked yet (amount_paid = 0) but the agreed DP still prints. */
+function PaidRows({ inv }: { inv: Invoice }) {
+  const paid = Number(inv.amount_paid);
+  const dp = Number(inv.down_payment) || 0;
+  const credited = Math.max(paid, inv.status === "draft" ? dp : 0);
+  if (!(credited > 0)) return null;
+  const beyondDp = Math.max(0, credited - dp);
+  const remaining = Math.max(0, Number(inv.total) - credited);
+  return (
+    <>
+      {dp > 0 && <Row label="Uang Muka (DP)" value={`-${rupiah(dp)}`} muted />}
+      {beyondDp > 0 && <Row label="Dibayar" value={`-${rupiah(beyondDp)}`} muted />}
+      {remaining > 0 && (
+        <div className="flex justify-between font-bold">
+          <span>Sisa Tagihan</span>
+          <span className="tabular-nums">{rupiah(remaining)}</span>
+        </div>
+      )}
+    </>
+  );
+}
+
 function Footer({ inv, terms, accent }: { inv: Invoice; terms: string; accent: string }) {
   return (
     <>
@@ -133,6 +159,11 @@ function ModernInvoice({ inv, terms, accent }: { inv: Invoice; terms: string; ac
             {inv.status === "paid" && (
               <p className="mt-1 inline-block rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-bold uppercase text-emerald-700">
                 Lunas
+              </p>
+            )}
+            {inv.status === "partial" && (
+              <p className="mt-1 inline-block rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-bold uppercase text-amber-700">
+                DP Diterima
               </p>
             )}
           </div>
@@ -187,9 +218,7 @@ function ModernInvoice({ inv, terms, accent }: { inv: Invoice; terms: string; ac
               <span className="text-sm font-semibold">Total</span>
               <span className="text-base font-black tabular-nums">{rupiah(inv.total)}</span>
             </div>
-            {Number(inv.amount_paid) > 0 && Number(inv.amount_paid) < Number(inv.total) && (
-              <Row label="Dibayar" value={rupiah(inv.amount_paid)} muted />
-            )}
+            <PaidRows inv={inv} />
           </div>
         </div>
 
@@ -232,6 +261,7 @@ function ClassicInvoice({ inv, terms }: { inv: Invoice; terms: string }) {
           <p>Tanggal: {tgl(inv.issue_date)}</p>
           <p>Jatuh tempo: {tgl(inv.due_date)}</p>
           {inv.status === "paid" && <p className="mt-1 font-bold uppercase text-zinc-900">— Lunas —</p>}
+          {inv.status === "partial" && <p className="mt-1 font-bold uppercase text-zinc-900">— DP Diterima —</p>}
         </div>
       </div>
 
@@ -270,6 +300,7 @@ function ClassicInvoice({ inv, terms }: { inv: Invoice; terms: string }) {
             <span>Total</span>
             <span className="tabular-nums">{rupiah(inv.total)}</span>
           </div>
+          <PaidRows inv={inv} />
         </div>
       </div>
 
@@ -319,6 +350,11 @@ function ElegantInvoice({ inv, terms, c1, c2, totalBg }: { inv: Invoice; terms: 
             {inv.status === "paid" && (
               <p className="mt-1 inline-block rounded-full bg-white/20 px-2.5 py-0.5 text-[11px] font-bold uppercase backdrop-blur">
                 Lunas
+              </p>
+            )}
+            {inv.status === "partial" && (
+              <p className="mt-1 inline-block rounded-full bg-white/20 px-2.5 py-0.5 text-[11px] font-bold uppercase backdrop-blur">
+                DP Diterima
               </p>
             )}
           </div>
@@ -383,6 +419,7 @@ function ElegantInvoice({ inv, terms, c1, c2, totalBg }: { inv: Invoice; terms: 
                 {rupiah(inv.total)}
               </span>
             </div>
+            <PaidRows inv={inv} />
           </div>
         </div>
 

@@ -21,6 +21,7 @@ import {
   CalendarDays,
   Percent,
   Tag,
+  AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -44,6 +45,8 @@ import {
   type SalesRow,
   SALES_STATUS_STYLE,
   SALES_STATUS_LABEL,
+  isLateInvoice,
+  lateDays,
 } from "./columns";
 
 type Product = { id: string; product_name: string; price: string; image: string; is_for_sale: boolean };
@@ -62,6 +65,7 @@ type DetailInvoice = SalesRow & {
   tax_rate: string;
   tax_amount: string;
   discount: string;
+  down_payment: string;
   notes: string | null;
   items: DetailItem[];
 };
@@ -78,8 +82,31 @@ export function SalesClient() {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(10);
+  // Filter the list down to overdue invoices (past due date, not settled).
+  const [showLateOnly, setShowLateOnly] = useState(false);
+  // Free-text list filter: matches invoice number or customer name. The list
+  // is paginated/filtered server-side; the raw input is debounced before it
+  // becomes a query param so we don't refetch on every keystroke.
+  const [listSearch, setListSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(listSearch.trim()), 300);
+    return () => clearTimeout(t);
+  }, [listSearch]);
+  // Server-computed totals: rows matching the current filters, and the
+  // outlet-wide overdue aggregates for the warning banner.
+  const [totalCount, setTotalCount] = useState(0);
+  const [lateCount, setLateCount] = useState(0);
+  const [lateOutstanding, setLateOutstanding] = useState(0);
   const [detail, setDetail] = useState<DetailInvoice | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+
+  // Payment sheet: which invoice is being paid + the entered amount. Supports
+  // down payment (uang muka) — any amount up to the remaining balance.
+  const [payTarget, setPayTarget] = useState<{ id: number; number: string; total: number; paid: number } | null>(null);
+  const [payAmount, setPayAmount] = useState("");
+  const [paying, setPaying] = useState(false);
+  const [payError, setPayError] = useState("");
 
   // When set, the create view is in "edit" mode for this draft invoice id.
   const [editId, setEditId] = useState<number | null>(null);
@@ -89,6 +116,8 @@ export function SalesClient() {
   const [party, setParty] = useState("");
   const [taxRate, setTaxRate] = useState("0");
   const [discount, setDiscount] = useState("0");
+  // Uang muka (DP) agreed on the draft; booked as the first payment on post.
+  const [downPayment, setDownPayment] = useState("0");
   const [dueDate, setDueDate] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -101,16 +130,25 @@ export function SalesClient() {
   const fetchInvoices = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/sales-invoices`, { credentials: "include" });
+      const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+      if (debouncedSearch) params.set("q", debouncedSearch);
+      if (showLateOnly) params.set("late", "1");
+      const res = await fetch(`${API_URL}/api/sales-invoices?${params}`, { credentials: "include" });
       const json = await res.json();
-      if (json.success) setInvoices(json.data);
+      if (json.success) {
+        setInvoices(json.data);
+        setTotalCount(json.count ?? json.data.length);
+        setLateCount(json.late?.count ?? 0);
+        setLateOutstanding(Number(json.late?.outstanding ?? 0));
+      }
     } finally {
       setLoading(false);
     }
   };
   useEffect(() => {
     fetchInvoices();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, limit, debouncedSearch, showLateOnly]);
 
   const openCreate = async () => {
     setEditId(null);
@@ -118,6 +156,7 @@ export function SalesClient() {
     setParty("");
     setTaxRate("0");
     setDiscount("0");
+    setDownPayment("0");
     setDueDate("");
     setError("");
     const res = await fetch(`${API_URL}/api/products/mine`, { credentials: "include" });
@@ -142,6 +181,7 @@ export function SalesClient() {
       setParty(d.party_name || "");
       setTaxRate(String(Number(d.tax_rate) || 0));
       setDiscount(String(Number(d.discount) || 0));
+      setDownPayment(String(Number(d.down_payment) || 0));
       setDueDate(d.due_date ? String(d.due_date).slice(0, 10) : "");
       setCart(
         d.items.map((it) => {
@@ -223,6 +263,7 @@ export function SalesClient() {
             due_date: dueDate || null,
             tax_rate: Number(taxRate || 0),
             discount: Number(discount || 0),
+            down_payment: Number(downPayment || 0),
             items: cart.map((i) => ({
               product_id: i.product.id,
               description: i.product.product_name,
@@ -248,7 +289,56 @@ export function SalesClient() {
     }
   };
 
+  // "Bayar" opens the payment sheet (prefilled with the remaining balance) so
+  // the owner can take a down payment or settle in full; the rest go straight
+  // to the backend action endpoints.
+  const openPay = (inv: { id: number; number: string; total: string; amount_paid: string }) => {
+    const total = Number(inv.total);
+    const paid = Number(inv.amount_paid);
+    setPayTarget({ id: inv.id, number: inv.number, total, paid });
+    setPayAmount(String(Math.max(0, +(total - paid).toFixed(2))));
+    setPayError("");
+  };
+
+  const submitPay = async () => {
+    if (!payTarget) return;
+    const remaining = Math.max(0, +(payTarget.total - payTarget.paid).toFixed(2));
+    const amount = Number(payAmount);
+    if (!(amount > 0) || amount > remaining) {
+      setPayError(`Nominal harus lebih dari 0 dan maksimal ${rupiah(remaining)}.`);
+      return;
+    }
+    setPaying(true);
+    setPayError("");
+    try {
+      const res = await fetch(`${API_URL}/api/sales-invoices/${payTarget.id}/pay`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount }),
+      });
+      const json = await res.json();
+      if (!json.success) {
+        setPayError(json.error || "Gagal mencatat pembayaran.");
+        return;
+      }
+      const paidId = payTarget.id;
+      setPayTarget(null);
+      await fetchInvoices();
+      if (view === "detail" && detail?.id === paidId) await openDetail(paidId);
+    } catch {
+      setPayError("Terjadi kesalahan jaringan.");
+    } finally {
+      setPaying(false);
+    }
+  };
+
   const action = async (id: number, kind: "post" | "pay" | "void") => {
+    if (kind === "pay") {
+      const inv = invoices.find((i) => i.id === id) ?? (detail?.id === id ? detail : null);
+      if (inv) openPay(inv);
+      return;
+    }
     setBusyId(id);
     try {
       const res = await fetch(`${API_URL}/api/sales-invoices/${id}/${kind}`, {
@@ -280,6 +370,104 @@ export function SalesClient() {
     }
   };
 
+  // Payment sheet (full payment or down payment / uang muka). Rendered in both
+  // the list and detail views so "Bayar" works from either place.
+  const payRemaining = payTarget ? Math.max(0, +(payTarget.total - payTarget.paid).toFixed(2)) : 0;
+  const paySheet = (
+    <Sheet
+      open={payTarget !== null}
+      onOpenChange={(open) => {
+        if (!open) setPayTarget(null);
+      }}
+    >
+      <SheetContent side="right" className="w-full gap-0 sm:max-w-md">
+        <SheetHeader className="border-b">
+          <SheetTitle>Terima Pembayaran</SheetTitle>
+          <SheetDescription>
+            Faktur {payTarget?.number} — bayar lunas atau catat uang muka (DP).
+          </SheetDescription>
+        </SheetHeader>
+
+        {payTarget && (
+          <div className="flex-1 space-y-4 overflow-y-auto p-4">
+            <div className="space-y-1 rounded-xl border bg-muted/30 p-3 text-sm">
+              <div className="flex justify-between text-muted-foreground">
+                <span>Total Faktur</span>
+                <span className="tabular-nums">{rupiah(payTarget.total)}</span>
+              </div>
+              <div className="flex justify-between text-muted-foreground">
+                <span>Sudah Dibayar</span>
+                <span className="tabular-nums">{rupiah(payTarget.paid)}</span>
+              </div>
+              <div className="flex justify-between border-t pt-1 font-semibold">
+                <span>Sisa Tagihan</span>
+                <span className="tabular-nums">{rupiah(payRemaining)}</span>
+              </div>
+            </div>
+
+            <label className="block space-y-1.5">
+              <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                <Wallet className="size-3.5" /> Nominal Pembayaran
+              </span>
+              <div className="relative">
+                <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                  Rp
+                </span>
+                <Input
+                  inputMode="numeric"
+                  value={formatNumberInput(payAmount)}
+                  onChange={(e) => setPayAmount(parseNumberInput(e.target.value))}
+                  className="pl-8 text-right tabular-nums"
+                />
+              </div>
+            </label>
+
+            {/* Quick fills: common DP percentages (of the invoice total, capped
+                at the remaining balance) + full settlement. */}
+            <div className="flex flex-wrap gap-2">
+              {[30, 50].map((pct) => {
+                const v = Math.min(payRemaining, +((payTarget.total * pct) / 100).toFixed(2));
+                return (
+                  <Button
+                    key={pct}
+                    size="sm"
+                    variant="outline"
+                    disabled={v <= 0}
+                    onClick={() => setPayAmount(String(v))}
+                  >
+                    DP {pct}%
+                  </Button>
+                );
+              })}
+              <Button size="sm" variant="outline" onClick={() => setPayAmount(String(payRemaining))}>
+                Lunas ({rupiah(payRemaining)})
+              </Button>
+            </div>
+
+            <p className="text-[11px] text-muted-foreground">
+              Pembayaran sebagian membuat status faktur menjadi{" "}
+              <span className="font-medium">Sebagian</span>; sisa tagihan bisa dibayar lagi kapan saja
+              lewat tombol Bayar yang sama.
+            </p>
+
+            {payError && <p className="text-xs text-destructive">{payError}</p>}
+          </div>
+        )}
+
+        <SheetFooter className="border-t">
+          <Button
+            onClick={submitPay}
+            disabled={paying || !payTarget || !(Number(payAmount) > 0)}
+            className="w-full bg-green-600 text-white hover:bg-green-700"
+          >
+            {paying && <Loader2 className="size-4 animate-spin" />}
+            Catat Pembayaran
+          </Button>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
+  );
+
   // ===================================================================== detail
   if (view === "detail") {
     return (
@@ -310,16 +498,29 @@ export function SalesClient() {
                 <p className="text-xs text-muted-foreground">
                   Pelanggan: {detail.party_name || "—"}
                 </p>
-                <p className="text-xs text-muted-foreground">
+                <p
+                  className={`text-xs ${
+                    isLateInvoice(detail)
+                      ? "font-medium text-red-600 dark:text-red-400"
+                      : "text-muted-foreground"
+                  }`}
+                >
                   Jatuh tempo:{" "}
                   {detail.due_date ? new Date(detail.due_date).toLocaleDateString("id-ID") : "—"}
                 </p>
               </div>
-              <span
-                className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${SALES_STATUS_STYLE[detail.status]}`}
-              >
-                {SALES_STATUS_LABEL[detail.status]}
-              </span>
+              <div className="flex flex-col items-end gap-1">
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${SALES_STATUS_STYLE[detail.status]}`}
+                >
+                  {SALES_STATUS_LABEL[detail.status]}
+                </span>
+                {isLateInvoice(detail) && detail.due_date && (
+                  <span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium text-red-700 dark:bg-red-950 dark:text-red-300">
+                    Terlambat {lateDays(detail.due_date)} hari
+                  </span>
+                )}
+              </div>
             </div>
 
             <div className="overflow-x-auto rounded-xl border">
@@ -362,10 +563,43 @@ export function SalesClient() {
                 <span>Total</span>
                 <span className="tabular-nums">{rupiah(detail.total)}</span>
               </div>
-              {Number(detail.amount_paid) > 0 && (
+              {detail.status === "draft" && Number(detail.down_payment) > 0 && (
+                <>
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>Uang Muka (DP)</span>
+                    <span className="tabular-nums">-{rupiah(detail.down_payment)}</span>
+                  </div>
+                  <div className="flex justify-between font-semibold text-amber-600 dark:text-amber-400">
+                    <span>Sisa Tagihan</span>
+                    <span className="tabular-nums">
+                      {rupiah(Math.max(0, Number(detail.total) - Number(detail.down_payment)))}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">
+                    DP dicatat sebagai kas masuk saat faktur diposting.
+                  </p>
+                </>
+              )}
+              {detail.status !== "draft" && Number(detail.down_payment) > 0 && (
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Uang Muka (DP)</span>
+                  <span className="tabular-nums">-{rupiah(detail.down_payment)}</span>
+                </div>
+              )}
+              {Number(detail.amount_paid) - Number(detail.down_payment) > 0 && (
                 <div className="flex justify-between text-muted-foreground">
                   <span>Dibayar</span>
-                  <span className="tabular-nums">{rupiah(detail.amount_paid)}</span>
+                  <span className="tabular-nums">
+                    -{rupiah(Number(detail.amount_paid) - Number(detail.down_payment))}
+                  </span>
+                </div>
+              )}
+              {Number(detail.amount_paid) > 0 && Number(detail.total) - Number(detail.amount_paid) > 0 && (
+                <div className="flex justify-between font-semibold text-amber-600 dark:text-amber-400">
+                  <span>Sisa Tagihan</span>
+                  <span className="tabular-nums">
+                    {rupiah(Number(detail.total) - Number(detail.amount_paid))}
+                  </span>
                 </div>
               )}
             </div>
@@ -418,6 +652,7 @@ export function SalesClient() {
             </div>
           </div>
         )}
+        {paySheet}
       </div>
     );
   }
@@ -516,6 +751,7 @@ export function SalesClient() {
                     : "Tanpa jatuh tempo"}
                   {Number(taxRate) > 0 ? ` · Pajak ${taxRate}%` : ""}
                   {Number(discount) > 0 ? ` · Diskon ${rupiah(discount)}` : ""}
+                  {Number(downPayment) > 0 ? ` · DP ${rupiah(downPayment)}` : ""}
                 </p>
               </div>
               <Sheet>
@@ -577,6 +813,25 @@ export function SalesClient() {
                       </div>
                       <span className="text-[10px] text-muted-foreground">
                         Diskon keseluruhan, di luar diskon per-produk.
+                      </span>
+                    </label>
+                    <label className="block space-y-1.5">
+                      <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                        <Wallet className="size-3.5" /> Uang Muka / DP (Rp)
+                      </span>
+                      <div className="relative">
+                        <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                          Rp
+                        </span>
+                        <Input
+                          inputMode="numeric"
+                          value={formatNumberInput(downPayment)}
+                          onChange={(e) => setDownPayment(parseNumberInput(e.target.value))}
+                          className="pl-8"
+                        />
+                      </div>
+                      <span className="text-[10px] text-muted-foreground">
+                        Dicatat otomatis sebagai pembayaran pertama (kas masuk) saat faktur diposting.
                       </span>
                     </label>
                     <label className="block space-y-1.5">
@@ -756,6 +1011,22 @@ export function SalesClient() {
                 <span>Total</span>
                 <span className="tabular-nums">{rupiah(totals.total)}</span>
               </div>
+              {Number(downPayment) > 0 && (
+                <>
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>Uang Muka (DP)</span>
+                    <span className="tabular-nums">
+                      -{rupiah(Math.min(Number(downPayment), totals.total))}
+                    </span>
+                  </div>
+                  <div className="flex justify-between font-semibold text-amber-600 dark:text-amber-400">
+                    <span>Sisa Tagihan</span>
+                    <span className="tabular-nums">
+                      {rupiah(Math.max(0, totals.total - Number(downPayment)))}
+                    </span>
+                  </div>
+                </>
+              )}
               {error && <p className="text-xs text-destructive">{error}</p>}
               <Button
                 onClick={save}
@@ -773,6 +1044,8 @@ export function SalesClient() {
   }
 
   // ======================================================================= list
+  const pageCount = Math.max(1, Math.ceil(totalCount / limit));
+
   return (
     <div className="p-4 md:p-6 space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -791,18 +1064,58 @@ export function SalesClient() {
         </Button>
       </div>
 
+      <div className="relative max-w-sm">
+        <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          className="pl-8"
+          placeholder="Cari no. faktur / nama pelanggan…"
+          value={listSearch}
+          onChange={(e) => {
+            setListSearch(e.target.value);
+            setPage(1);
+          }}
+        />
+      </div>
+
+      {lateCount > 0 && (
+        <div className="flex flex-col gap-2 rounded-xl border border-red-200 bg-red-50 p-3 dark:border-red-900 dark:bg-red-950/40 sm:flex-row sm:items-center sm:justify-between">
+          <p className="flex items-center gap-2 text-sm font-medium text-red-700 dark:text-red-300">
+            <AlertTriangle className="size-4 shrink-0" />
+            {lateCount} faktur melewati jatuh tempo · sisa tagihan{" "}
+            <span className="tabular-nums">{rupiah(lateOutstanding)}</span>
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            className="border-red-300 text-red-700 hover:bg-red-100 hover:text-red-800 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-950"
+            onClick={() => {
+              setShowLateOnly((v) => !v);
+              setPage(1);
+            }}
+          >
+            {showLateOnly ? "Tampilkan Semua" : "Hanya yang Terlambat"}
+          </Button>
+        </div>
+      )}
+
       {loading ? (
         <div className="flex items-center justify-center py-16 text-muted-foreground">
           <Loader2 className="size-5 animate-spin" />
         </div>
       ) : invoices.length === 0 ? (
-        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border/70 bg-muted/20 px-6 py-16 text-center">
-          <Receipt className="size-8 text-muted-foreground/50" />
-          <p className="mt-3 text-sm font-medium">Belum ada faktur penjualan</p>
-          <p className="mt-1 max-w-sm text-xs text-muted-foreground">
-            Buat faktur penjualan untuk menagih pelanggan dan mengurangi stok otomatis.
+        debouncedSearch || showLateOnly ? (
+          <p className="py-12 text-center text-sm text-muted-foreground">
+            Tidak ada faktur yang cocok dengan pencarian atau filter.
           </p>
-        </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border/70 bg-muted/20 px-6 py-16 text-center">
+            <Receipt className="size-8 text-muted-foreground/50" />
+            <p className="mt-3 text-sm font-medium">Belum ada faktur penjualan</p>
+            <p className="mt-1 max-w-sm text-xs text-muted-foreground">
+              Buat faktur penjualan untuk menagih pelanggan dan mengurangi stok otomatis.
+            </p>
+          </div>
+        )
       ) : (
         <>
           {/* Mobile: card list */}
@@ -816,12 +1129,21 @@ export function SalesClient() {
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") openDetail(inv.id);
                 }}
-                className="w-full rounded-2xl border bg-card p-3.5 text-left shadow-sm active:scale-[0.99] transition-transform"
+                className={`w-full rounded-2xl border bg-card p-3.5 text-left shadow-sm active:scale-[0.99] transition-transform ${
+                  isLateInvoice(inv) ? "border-red-300 dark:border-red-900" : ""
+                }`}
               >
                 <div className="flex items-center justify-between gap-2">
                   <p className="font-mono text-sm font-semibold">{inv.number}</p>
-                  <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${SALES_STATUS_STYLE[inv.status]}`}>
-                    {SALES_STATUS_LABEL[inv.status]}
+                  <span className="flex items-center gap-1">
+                    {isLateInvoice(inv) && (
+                      <span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium text-red-700 dark:bg-red-950 dark:text-red-300">
+                        Terlambat
+                      </span>
+                    )}
+                    <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${SALES_STATUS_STYLE[inv.status]}`}>
+                      {SALES_STATUS_LABEL[inv.status]}
+                    </span>
                   </span>
                 </div>
                 <p className="mt-1 truncate text-xs text-muted-foreground">
@@ -829,12 +1151,22 @@ export function SalesClient() {
                 </p>
                 <div className="mt-2 flex items-end justify-between">
                   <span className="text-base font-bold tabular-nums">{rupiah(inv.total)}</span>
-                  {inv.due_date && (
-                    <span className="text-[11px] text-muted-foreground">
-                      Jatuh tempo {new Date(inv.due_date).toLocaleDateString("id-ID", { day: "numeric", month: "short" })}
-                    </span>
-                  )}
+                  {inv.due_date &&
+                    (isLateInvoice(inv) ? (
+                      <span className="text-[11px] font-medium text-red-600 dark:text-red-400">
+                        Terlambat {lateDays(inv.due_date)} hari
+                      </span>
+                    ) : (
+                      <span className="text-[11px] text-muted-foreground">
+                        Jatuh tempo {new Date(inv.due_date).toLocaleDateString("id-ID", { day: "numeric", month: "short" })}
+                      </span>
+                    ))}
                 </div>
+                {inv.status === "partial" && (
+                  <p className="mt-1 text-[11px] font-medium text-amber-600 dark:text-amber-400 tabular-nums">
+                    Sisa {rupiah(Number(inv.total) - Number(inv.amount_paid))}
+                  </p>
+                )}
                 {inv.status === "draft" && (
                   <div className="mt-3 border-t pt-2.5">
                     <Button
@@ -852,16 +1184,41 @@ export function SalesClient() {
                 )}
               </div>
             ))}
+
+            {/* Same pagination as the desktop DataTable, card-list edition. */}
+            {pageCount > 1 && (
+              <div className="flex items-center justify-between gap-2 pt-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={page === 1}
+                  onClick={() => setPage(page - 1)}
+                >
+                  Sebelumnya
+                </Button>
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  Hal. {page} dari {pageCount} · {totalCount} faktur
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={page >= pageCount}
+                  onClick={() => setPage(page + 1)}
+                >
+                  Berikutnya
+                </Button>
+              </div>
+            )}
           </div>
 
-          {/* Desktop: table */}
+          {/* Desktop: table (rows are already the current server page) */}
           <div className="hidden sm:block">
             <DataTable
               columns={getSalesColumns({ busyId, onAction: action, onEdit: openEdit })}
-              data={invoices.slice((page - 1) * limit, page * limit)}
+              data={invoices}
               page={page}
               limit={limit}
-              count={invoices.length}
+              count={totalCount}
               setPage={setPage}
               setLimit={setLimit}
               onRowClick={(row) => openDetail(row.id)}
@@ -869,6 +1226,7 @@ export function SalesClient() {
           </div>
         </>
       )}
+      {paySheet}
     </div>
   );
 }

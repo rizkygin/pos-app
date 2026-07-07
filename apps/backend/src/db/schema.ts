@@ -548,6 +548,11 @@ export const invoicesTable = pgTable(
     amount_paid: numeric('amount_paid', { precision: 14, scale: 2 })
       .notNull()
       .default('0'),
+    // Down payment (uang muka) agreed on the draft; auto-recorded as the first
+    // payment when the invoice is posted (amount_paid stays 0 until then).
+    down_payment: numeric('down_payment', { precision: 14, scale: 2 })
+      .notNull()
+      .default('0'),
     notes: varchar('notes', { length: 500 }).default(''),
 
     // Link back to the cashflow detail this invoice generated when paid, so a
@@ -595,6 +600,29 @@ export const invoiceItemsTable = pgTable(
     ...timestamps,
   },
   (table) => [index('invoice_items_invoice_id_idx').on(table.invoice_id)],
+);
+
+// One row per payment received/made on an invoice (down payment, installment,
+// settlement). Links the invoice to the cashflow detail each payment created so
+// a void can reverse ALL of them — invoices.cash_in/out_detail_id only remembers
+// the latest one.
+export const invoicePaymentsTable = pgTable(
+  'invoice_payments',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    invoice_id: integer('invoice_id')
+      .notNull()
+      .references(() => invoicesTable.id),
+    cash_in_detail_id: integer('cash_in_detail_id').references(
+      () => cashInDetailTable.id,
+    ),
+    cash_out_detail_id: integer('cash_out_detail_id').references(
+      () => cashOutDetailTable.id,
+    ),
+    amount: numeric('amount', { precision: 14, scale: 2 }).notNull(),
+    created_at: timestamp('created_at').defaultNow().notNull(),
+  },
+  (table) => [index('invoice_payments_invoice_id_idx').on(table.invoice_id)],
 );
 
 export const stockMovementsTable = pgTable(

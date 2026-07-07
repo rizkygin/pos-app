@@ -1,0 +1,1 @@
+ALTER TABLE "invoices" ADD COLUMN "down_payment" numeric(14, 2) DEFAULT '0' NOT NULL;

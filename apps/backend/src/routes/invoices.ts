@@ -1,10 +1,11 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
-import { and, eq, desc, isNull, sql, gte, lte } from "drizzle-orm";
+import { and, eq, desc, isNull, sql, gte, lte, lt, or, ilike, inArray } from "drizzle-orm";
 import { db } from "../db";
 import {
   suppliersTable,
   invoicesTable,
   invoiceItemsTable,
+  invoicePaymentsTable,
   stockMovementsTable,
   productsTable,
   cashFlows,
@@ -77,6 +78,51 @@ function computeTotals(
     total = +(base + tax_amount).toFixed(2);
   }
   return { lines, subtotal, tax_amount, total };
+}
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+// Record `amount` as a cash-IN payment on a sales invoice inside an open
+// transaction: find-or-create the category, write the cashflow detail + link +
+// payment row, then bump amount_paid/status. Used by /pay and by /post when the
+// draft carried a down payment. The caller validates the amount.
+async function recordSalesCashIn(
+  tx: Tx,
+  outletId: number,
+  invoice: { id: number; total: string; amount_paid: string },
+  amount: number,
+) {
+  let [cat] = await tx
+    .select({ id: cashInCategoryTable.id })
+    .from(cashInCategoryTable)
+    .where(eq(cashInCategoryTable.category, SALES_CASH_CATEGORY))
+    .limit(1);
+  if (!cat) {
+    [cat] = await tx
+      .insert(cashInCategoryTable)
+      .values({ category: SALES_CASH_CATEGORY })
+      .returning({ id: cashInCategoryTable.id });
+  }
+
+  const [detail] = await tx
+    .insert(cashInDetailTable)
+    .values({ category_id: cat.id, money_amount: String(amount), type: "cash" })
+    .returning();
+  await tx.insert(cashFlows).values({ outlet_id: outletId, cash_in_detail_id: detail.id });
+  await tx.insert(invoicePaymentsTable).values({
+    invoice_id: invoice.id,
+    cash_in_detail_id: detail.id,
+    amount: String(amount),
+  });
+
+  const newPaid = +(Number(invoice.amount_paid) + amount).toFixed(2);
+  const status = newPaid >= Number(invoice.total) - 0.001 ? ("paid" as const) : ("partial" as const);
+  const [updated] = await tx
+    .update(invoicesTable)
+    .set({ amount_paid: String(newPaid), status, cash_in_detail_id: detail.id })
+    .where(eq(invoicesTable.id, invoice.id))
+    .returning();
+  return updated;
 }
 
 async function nextInvoiceNumber(outletId: number, type: "purchase" | "sales") {
@@ -379,6 +425,11 @@ export async function invoiceRoutes(app: FastifyInstance) {
           .values({ category_id: cat.id, money_amount: String(amount), type: "cash" })
           .returning();
         await tx.insert(cashFlows).values({ outlet_id: outlet.id, cash_out_detail_id: detail.id });
+        await tx.insert(invoicePaymentsTable).values({
+          invoice_id: id,
+          cash_out_detail_id: detail.id,
+          amount: String(amount),
+        });
 
         const newPaid = +(alreadyPaid + amount).toFixed(2);
         const status = newPaid >= total - 0.001 ? "paid" : "partial";
@@ -436,17 +487,28 @@ export async function invoiceRoutes(app: FastifyInstance) {
             .where(eq(productsTable.id, m.product_id));
         }
 
+        // Remove ALL payments this invoice generated (DP + installments live in
+        // invoice_payments; cash_out_detail_id covers legacy single payments).
         // Null the invoice's reference FIRST so the cashOutDetail FK is free to
-        // delete, then remove the cashflow effect (cashFlows before its detail).
-        const coutId = invoice.cash_out_detail_id;
+        // delete, then remove each cashflow effect (cashFlows before its detail).
+        const payments = await tx
+          .select({ detail_id: invoicePaymentsTable.cash_out_detail_id })
+          .from(invoicePaymentsTable)
+          .where(eq(invoicePaymentsTable.invoice_id, id));
+        const detailIds = new Set(
+          [...payments.map((p) => p.detail_id), invoice.cash_out_detail_id].filter(
+            (v): v is number => v != null,
+          ),
+        );
         const [updated] = await tx
           .update(invoicesTable)
           .set({ status: "void", amount_paid: "0", cash_out_detail_id: null })
           .where(eq(invoicesTable.id, id))
           .returning();
-        if (coutId) {
-          await tx.delete(cashFlows).where(eq(cashFlows.cash_out_detail_id, coutId));
-          await tx.delete(cashOutDetailTable).where(eq(cashOutDetailTable.id, coutId));
+        await tx.delete(invoicePaymentsTable).where(eq(invoicePaymentsTable.invoice_id, id));
+        for (const detailId of detailIds) {
+          await tx.delete(cashFlows).where(eq(cashFlows.cash_out_detail_id, detailId));
+          await tx.delete(cashOutDetailTable).where(eq(cashOutDetailTable.id, detailId));
         }
         return updated;
       });
@@ -462,32 +524,85 @@ export async function invoiceRoutes(app: FastifyInstance) {
   // ============================================================ sales invoices
   // Mirror of purchase, inverted: post = stock OUT (oversell allowed + warned),
   // pay = cash IN. Counterparty is a free-text party_name (or a linked customer).
+  // Paginated list. `q` searches number + party_name; `late=1` keeps only
+  // overdue invoices (billed, unsettled, due date passed). The response also
+  // carries the outlet-wide late aggregates (count + outstanding) so the
+  // client's warning banner doesn't depend on which page/filter is loaded.
   app.get("/api/sales-invoices", async (request, reply) => {
     const outlet = await getOwnerOutlet(request, reply);
     if (!outlet) return;
-    const { status } = request.query as { status?: string };
-    const rows = await db
-      .select({
-        id: invoicesTable.id,
-        number: invoicesTable.number,
-        status: invoicesTable.status,
-        party_name: invoicesTable.party_name,
-        issue_date: invoicesTable.issue_date,
-        due_date: invoicesTable.due_date,
-        total: invoicesTable.total,
-        amount_paid: invoicesTable.amount_paid,
-      })
-      .from(invoicesTable)
-      .where(
-        and(
-          eq(invoicesTable.outlet_id, outlet.id),
-          eq(invoicesTable.type, "sales"),
-          isNull(invoicesTable.deletedAt),
-          status && status !== "all" ? eq(invoicesTable.status, status as "draft" | "posted" | "partial" | "paid" | "void") : undefined,
-        ),
-      )
-      .orderBy(desc(invoicesTable.issue_date));
-    return { success: true, data: rows };
+    const { status, q, late, page, limit } = request.query as {
+      status?: string;
+      q?: string;
+      late?: string;
+      page?: string;
+      limit?: string;
+    };
+    const pageN = Math.max(1, Number(page) || 1);
+    const limitN = Math.min(100, Math.max(1, Number(limit) || 10));
+
+    // Late = billed but not settled by the end of the due date, i.e. late
+    // starting the day AFTER due_date (due dates are stored at midnight).
+    const lateCond = and(
+      inArray(invoicesTable.status, ["posted", "partial"]),
+      lt(invoicesTable.due_date, sql`CURRENT_DATE`),
+    );
+
+    const baseConds = [
+      eq(invoicesTable.outlet_id, outlet.id),
+      eq(invoicesTable.type, "sales"),
+      isNull(invoicesTable.deletedAt),
+    ];
+    const conds = [
+      ...baseConds,
+      status && status !== "all"
+        ? eq(invoicesTable.status, status as "draft" | "posted" | "partial" | "paid" | "void")
+        : undefined,
+      q?.trim()
+        ? or(
+            ilike(invoicesTable.number, `%${q.trim()}%`),
+            ilike(invoicesTable.party_name, `%${q.trim()}%`),
+          )
+        : undefined,
+      late === "1" || late === "true" ? lateCond : undefined,
+    ];
+
+    const [rows, [{ n: count }], [lateAgg]] = await Promise.all([
+      db
+        .select({
+          id: invoicesTable.id,
+          number: invoicesTable.number,
+          status: invoicesTable.status,
+          party_name: invoicesTable.party_name,
+          issue_date: invoicesTable.issue_date,
+          due_date: invoicesTable.due_date,
+          total: invoicesTable.total,
+          amount_paid: invoicesTable.amount_paid,
+        })
+        .from(invoicesTable)
+        .where(and(...conds))
+        .orderBy(desc(invoicesTable.issue_date), desc(invoicesTable.id))
+        .limit(limitN)
+        .offset((pageN - 1) * limitN),
+      db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(invoicesTable)
+        .where(and(...conds)),
+      db
+        .select({
+          n: sql<number>`count(*)::int`,
+          outstanding: sql<string>`coalesce(sum(${invoicesTable.total} - ${invoicesTable.amount_paid}), 0)`,
+        })
+        .from(invoicesTable)
+        .where(and(...baseConds, lateCond)),
+    ]);
+
+    return {
+      success: true,
+      data: rows,
+      count,
+      late: { count: lateAgg.n, outstanding: lateAgg.outstanding },
+    };
   });
 
   app.get("/api/sales-invoices/:id", async (request, reply) => {
@@ -514,6 +629,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
       due_date?: string;
       tax_rate?: number | string;
       discount?: number | string;
+      down_payment?: number | string;
       notes?: string;
       items?: ItemInput[];
     };
@@ -524,6 +640,8 @@ export async function invoiceRoutes(app: FastifyInstance) {
     const taxRate = Number(body.tax_rate ?? 0);
     const discount = Number(body.discount ?? 0);
     const { lines, subtotal, tax_amount, total } = computeTotals(items, taxRate, discount, false);
+    // Clamp the agreed DP to [0, total]; it's booked as a payment on post.
+    const downPayment = Math.max(0, Math.min(Number(body.down_payment ?? 0), total));
     const number = await nextInvoiceNumber(outlet.id, "sales");
 
     const created = await db.transaction(async (tx) => {
@@ -545,6 +663,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
           discount: String(discount),
           total: String(total),
           amount_paid: "0",
+          down_payment: String(downPayment),
           notes: body.notes ?? "",
         })
         .returning();
@@ -580,6 +699,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
       due_date?: string;
       tax_rate?: number | string;
       discount?: number | string;
+      down_payment?: number | string;
       notes?: string;
       items?: ItemInput[];
     };
@@ -590,6 +710,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
     const taxRate = Number(body.tax_rate ?? 0);
     const discount = Number(body.discount ?? 0);
     const { lines, subtotal, tax_amount, total } = computeTotals(items, taxRate, discount, false);
+    const downPayment = Math.max(0, Math.min(Number(body.down_payment ?? 0), total));
 
     try {
       const result = await db.transaction(async (tx) => {
@@ -613,6 +734,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
             tax_amount: String(tax_amount),
             discount: String(discount),
             total: String(total),
+            down_payment: String(downPayment),
             notes: body.notes ?? "",
           })
           .where(eq(invoicesTable.id, id))
@@ -672,11 +794,23 @@ export async function invoiceRoutes(app: FastifyInstance) {
           );
         }
 
-        const [updated] = await tx
+        let [updated] = await tx
           .update(invoicesTable)
           .set({ status: "posted" })
           .where(eq(invoicesTable.id, id))
           .returning();
+
+        // Book the agreed down payment as the first payment. Status becomes
+        // partial (or paid, if the DP covers the whole invoice).
+        const dp = Math.min(Number(invoice.down_payment), Number(invoice.total));
+        if (dp > 0) {
+          updated = await recordSalesCashIn(
+            tx,
+            outlet.id,
+            { id, total: invoice.total, amount_paid: invoice.amount_paid },
+            dp,
+          );
+        }
         return { updated, warnings };
       });
       return { success: true, data: result.updated, warnings: result.warnings };
@@ -710,32 +844,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
         const amount = body.amount != null ? Number(body.amount) : remaining;
         if (!(amount > 0) || amount > remaining + 0.001) throw new Error("BAD_AMOUNT");
 
-        let [cat] = await tx
-          .select({ id: cashInCategoryTable.id })
-          .from(cashInCategoryTable)
-          .where(eq(cashInCategoryTable.category, SALES_CASH_CATEGORY))
-          .limit(1);
-        if (!cat) {
-          [cat] = await tx
-            .insert(cashInCategoryTable)
-            .values({ category: SALES_CASH_CATEGORY })
-            .returning({ id: cashInCategoryTable.id });
-        }
-
-        const [detail] = await tx
-          .insert(cashInDetailTable)
-          .values({ category_id: cat.id, money_amount: String(amount), type: "cash" })
-          .returning();
-        await tx.insert(cashFlows).values({ outlet_id: outlet.id, cash_in_detail_id: detail.id });
-
-        const newPaid = +(alreadyPaid + amount).toFixed(2);
-        const status = newPaid >= total - 0.001 ? "paid" : "partial";
-        const [updated] = await tx
-          .update(invoicesTable)
-          .set({ amount_paid: String(newPaid), status, cash_in_detail_id: detail.id })
-          .where(eq(invoicesTable.id, id))
-          .returning();
-        return updated;
+        return recordSalesCashIn(tx, outlet.id, invoice, amount);
       });
       return { success: true, data: result };
     } catch (e) {
@@ -780,15 +889,26 @@ export async function invoiceRoutes(app: FastifyInstance) {
             .where(eq(productsTable.id, m.product_id));
         }
 
-        const cinId = invoice.cash_in_detail_id;
+        // Remove ALL payments this invoice generated (DP + installments live in
+        // invoice_payments; cash_in_detail_id covers legacy single payments).
+        const payments = await tx
+          .select({ detail_id: invoicePaymentsTable.cash_in_detail_id })
+          .from(invoicePaymentsTable)
+          .where(eq(invoicePaymentsTable.invoice_id, id));
+        const detailIds = new Set(
+          [...payments.map((p) => p.detail_id), invoice.cash_in_detail_id].filter(
+            (v): v is number => v != null,
+          ),
+        );
         const [updated] = await tx
           .update(invoicesTable)
           .set({ status: "void", amount_paid: "0", cash_in_detail_id: null })
           .where(eq(invoicesTable.id, id))
           .returning();
-        if (cinId) {
-          await tx.delete(cashFlows).where(eq(cashFlows.cash_in_detail_id, cinId));
-          await tx.delete(cashInDetailTable).where(eq(cashInDetailTable.id, cinId));
+        await tx.delete(invoicePaymentsTable).where(eq(invoicePaymentsTable.invoice_id, id));
+        for (const detailId of detailIds) {
+          await tx.delete(cashFlows).where(eq(cashFlows.cash_in_detail_id, detailId));
+          await tx.delete(cashInDetailTable).where(eq(cashInDetailTable.id, detailId));
         }
         return updated;
       });

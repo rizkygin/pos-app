@@ -204,6 +204,20 @@
       "when": 1783262618997,
       "tag": "0028_stock_scale_3",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1783399203098,
+      "tag": "0029_invoice_payments",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1783400132378,
+      "tag": "0030_invoice_down_payment",
+      "breakpoints": true
     }
   ]
 }

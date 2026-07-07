@@ -33,6 +33,22 @@ export const SALES_STATUS_LABEL: Record<SalesRow["status"], string> = {
   void: "Batal",
 };
 
+// Late = billed (posted/partial) but not settled by the end of its due date.
+// Derived, never stored: it flips off by itself the moment the invoice is paid.
+export function isLateInvoice(inv: Pick<SalesRow, "status" | "due_date">) {
+  if (!inv.due_date) return false;
+  if (inv.status !== "posted" && inv.status !== "partial") return false;
+  const due = new Date(inv.due_date);
+  due.setHours(23, 59, 59, 999); // late starting the day AFTER the due date
+  return due.getTime() < Date.now();
+}
+
+export function lateDays(dueDate: string) {
+  const due = new Date(dueDate);
+  due.setHours(23, 59, 59, 999);
+  return Math.max(1, Math.ceil((Date.now() - due.getTime()) / 86_400_000));
+}
+
 const sortHeader = (label: string) =>
   function Header({ column }: { column: { toggleSorting: (d?: boolean) => void; getIsSorted: () => false | "asc" | "desc" } }) {
     return (
@@ -64,11 +80,22 @@ export function getSalesColumns(opts: {
     {
       accessorKey: "due_date",
       header: sortHeader("Jatuh Tempo"),
-      cell: ({ row }) => (
-        <span className="tabular-nums text-muted-foreground">
-          {row.original.due_date ? new Date(row.original.due_date).toLocaleDateString("id-ID") : "—"}
-        </span>
-      ),
+      cell: ({ row }) => {
+        if (!row.original.due_date) return <span className="tabular-nums text-muted-foreground">—</span>;
+        const late = isLateInvoice(row.original);
+        return (
+          <div className="tabular-nums">
+            <span className={late ? "font-medium text-red-600 dark:text-red-400" : "text-muted-foreground"}>
+              {new Date(row.original.due_date).toLocaleDateString("id-ID")}
+            </span>
+            {late && (
+              <p className="text-[11px] font-medium text-red-600 dark:text-red-400">
+                Terlambat {lateDays(row.original.due_date)} hari
+              </p>
+            )}
+          </div>
+        );
+      },
     },
     {
       id: "total",
@@ -77,12 +104,41 @@ export function getSalesColumns(opts: {
       cell: ({ row }) => <span className="tabular-nums">{fmtIDR(Number(row.original.total))}</span>,
     },
     {
+      id: "paid",
+      accessorFn: (r) => Number(r.amount_paid),
+      header: sortHeader("Dibayar"),
+      cell: ({ row }) => {
+        const total = Number(row.original.total);
+        const paid = Number(row.original.amount_paid);
+        if (!(paid > 0)) return <span className="text-muted-foreground">—</span>;
+        return (
+          <div className="tabular-nums">
+            <span className={row.original.status === "paid" ? "text-green-600 dark:text-green-400" : ""}>
+              {fmtIDR(paid)}
+            </span>
+            {row.original.status === "partial" && (
+              <p className="text-[11px] font-medium text-amber-600 dark:text-amber-400">
+                Sisa {fmtIDR(total - paid)}
+              </p>
+            )}
+          </div>
+        );
+      },
+    },
+    {
       accessorKey: "status",
       header: () => <span className="px-3">Status</span>,
       cell: ({ row }) => (
-        <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${SALES_STATUS_STYLE[row.original.status]}`}>
-          {SALES_STATUS_LABEL[row.original.status]}
-        </span>
+        <div className="flex flex-col items-start gap-1">
+          <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${SALES_STATUS_STYLE[row.original.status]}`}>
+            {SALES_STATUS_LABEL[row.original.status]}
+          </span>
+          {isLateInvoice(row.original) && (
+            <span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium text-red-700 dark:bg-red-950 dark:text-red-300">
+              Terlambat
+            </span>
+          )}
+        </div>
       ),
     },
     {
