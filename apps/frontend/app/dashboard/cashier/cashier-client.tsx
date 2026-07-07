@@ -114,6 +114,30 @@ export const CashierClient = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submittingRef = useRef(false);
 
+  // Lazy mode: a per-device cashier preference (localStorage, never the DB).
+  // When on, cash received is assumed to exactly equal the amount due (uang
+  // pas): the cashier skips typing it and no change is calculated.
+  const lazyKey = `pos_lazy_${outletId}`;
+  const [lazyMode, setLazyMode] = useState(false);
+  useEffect(() => {
+    try {
+      setLazyMode(localStorage.getItem(lazyKey) === '1');
+    } catch {
+      /* ignore */
+    }
+  }, [lazyKey]);
+  const toggleLazyMode = () => {
+    setLazyMode((v) => {
+      const next = !v;
+      try {
+        localStorage.setItem(lazyKey, next ? '1' : '0');
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
+
   // ── Held tabs: multiple parked carts persisted to localStorage (this device) ──
   const tabsKey = `pos_tabs_${outletId}`;
   const [tabs, setTabs] = useState<HeldTab[]>([]);
@@ -361,9 +385,12 @@ export const CashierClient = ({
       : 'Discount';
   const finalTotal = cartTotal - discountAmount;
 
-  const amountPaid = parseFloat(amountPaidInput) || 0;
+  // Lazy mode pays the exact amount due, so change is always 0 and the payment
+  // can never be insufficient.
+  const amountPaid = lazyMode ? finalTotal : parseFloat(amountPaidInput) || 0;
   const changeDue = Math.max(0, amountPaid - finalTotal);
   const isInsufficient =
+    !lazyMode &&
     paymentMethod === 'cash' &&
     amountPaidInput.trim() !== '' &&
     amountPaid < finalTotal;
@@ -919,31 +946,60 @@ export const CashierClient = ({
             </div>
           </div>
 
-          <div className="mb-3 space-y-2 rounded-xl border bg-muted/30 p-3">
-            <div className="flex items-center justify-between gap-2">
-              <label className="text-sm font-semibold text-muted-foreground">
-                Cash Received
-              </label>
-              <input
-                type="text"
-                inputMode="numeric"
-                value={amountPaidInput && Number(amountPaidInput) > 0 ? formatCurrency(Number(amountPaidInput)) : ''}
-                onChange={(e) => setAmountPaidInput(e.target.value.replace(/\D/g, ''))}
-                placeholder="Rp 0"
-                className="w-36 h-9 px-3 rounded-lg border bg-background text-right text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-semibold text-muted-foreground">
-                {isInsufficient ? 'Shortfall' : 'Change'}
+          {/* Lazy mode toggle — device-local preference. When on, cash received
+              is auto-set to the exact amount due and the entry box is hidden. */}
+          <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border bg-muted/30 px-3 py-2">
+            <div className="flex flex-col">
+              <span className="text-sm font-semibold">Lazy Mode</span>
+              <span className="text-[11px] text-muted-foreground">
+                Uang pas otomatis, tanpa hitung kembalian
               </span>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={lazyMode}
+              aria-label="Lazy mode"
+              onClick={toggleLazyMode}
+              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                lazyMode ? 'bg-blue-600' : 'bg-muted-foreground/30'
+              }`}
+            >
               <span
-                className={`text-sm font-bold ${isInsufficient ? 'text-rose-500' : 'text-emerald-600'}`}
-              >
-                {formatCurrency(isInsufficient ? finalTotal - amountPaid : changeDue)}
-              </span>
-            </div>
+                className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                  lazyMode ? 'translate-x-5' : ''
+                }`}
+              />
+            </button>
           </div>
+
+          {!lazyMode && (
+            <div className="mb-3 space-y-2 rounded-xl border bg-muted/30 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-sm font-semibold text-muted-foreground">
+                  Cash Received
+                </label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={amountPaidInput && Number(amountPaidInput) > 0 ? formatCurrency(Number(amountPaidInput)) : ''}
+                  onChange={(e) => setAmountPaidInput(e.target.value.replace(/\D/g, ''))}
+                  placeholder="Rp 0"
+                  className="w-36 h-9 px-3 rounded-lg border bg-background text-right text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-semibold text-muted-foreground">
+                  {isInsufficient ? 'Shortfall' : 'Change'}
+                </span>
+                <span
+                  className={`text-sm font-bold ${isInsufficient ? 'text-rose-500' : 'text-emerald-600'}`}
+                >
+                  {formatCurrency(isInsufficient ? finalTotal - amountPaid : changeDue)}
+                </span>
+              </div>
+            </div>
+          )}
 
           {paymentMethod === 'non_cash' && (
             <div className="mb-3 flex items-center justify-between rounded-lg bg-blue-50 px-3 py-2">
