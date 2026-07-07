@@ -125,6 +125,49 @@ async function recordSalesCashIn(
   return updated;
 }
 
+// Purchase mirror of recordSalesCashIn: record `amount` as a cash-OUT payment on
+// a purchase invoice inside an open transaction — find-or-create the category,
+// write the cashflow detail + link + payment row, then bump amount_paid/status.
+// Used by /pay and by /post when the draft carried a down payment.
+async function recordPurchaseCashOut(
+  tx: Tx,
+  outletId: number,
+  invoice: { id: number; total: string; amount_paid: string },
+  amount: number,
+) {
+  let [cat] = await tx
+    .select({ id: cashOutCategoryTable.id })
+    .from(cashOutCategoryTable)
+    .where(eq(cashOutCategoryTable.category, PURCHASE_CASH_CATEGORY))
+    .limit(1);
+  if (!cat) {
+    [cat] = await tx
+      .insert(cashOutCategoryTable)
+      .values({ category: PURCHASE_CASH_CATEGORY })
+      .returning({ id: cashOutCategoryTable.id });
+  }
+
+  const [detail] = await tx
+    .insert(cashOutDetailTable)
+    .values({ category_id: cat.id, money_amount: String(amount), type: "cash" })
+    .returning();
+  await tx.insert(cashFlows).values({ outlet_id: outletId, cash_out_detail_id: detail.id });
+  await tx.insert(invoicePaymentsTable).values({
+    invoice_id: invoice.id,
+    cash_out_detail_id: detail.id,
+    amount: String(amount),
+  });
+
+  const newPaid = +(Number(invoice.amount_paid) + amount).toFixed(2);
+  const status = newPaid >= Number(invoice.total) - 0.001 ? ("paid" as const) : ("partial" as const);
+  const [updated] = await tx
+    .update(invoicesTable)
+    .set({ amount_paid: String(newPaid), status, cash_out_detail_id: detail.id })
+    .where(eq(invoicesTable.id, invoice.id))
+    .returning();
+  return updated;
+}
+
 async function nextInvoiceNumber(outletId: number, type: "purchase" | "sales") {
   const prefix = type === "purchase" ? "PB" : "PJ";
   const year = new Date().getFullYear();
@@ -272,6 +315,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
       tax_rate?: number | string;
       tax_inclusive?: boolean;
       discount?: number | string;
+      down_payment?: number | string;
       notes?: string;
       items?: ItemInput[];
     };
@@ -283,6 +327,8 @@ export async function invoiceRoutes(app: FastifyInstance) {
     const discount = Number(body.discount ?? 0);
     const taxInclusive = !!body.tax_inclusive;
     const { lines, subtotal, tax_amount, total } = computeTotals(items, taxRate, discount, taxInclusive);
+    // Clamp the agreed DP to [0, total]; it's booked as a cash-out on post.
+    const downPayment = Math.max(0, Math.min(Number(body.down_payment ?? 0), total));
 
     const number = await nextInvoiceNumber(outlet.id, "purchase");
 
@@ -305,6 +351,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
           discount: String(discount),
           total: String(total),
           amount_paid: "0",
+          down_payment: String(downPayment),
           notes: body.notes ?? "",
         })
         .returning();
@@ -366,11 +413,23 @@ export async function invoiceRoutes(app: FastifyInstance) {
             .where(eq(productsTable.id, it.product_id));
         }
 
-        const [updated] = await tx
+        let [updated] = await tx
           .update(invoicesTable)
           .set({ status: "posted" })
           .where(eq(invoicesTable.id, id))
           .returning();
+
+        // Book the agreed down payment as the first cash-out. Status becomes
+        // partial (or paid, if the DP covers the whole invoice).
+        const dp = Math.min(Number(invoice.down_payment), Number(invoice.total));
+        if (dp > 0) {
+          updated = await recordPurchaseCashOut(
+            tx,
+            outlet.id,
+            { id, total: invoice.total, amount_paid: invoice.amount_paid },
+            dp,
+          );
+        }
         return updated;
       });
       return { success: true, data: result };
@@ -406,39 +465,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
         const amount = body.amount != null ? Number(body.amount) : remaining;
         if (!(amount > 0) || amount > remaining + 0.001) throw new Error("BAD_AMOUNT");
 
-        // Find-or-create the cash-out category so payment never depends on a
-        // pre-seeded categories table (it's empty on fresh DBs).
-        let [cat] = await tx
-          .select({ id: cashOutCategoryTable.id })
-          .from(cashOutCategoryTable)
-          .where(eq(cashOutCategoryTable.category, PURCHASE_CASH_CATEGORY))
-          .limit(1);
-        if (!cat) {
-          [cat] = await tx
-            .insert(cashOutCategoryTable)
-            .values({ category: PURCHASE_CASH_CATEGORY })
-            .returning({ id: cashOutCategoryTable.id });
-        }
-
-        const [detail] = await tx
-          .insert(cashOutDetailTable)
-          .values({ category_id: cat.id, money_amount: String(amount), type: "cash" })
-          .returning();
-        await tx.insert(cashFlows).values({ outlet_id: outlet.id, cash_out_detail_id: detail.id });
-        await tx.insert(invoicePaymentsTable).values({
-          invoice_id: id,
-          cash_out_detail_id: detail.id,
-          amount: String(amount),
-        });
-
-        const newPaid = +(alreadyPaid + amount).toFixed(2);
-        const status = newPaid >= total - 0.001 ? "paid" : "partial";
-        const [updated] = await tx
-          .update(invoicesTable)
-          .set({ amount_paid: String(newPaid), status, cash_out_detail_id: detail.id })
-          .where(eq(invoicesTable.id, id))
-          .returning();
-        return updated;
+        return recordPurchaseCashOut(tx, outlet.id, invoice, amount);
       });
       return { success: true, data: result };
     } catch (e) {

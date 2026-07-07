@@ -22,6 +22,7 @@ type DetailInvoice = PurchaseRow & {
   tax_rate: string;
   tax_amount: string;
   discount: string;
+  down_payment: string;
   notes: string | null;
   items: DetailItem[];
 };
@@ -50,6 +51,7 @@ export function PurchaseClient() {
     supplier_id: "",
     due_date: "",
     tax_rate: "0",
+    down_payment: "0",
     notes: "",
     items: [{ ...emptyItem }] as LineItem[],
   });
@@ -83,7 +85,7 @@ export function PurchaseClient() {
   }, []);
 
   const openCreate = async () => {
-    setForm({ supplier_id: "", due_date: "", tax_rate: "0", notes: "", items: [{ ...emptyItem }] });
+    setForm({ supplier_id: "", due_date: "", tax_rate: "0", down_payment: "0", notes: "", items: [{ ...emptyItem }] });
     setError("");
     await fetchFormData();
     setView("create");
@@ -114,6 +116,9 @@ export function PurchaseClient() {
     return { subtotal, taxAmount, total: subtotal + taxAmount };
   }, [form.items, form.tax_rate]);
 
+  // DP clamped to [0, total] — mirrors the backend clamp so the preview matches.
+  const dpAmount = Math.max(0, Math.min(Number(form.down_payment || 0), totals.total));
+
   const save = async () => {
     const items = form.items.filter((it) => Number(it.quantity) > 0);
     if (items.length === 0) {
@@ -131,6 +136,7 @@ export function PurchaseClient() {
           supplier_id: form.supplier_id ? Number(form.supplier_id) : null,
           due_date: form.due_date || null,
           tax_rate: Number(form.tax_rate || 0),
+          down_payment: Number(form.down_payment || 0),
           notes: form.notes,
           items: items.map((it) => ({
             product_id: it.product_id || null,
@@ -262,10 +268,47 @@ export function PurchaseClient() {
                 <span>Total</span>
                 <span className="tabular-nums">{rupiah(detail.total)}</span>
               </div>
-              {Number(detail.amount_paid) > 0 && (
+              {/* Draft: the DP is only agreed, not yet booked as cash-out — show
+                  it plus the outstanding balance so the owner knows what's due. */}
+              {detail.status === "draft" && Number(detail.down_payment) > 0 && (
+                <>
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>Uang Muka (DP)</span>
+                    <span className="tabular-nums">-{rupiah(detail.down_payment)}</span>
+                  </div>
+                  <div className="flex justify-between font-semibold text-amber-600 dark:text-amber-400">
+                    <span>Sisa Tagihan</span>
+                    <span className="tabular-nums">
+                      {rupiah(Math.max(0, Number(detail.total) - Number(detail.down_payment)))}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">
+                    DP dicatat sebagai kas keluar saat faktur diposting.
+                  </p>
+                </>
+              )}
+              {/* Posted onward: DP is folded into amount_paid. Break it out as its
+                  own line, then show any payment beyond the DP. */}
+              {detail.status !== "draft" && Number(detail.down_payment) > 0 && (
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Uang Muka (DP)</span>
+                  <span className="tabular-nums">-{rupiah(detail.down_payment)}</span>
+                </div>
+              )}
+              {Number(detail.amount_paid) - Number(detail.down_payment) > 0 && (
                 <div className="flex justify-between text-muted-foreground">
                   <span>Dibayar</span>
-                  <span className="tabular-nums">{rupiah(detail.amount_paid)}</span>
+                  <span className="tabular-nums">
+                    -{rupiah(Number(detail.amount_paid) - Number(detail.down_payment))}
+                  </span>
+                </div>
+              )}
+              {Number(detail.amount_paid) > 0 && Number(detail.total) - Number(detail.amount_paid) > 0 && (
+                <div className="flex justify-between font-semibold text-amber-600 dark:text-amber-400">
+                  <span>Sisa Tagihan</span>
+                  <span className="tabular-nums">
+                    {rupiah(Number(detail.total) - Number(detail.amount_paid))}
+                  </span>
                 </div>
               )}
             </div>
@@ -415,10 +458,32 @@ export function PurchaseClient() {
           </div>
         </div>
 
-        <div className="ml-auto w-full max-w-xs space-y-1 text-sm">
-          <Row label="Subtotal" value={rupiah(totals.subtotal)} />
-          <Row label={`Pajak (${form.tax_rate || 0}%)`} value={rupiah(totals.taxAmount)} />
-          <Row label="Total" value={rupiah(totals.total)} bold />
+        <div className="ml-auto w-full max-w-xs space-y-3">
+          <label className="block space-y-1.5 text-xs font-medium text-muted-foreground">
+            <span className="flex items-center gap-1.5">
+              <Wallet className="size-3.5" /> Uang Muka / DP (Rp)
+            </span>
+            <Input
+              type="number"
+              value={form.down_payment}
+              onChange={(e) => setForm({ ...form, down_payment: e.target.value })}
+            />
+            <span className="text-[10px] text-muted-foreground">
+              Dicatat otomatis sebagai kas keluar pertama saat faktur diposting.
+            </span>
+          </label>
+
+          <div className="space-y-1 text-sm">
+            <Row label="Subtotal" value={rupiah(totals.subtotal)} />
+            <Row label={`Pajak (${form.tax_rate || 0}%)`} value={rupiah(totals.taxAmount)} />
+            <Row label="Total" value={rupiah(totals.total)} bold />
+            {dpAmount > 0 && (
+              <>
+                <Row label="Uang Muka (DP)" value={`-${rupiah(dpAmount)}`} />
+                <Row label="Sisa" value={rupiah(totals.total - dpAmount)} bold />
+              </>
+            )}
+          </div>
         </div>
 
         {error && <p className="text-sm text-destructive">{error}</p>}

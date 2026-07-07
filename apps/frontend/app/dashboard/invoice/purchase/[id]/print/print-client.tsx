@@ -21,6 +21,7 @@ type Invoice = {
   discount: string;
   total: string;
   amount_paid: string;
+  down_payment: string;
   notes: string | null;
   items: Item[];
   outlet: Outlet;
@@ -176,18 +177,48 @@ export function PrintClient() {
               <span>Total</span>
               <span className="tabular-nums">{rupiah(inv.total)}</span>
             </div>
-            {Number(inv.amount_paid) > 0 && Number(inv.amount_paid) < Number(inv.total) && (
-              <div className="flex justify-between text-zinc-500">
-                <span>Dibayar</span>
-                <span className="tabular-nums">{rupiah(inv.amount_paid)}</span>
-              </div>
-            )}
+            <PaidRows inv={inv} />
           </div>
 
           {inv.notes && <p className="mt-6 text-xs text-zinc-500">Catatan: {inv.notes}</p>}
           <p className="mt-8 text-center text-[11px] text-zinc-400">Dokumen ini dibuat oleh {inv.outlet.name}.</p>
         </div>
       </div>
+    </>
+  );
+}
+
+/* Payment breakdown under the Total: the down payment (down_payment) and any
+   payment beyond it (amount_paid - down_payment) print as separate rows, then
+   the remaining balance. On a draft the DP isn't booked yet (amount_paid = 0)
+   but the agreed DP still prints. */
+function PaidRows({ inv }: { inv: Invoice }) {
+  const paid = Number(inv.amount_paid);
+  const dp = Number(inv.down_payment) || 0;
+  const credited = Math.max(paid, inv.status === "draft" ? dp : 0);
+  if (!(credited > 0)) return null;
+  const beyondDp = Math.max(0, credited - dp);
+  const remaining = Math.max(0, Number(inv.total) - credited);
+  return (
+    <>
+      {dp > 0 && (
+        <div className="flex justify-between text-zinc-500">
+          <span>Uang Muka (DP)</span>
+          <span className="tabular-nums">-{rupiah(dp)}</span>
+        </div>
+      )}
+      {beyondDp > 0 && (
+        <div className="flex justify-between text-zinc-500">
+          <span>Dibayar</span>
+          <span className="tabular-nums">-{rupiah(beyondDp)}</span>
+        </div>
+      )}
+      {remaining > 0 && (
+        <div className="flex justify-between font-bold">
+          <span>Sisa Tagihan</span>
+          <span className="tabular-nums">{rupiah(remaining)}</span>
+        </div>
+      )}
     </>
   );
 }
