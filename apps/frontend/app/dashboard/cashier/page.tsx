@@ -12,10 +12,14 @@ export default async function CashierPage() {
 
     // Outlet + its products in one backend call. /api/products/mine returns ALL
     // products (incl. inventory-only); the cashier only sells customer-facing
-    // items, so drop anything flagged not-for-sale.
+    // items, so drop anything flagged not-for-sale. This also keeps
+    // inventory-only items from spawning their own category tabs in the POS
+    // (the client derives its tabs from this list).
     const res = await serverFetch("/api/products/mine");
     const { outlet, products } = res.ok ? await res.json() : { outlet: null, products: [] };
-    const sellableProducts = products;
+    const sellableProducts = products.filter(
+        (p: { is_for_sale?: boolean }) => p.is_for_sale !== false,
+    );
 
     if (!outlet) {
         return (
