@@ -1,4 +1,5 @@
 import Link from "next/link";
+import Image from "next/image";
 import {
   Store,
   Smartphone,
@@ -168,6 +169,102 @@ const rupiah = (v: number) =>
     maximumFractionDigits: 0,
   }).format(v);
 
+// GitHub-style framed app window: hairline chrome bar + traffic dots, sitting
+// on a soft multi-color glow. Purely presentational.
+function WindowFrame({
+  src,
+  alt,
+  width,
+  height,
+  glow,
+  priority = false,
+}: {
+  src: string;
+  alt: string;
+  width: number;
+  height: number;
+  glow: string;
+  priority?: boolean;
+}) {
+  return (
+    <div className="relative">
+      <div
+        className={`pointer-events-none absolute -inset-6 rounded-[2rem] blur-[60px] ${glow}`}
+      />
+      <div className="relative overflow-hidden rounded-xl border border-white/15 bg-[#111118] shadow-2xl">
+        <div className="flex items-center gap-1.5 border-b border-white/10 bg-white/[0.04] px-3 py-2">
+          <span className="size-2.5 rounded-full bg-rose-500/80" />
+          <span className="size-2.5 rounded-full bg-amber-500/80" />
+          <span className="size-2.5 rounded-full bg-emerald-500/80" />
+          <span className="ml-3 hidden rounded-md bg-white/5 px-2 py-0.5 text-[10px] text-zinc-500 sm:block">
+            ulunpesan.com/dashboard
+          </span>
+        </div>
+        <Image src={src} alt={alt} width={width} height={height} priority={priority} className="w-full" />
+      </div>
+    </div>
+  );
+}
+
+function PhoneFrame({
+  src,
+  alt,
+  width,
+  height,
+  caption,
+}: {
+  src: string;
+  alt: string;
+  width: number;
+  height: number;
+  caption: string;
+}) {
+  return (
+    <figure className="flex flex-col items-center gap-3">
+      <div className="overflow-hidden rounded-[1.6rem] border border-white/15 bg-[#111118] p-1.5 shadow-xl">
+        <Image src={src} alt={alt} width={width} height={height} className="w-full max-w-60 rounded-[1.1rem]" />
+      </div>
+      <figcaption className="text-xs text-zinc-400">{caption}</figcaption>
+    </figure>
+  );
+}
+
+// Alternating text + screenshot showcase rows (real product, real data).
+const SHOWCASES = [
+  {
+    title: "Faktur profesional dalam satu menit",
+    body: "Susun faktur penjualan atau pembelian langsung dari daftar produk — lengkap dengan DP, diskon per-item, pajak, jatuh tempo, dan cetak PDF.",
+    src: "/landing/faktur.webp",
+    w: 1600,
+    h: 831,
+    glow: "bg-emerald-600/15",
+  },
+  {
+    title: "Tahu piutang & hutang tanpa buka buku",
+    body: "Laporan Faktur merangkum faktur terbit, yang sudah dibayar, piutang berjalan, sampai siapa yang terlambat — per hari, minggu, atau bulan.",
+    src: "/landing/laporan.webp",
+    w: 1600,
+    h: 831,
+    glow: "bg-violet-600/15",
+  },
+  {
+    title: "Semua uang bermuara ke Buku Kas",
+    body: "Penjualan kasir dan pembayaran faktur tercatat otomatis — Pian tinggal menambah pengeluaran, dan posisi kas harian/bulanan selalu akurat.",
+    src: "/landing/bukukas.webp",
+    w: 1600,
+    h: 839,
+    glow: "bg-rose-600/15",
+  },
+  {
+    title: "Stok terpotong sendiri, bahkan lewat resep",
+    body: "Produk olahan bisa punya resep bahan — jual 1 porsi, stok mie dan telurnya berkurang otomatis. Opname dan riwayat pergerakan tersedia.",
+    src: "/landing/stok-resep.webp",
+    w: 1000,
+    h: 1025,
+    glow: "bg-orange-500/15",
+  },
+];
+
 export default function LandingPage() {
   return (
     <main className="min-h-screen bg-[#0a0a0f] text-white">
@@ -262,6 +359,18 @@ export default function LandingPage() {
             <span className="flex items-center gap-1.5"><Smartphone className="size-3.5 text-violet-500" /> Jalan di HP & komputer</span>
           </div>
         </div>
+
+        {/* the product, front and center — real outlet, real data */}
+        <div className="mx-auto max-w-5xl px-4 pb-20">
+          <WindowFrame
+            src="/landing/kasir.webp"
+            alt="Kasir (POS) Ulun Pesan dengan produk dan keranjang"
+            width={1600}
+            height={1012}
+            glow="bg-gradient-to-r from-rose-600/20 via-violet-600/15 to-orange-500/15"
+            priority
+          />
+        </div>
       </section>
 
       {/* ================= features ================= */}
@@ -286,6 +395,21 @@ export default function LandingPage() {
             </div>
           ))}
         </div>
+      </section>
+
+      {/* ================= showcases: real screenshots ================= */}
+      <section className="mx-auto max-w-6xl space-y-16 px-4 py-16 md:space-y-24 md:py-20">
+        {SHOWCASES.map((sc, i) => (
+          <div key={sc.title} className="grid items-center gap-8 md:grid-cols-2 md:gap-12">
+            <div className={i % 2 === 1 ? "md:order-2" : ""}>
+              <h3 className="text-xl font-black tracking-tight md:text-3xl">{sc.title}</h3>
+              <p className="mt-3 leading-relaxed text-zinc-400">{sc.body}</p>
+            </div>
+            <div className={i % 2 === 1 ? "md:order-1" : ""}>
+              <WindowFrame src={sc.src} alt={sc.title} width={sc.w} height={sc.h} glow={sc.glow} />
+            </div>
+          </div>
+        ))}
       </section>
 
       {/* ================= how it works ================= */}
@@ -325,6 +449,40 @@ export default function LandingPage() {
               </div>
             ))}
           </div>
+        </div>
+      </section>
+
+      {/* ================= mobile strip ================= */}
+      <section className="mx-auto max-w-6xl px-4 py-16 md:py-20">
+        <div className="mx-auto max-w-2xl text-center">
+          <h2 className="text-2xl font-black tracking-tight md:text-4xl">Senyaman itu di HP</h2>
+          <p className="mt-3 text-zinc-400">
+            Kelola bisnis dari genggaman — kasir multi-meja, ringkasan bisnis, sampai
+            struk yang langsung tercetak ke printer thermal.
+          </p>
+        </div>
+        <div className="mt-10 grid grid-cols-1 items-start justify-items-center gap-8 sm:grid-cols-3">
+          <PhoneFrame
+            src="/landing/hp-dashboard.webp"
+            alt="Ringkasan bisnis di HP"
+            width={800}
+            height={709}
+            caption="Ringkasan bisnis sekali lirik"
+          />
+          <PhoneFrame
+            src="/landing/hp-kasir.webp"
+            alt="Kasir multi-meja di HP"
+            width={728}
+            height={1406}
+            caption="Kasir multi-meja + Lazy Mode"
+          />
+          <PhoneFrame
+            src="/landing/hp-struk.webp"
+            alt="Struk digital siap cetak"
+            width={800}
+            height={1278}
+            caption="Struk siap cetak 58/80mm"
+          />
         </div>
       </section>
 
@@ -385,6 +543,31 @@ export default function LandingPage() {
               </Link>
             </div>
           ))}
+        </div>
+      </section>
+
+      {/* pembayaran → kwitansi resmi via email */}
+      <section className="mx-auto max-w-4xl px-4 pb-16 md:pb-20">
+        <div className="grid items-center gap-8 md:grid-cols-5">
+          <div className="md:col-span-2">
+            <h3 className="text-xl font-black tracking-tight md:text-2xl">
+              Setiap pembayaran, kwitansi resmi
+            </h3>
+            <p className="mt-3 leading-relaxed text-zinc-400">
+              Bayar via transfer bank dengan kode unik, konfirmasi kurang dari 24 jam,
+              dan kwitansi bernomor langsung masuk ke email Pian — bukti pembayaran
+              yang sah dan rapi.
+            </p>
+          </div>
+          <div className="md:col-span-3">
+            <WindowFrame
+              src="/landing/kwitansi-email.webp"
+              alt="Kwitansi pembayaran Ulun Pesan di Gmail"
+              width={1400}
+              height={732}
+              glow="bg-rose-600/15"
+            />
+          </div>
         </div>
       </section>
 
