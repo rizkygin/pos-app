@@ -90,6 +90,7 @@ export async function mutationRoutes(app: FastifyInstance) {
             outlet_id: body.outletId,
             note: {
               customerName: body.customerName || null,
+              cashierName: body.cashierName || null,
               discountAmount: body.discountAmount ?? 0,
               paymentMethod: body.paymentMethod ?? "cash",
               amountPaid: body.amountPaid ?? 0,
@@ -184,18 +185,53 @@ export async function mutationRoutes(app: FastifyInstance) {
       const { role, data } = body;
 
       if (role === "owner") {
-        await db.insert(outletsTable).values({
-          name: data.name,
-          address: data.address,
-          phone: data.phone,
-          email: data.email,
-          user_id: userId,
-          avatar: data.avatar || "avatar.png",
-          lat: "-3.3199",
-          lon: "114.5907",
-          features: Array.isArray(data.features) ? data.features : [],
-          is_open: false,
-        });
+        const name = String(data?.name ?? "").trim();
+        const address = String(data?.address ?? "").trim();
+        const phone = String(data?.phone ?? "").trim();
+        const email = String(data?.email ?? "").trim().toLowerCase();
+        if (!name || !address || !phone || !email) {
+          return reply
+            .status(400)
+            .send({ error: "Nama, alamat, WhatsApp, dan email outlet wajib diisi" });
+        }
+
+        // outlets.email is UNIQUE — pre-check so the form gets a friendly 409
+        // instead of a raw Postgres error via 500.
+        const [taken] = await db
+          .select({ id: outletsTable.id })
+          .from(outletsTable)
+          .where(eq(outletsTable.email, email))
+          .limit(1);
+        if (taken) {
+          return reply
+            .status(409)
+            .send({ error: "Email outlet sudah digunakan, silakan pakai email lain" });
+        }
+
+        try {
+          await db.insert(outletsTable).values({
+            name,
+            address,
+            phone,
+            email,
+            user_id: userId,
+            avatar: data.avatar || "avatar.png",
+            // Use the coordinates from the form's "Gunakan Lokasi Saya"; the
+            // old Banjarmasin point stays as the fallback only.
+            lat: data.lat || "-3.3199",
+            lon: data.lon || "114.5907",
+            features: Array.isArray(data.features) ? data.features : [],
+            is_open: false,
+          });
+        } catch (e: any) {
+          // Race with the pre-check: two submits with the same email.
+          if (e?.code === "23505" || e?.cause?.code === "23505") {
+            return reply
+              .status(409)
+              .send({ error: "Email outlet sudah digunakan, silakan pakai email lain" });
+          }
+          throw e;
+        }
       } else if (role === "courier") {
         await db.insert(couriersTable).values({
           user_id: userId,

@@ -1,7 +1,7 @@
-import { db } from '@/src/db'
-import { account, usersTable } from '@/src/db/schema'
+import { db } from '../src/db'
+import { account, usersTable } from '../src/db/schema'
 import { eq } from 'drizzle-orm'
-import { auth } from '@/lib/auth'
+import { auth } from '../src/auth'
 
 const userId = process.argv[2]      // first argument
 const newPassword = process.argv[3] // second argument

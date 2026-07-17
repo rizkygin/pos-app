@@ -1,10 +1,9 @@
 'use client'
 import { useState } from "react";
-import { MapPin, Loader2 } from "lucide-react";
+import { MapPin, Loader2, AlertCircle } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useRouter } from "next/navigation";
 import { ORDER_FEATURES } from "@/lib/order-features";
 import { API_URL } from "@/lib/api-url";
 
@@ -244,8 +243,8 @@ const roles: Role[] = [
     },
     {
         id: "owner",
-        title: "Pemilik Resto",
-        description: "Mengatur Bisnis, Pantau Penjualan, dan Kembangkan Restoran Anda dengan Mudah.",
+        title: "Pemilik Usaha",
+        description: "Mengatur Bisnis, Pantau Penjualan, dan Kembangkan Usaha Anda dengan Mudah.",
         illustration: <OwnerIllustration />,
     },
     {
@@ -259,7 +258,6 @@ const roles: Role[] = [
 /* ─── Registration form ──────────────────────────────────────────────────── */
 
 const RegistrationForm = ({ role, onCancel }: { role: string; onCancel: () => void }) => {
-    const router = useRouter();
     const [loading, setLoading] = useState(false);
     const [locating, setLocating] = useState(false);
     const [formData, setFormData] = useState<Record<string, string>>(
@@ -295,12 +293,15 @@ const RegistrationForm = ({ role, onCancel }: { role: string; onCancel: () => vo
         );
     };
 
+    const [submitError, setSubmitError] = useState("");
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (role === 'owner' && selectedFeatures.length === 0) {
             setFeatureError(true);
             return;
         }
+        setSubmitError("");
         setLoading(true);
         try {
             const res = await fetch(`${API_URL}/api/register-role`, {
@@ -310,13 +311,17 @@ const RegistrationForm = ({ role, onCancel }: { role: string; onCancel: () => vo
                 body: JSON.stringify({ role, data: { ...formData, features: selectedFeatures } }),
             });
             if (res.ok) {
-                router.push("/dashboard");
+                // Hard navigation (not router.push): the fresh role must
+                // re-resolve on the server — layout, sidebar, and session all
+                // key off it, and a client-side push would show stale state.
+                window.location.assign("/dashboard");
+                return;
             } else {
-                const data = await res.json();
-                alert(data.error || "Something went wrong");
+                const data = await res.json().catch(() => ({}));
+                setSubmitError(data.error || "Terjadi kesalahan, silakan coba lagi.");
             }
         } catch {
-            alert("Failed to register");
+            setSubmitError("Gagal terhubung ke server. Periksa koneksi Pian lalu coba lagi.");
         } finally {
             setLoading(false);
         }
@@ -447,6 +452,13 @@ const RegistrationForm = ({ role, onCancel }: { role: string; onCancel: () => vo
                 {role === "customer" && (
                     <div className="py-8 text-center space-y-4">
                         <p className="text-muted-foreground">Tidak ada informasi tambahan yang diperlukan. Siap untuk mulai berbelanja?</p>
+                    </div>
+                )}
+
+                {submitError && (
+                    <div className="flex items-start gap-2.5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 dark:border-red-900 dark:bg-red-950/40">
+                        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-400" />
+                        <p className="text-sm font-medium text-red-700 dark:text-red-300">{submitError}</p>
                     </div>
                 )}
 
