@@ -20,7 +20,7 @@ export const getSession = cache(async (): Promise<{ session: Session; user: User
 
   const data = res.ok ? await res.json() : null;
   if (!data || !data.user) {
-    redirect("/");
+    redirect("/login");
   }
 
   return data as { session: Session; user: User };

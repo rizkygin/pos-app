@@ -84,7 +84,7 @@ function ResetPasswordForm() {
             const res = await resetPasswordAction(token, newPassword);
             setResult({ ok: res.success, text: res.message });
             if (res.success) {
-                setTimeout(() => router.push("/"), 2000);
+                setTimeout(() => router.push("/login"), 2000);
             }
         });
     }
@@ -189,7 +189,7 @@ function ResetPasswordForm() {
 
                             <p className="text-center text-sm text-zinc-400 mt-2">
                                 Remember your password?{" "}
-                                <a href="/" className="text-white hover:text-rose-300 font-medium transition-colors">
+                                <a href="/login" className="text-white hover:text-rose-300 font-medium transition-colors">
                                     Sign in
                                 </a>
                             </p>

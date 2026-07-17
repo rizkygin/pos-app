@@ -407,7 +407,7 @@ export function AppSidebar({
   const signOut = async () => {
     await authClient.signOut({
       fetchOptions: {
-        onSuccess: () => router.push('/'),
+        onSuccess: () => router.push('/login'),
       },
     });
   };
