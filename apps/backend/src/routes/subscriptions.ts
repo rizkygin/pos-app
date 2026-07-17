@@ -324,6 +324,80 @@ export async function subscriptionRoutes(app: FastifyInstance) {
     return { success: true, data: rows, total, pendingCount, page: pageNum, limit: limitNum };
   });
 
+  // Revenue accumulation — computed straight from PAID payments (the source of
+  // truth; no shadow table to drift): totals, this/last month (by paid_at),
+  // active subscriber count, and a 6-month trend.
+  app.get("/api/admin/subscription-revenue", async (request, reply) => {
+    const admin = await getAdminUser(request, reply);
+    if (!admin) return;
+
+    const paidAmount = sql<string>`coalesce(sum(${subscriptionPaymentsTable.amount_due}), 0)`;
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const trendStart = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+
+    const [[allTime], [thisMonth], [lastMonth], [subs], trendRows] = await Promise.all([
+      db
+        .select({ total: paidAmount, n: sql<number>`count(*)::int` })
+        .from(subscriptionPaymentsTable)
+        .where(eq(subscriptionPaymentsTable.status, "paid")),
+      db
+        .select({ total: paidAmount, n: sql<number>`count(*)::int` })
+        .from(subscriptionPaymentsTable)
+        .where(
+          and(
+            eq(subscriptionPaymentsTable.status, "paid"),
+            sql`${subscriptionPaymentsTable.paid_at} >= ${monthStart}`,
+          ),
+        ),
+      db
+        .select({ total: paidAmount })
+        .from(subscriptionPaymentsTable)
+        .where(
+          and(
+            eq(subscriptionPaymentsTable.status, "paid"),
+            sql`${subscriptionPaymentsTable.paid_at} >= ${lastMonthStart}`,
+            sql`${subscriptionPaymentsTable.paid_at} < ${monthStart}`,
+          ),
+        ),
+      db
+        .select({
+          active: sql<number>`count(*) filter (where ${subscriptionsTable.status} = 'active')::int`,
+          trialing: sql<number>`count(*) filter (where ${subscriptionsTable.status} = 'trialing')::int`,
+        })
+        .from(subscriptionsTable),
+      db
+        .select({
+          month: sql<string>`to_char(${subscriptionPaymentsTable.paid_at}, 'YYYY-MM')`,
+          total: paidAmount,
+        })
+        .from(subscriptionPaymentsTable)
+        .where(
+          and(
+            eq(subscriptionPaymentsTable.status, "paid"),
+            sql`${subscriptionPaymentsTable.paid_at} >= ${trendStart}`,
+          ),
+        )
+        .groupBy(sql`to_char(${subscriptionPaymentsTable.paid_at}, 'YYYY-MM')`)
+        .orderBy(sql`to_char(${subscriptionPaymentsTable.paid_at}, 'YYYY-MM')`),
+    ]);
+
+    return {
+      success: true,
+      data: {
+        all_time: Number(allTime.total),
+        all_time_count: allTime.n,
+        this_month: Number(thisMonth.total),
+        this_month_count: thisMonth.n,
+        last_month: Number(lastMonth.total),
+        active_subscribers: subs.active,
+        trialing: subs.trialing,
+        trend: trendRows.map((r) => ({ month: r.month, total: Number(r.total) })),
+      },
+    };
+  });
+
   // Set (or clear, with discount_pct 0) a marketing deal on a merchant's
   // subscription, optionally scoped to one tier and/or interval. Looked up by
   // account email. Requires an existing subscription row — pre-creating one

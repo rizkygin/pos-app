@@ -79,6 +79,67 @@ const FILTERS = [
   { key: 'all', label: 'Semua' },
 ] as const;
 
+type RevenueSummary = {
+  all_time: number;
+  all_time_count: number;
+  this_month: number;
+  this_month_count: number;
+  last_month: number;
+  active_subscribers: number;
+  trialing: number;
+};
+
+// Revenue accumulation from PAID payments (computed server-side from the
+// source of truth — no shadow table). Plain stat tiles: numbers wear text
+// ink, labels muted; no chart, so no hover/palette machinery.
+function RevenueStats() {
+  const [summary, setSummary] = useState<RevenueSummary | null>(null);
+
+  useEffect(() => {
+    fetch(`${API_URL}/api/admin/subscription-revenue`, { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => j?.success && setSummary(j.data))
+      .catch(() => {});
+  }, []);
+
+  if (!summary) return null;
+
+  const tiles = [
+    {
+      label: 'Pendapatan Bulan Ini',
+      value: rupiah(summary.this_month),
+      sub: `${summary.this_month_count} pembayaran`,
+    },
+    {
+      label: 'Bulan Lalu',
+      value: rupiah(summary.last_month),
+      sub: ' ',
+    },
+    {
+      label: 'Total Pendapatan',
+      value: rupiah(summary.all_time),
+      sub: `${summary.all_time_count} pembayaran`,
+    },
+    {
+      label: 'Pelanggan',
+      value: String(summary.active_subscribers),
+      sub: `aktif · ${summary.trialing} masa percobaan`,
+    },
+  ];
+
+  return (
+    <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+      {tiles.map((t) => (
+        <div key={t.label} className="rounded-xl border bg-muted/20 px-3.5 py-3">
+          <p className="text-[11px] font-medium text-muted-foreground">{t.label}</p>
+          <p className="mt-0.5 truncate text-lg font-bold tabular-nums">{t.value}</p>
+          <p className="text-[11px] text-muted-foreground">{t.sub}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // Set/clear a marketing deal on one merchant: % off, optionally scoped to a
 // single tier and/or interval (kosong = berlaku semua). 0% clears the deal.
 function DealForm() {
@@ -255,6 +316,7 @@ export function SubscriptionClient() {
 
   return (
     <div className="space-y-4">
+      <RevenueStats />
       <DealForm />
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex gap-1.5">
