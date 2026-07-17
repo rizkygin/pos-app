@@ -103,6 +103,20 @@ export async function publicRoutes(app: FastifyInstance) {
     return { outlet, products };
   });
 
+  // Lightweight, UNLIMITED outlet id+updatedAt list for the frontend sitemap
+  // (get-all-outlet above is a search/browse list capped at 10 — wrong shape
+  // for enumerating every page that should exist in search results). Not
+  // filtered by is_open: that flag is real-time "open now" status, not
+  // whether the outlet's menu page is valid content — filtering by it would
+  // churn the sitemap in and out all day as outlets open/close.
+  app.get("/api/sitemap-outlets", async () => {
+    const rows = await db
+      .select({ id: outletsTable.id, updatedAt: outletsTable.updatedAt })
+      .from(outletsTable)
+      .where(isNull(outletsTable.deletedAt));
+    return { data: rows };
+  });
+
   app.get("/api/get-all-outlet", async (request) => {
     const { search } = request.query as { search?: string };
 

@@ -14,12 +14,31 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const SITE_NAME = "Ulun Pesan";
+const DESCRIPTION =
+  "Ulun Pesan — aplikasi kasir (POS) dan pemesanan online untuk usaha lokal. Kelola penjualan, stok, faktur, dan langganan pelanggan dalam satu aplikasi, lengkap dengan pengantaran kurir.";
+
 export const metadata: Metadata = {
   metadataBase: new URL("https://ulunpesan.com"),
-  title: "Ulun Pesan",
-  description: "Believe with the local",
+  title: {
+    default: `${SITE_NAME} — Aplikasi Kasir & Pemesanan Online untuk Usaha Lokal`,
+    template: `%s | ${SITE_NAME}`,
+  },
+  description: DESCRIPTION,
+  keywords: [
+    "aplikasi kasir",
+    "point of sale",
+    "POS UMKM",
+    "pemesanan online",
+    "kasir online",
+    "manajemen stok",
+    "Ulun Pesan",
+  ],
+  alternates: {
+    canonical: "/",
+  },
   appleWebApp: {
-    title: "Ulun Pesan",
+    title: SITE_NAME,
     statusBarStyle: "default",
   },
   icons: {
@@ -27,16 +46,18 @@ export const metadata: Metadata = {
     apple: "/icons/apple-touch-icon.png",
   },
   openGraph: {
-    title: "Ulun Pesan",
-    description: "Believe with the local",
+    type: "website",
+    locale: "id_ID",
+    title: `${SITE_NAME} — Aplikasi Kasir & Pemesanan Online untuk Usaha Lokal`,
+    description: DESCRIPTION,
     url: "https://ulunpesan.com",
-    siteName: "Ulun Pesan",
+    siteName: SITE_NAME,
     images: ["/og-image.png"],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Ulun Pesan",
-    description: "Believe with the local",
+    title: SITE_NAME,
+    description: DESCRIPTION,
     images: ["/og-image.png"],
   },
 };
@@ -52,11 +73,35 @@ export default function RootLayout({
 }>) {
   return (
     <html
-      lang="en"
+      lang="id"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
       suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col">
+        {/* Organization + WebSite JSON-LD: lets Google render a richer result
+            (logo, sitelinks searchbox) instead of a plain blue link. */}
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify({
+              "@context": "https://schema.org",
+              "@graph": [
+                {
+                  "@type": "Organization",
+                  name: "Ulun Pesan",
+                  url: "https://ulunpesan.com",
+                  logo: "https://ulunpesan.com/icons/icon-512x512.png",
+                },
+                {
+                  "@type": "WebSite",
+                  name: "Ulun Pesan",
+                  url: "https://ulunpesan.com",
+                  inLanguage: "id-ID",
+                },
+              ],
+            }),
+          }}
+        />
         <RegisterServiceWorker />
         {children}
       </body>

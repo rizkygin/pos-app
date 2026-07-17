@@ -1,3 +1,4 @@
+import type { Metadata } from "next"
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 import { MessageCircle } from "lucide-react"
 import { getSession } from "@/lib/auth"
@@ -11,6 +12,13 @@ import { AppShell } from '@/components/app-shell';
 import { AppSidebarHeader } from "@/components/app-sidebar-header"
 import { SubscriptionWarningBanner } from "@/components/subscription-warning-banner"
 
+// Private, authenticated area — never index. robots.ts also disallows
+// crawling it, but noindex here is the real guarantee (a disallowed page can
+// still get indexed by URL alone if linked from elsewhere; noindex actively
+// removes it).
+export const metadata: Metadata = {
+    robots: { index: false, follow: false },
+}
 
 const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
 

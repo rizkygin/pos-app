@@ -1,10 +1,50 @@
+import type { Metadata } from "next";
 import { serverFetch } from "@/lib/server-fetch";
+import { resolveOutletImage } from "@/lib/image-src";
 import { MenuClient } from "./menu-client";
+
+type Params = { outlet_id: string };
+
+// Per-outlet SEO: this page (not the homepage) is what people actually search
+// for — "<nama warung> <kota>". Reuses the same fetch as the page body;
+// Next.js dedupes identical fetches within one request.
+export async function generateMetadata({
+    params,
+}: {
+    params: Promise<Params>;
+}): Promise<Metadata> {
+    const { outlet_id } = await params;
+    const res = await serverFetch(`/api/get-menu?outlet_id=${outlet_id}`);
+    const { outlet } = res.ok ? await res.json() : { outlet: null };
+    if (!outlet) return { title: "Menu Tidak Ditemukan" };
+
+    const title = `${outlet.name} — Pesan Online`;
+    const description = `Pesan dari ${outlet.name} di ${outlet.address ?? "sekitar Anda"} lewat Ulun Pesan. Lihat menu, harga, dan pesan langsung dari HP.`;
+    const image = resolveOutletImage(outlet.avatar);
+
+    return {
+        title,
+        description,
+        alternates: { canonical: `/menu/${outlet_id}` },
+        openGraph: {
+            title,
+            description,
+            url: `/menu/${outlet_id}`,
+            images: [image],
+        },
+        twitter: {
+            card: "summary_large_image",
+            title,
+            description,
+            images: [image],
+        },
+    };
+}
 
 export default async function MenuPage({
     params,
 }: {
-    params: Promise<{ outlet_id: string }>;
+    params: Promise<Params>;
 }) {
     const { outlet_id } = await params;
 
