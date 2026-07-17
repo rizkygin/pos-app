@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "../db";
-import { adminsTable, customersTable, couriersTable, outletsTable } from "../db/schema";
+import { adminsTable, customersTable, couriersTable, outletsTable, employeesTable } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 
@@ -27,6 +27,26 @@ export async function meRoutes(app: FastifyInstance) {
     for (const probe of probes) {
       const data = await probe.row();
       if (data) return reply.send({ role: probe.role, data });
+    }
+
+    // Fifth role: an ACTIVE outlet employee. data carries the permission map +
+    // outlet so the frontend can gate the sidebar/pages without extra calls.
+    const [employment] = await db
+      .select({ employee: employeesTable, outlet: outletsTable })
+      .from(employeesTable)
+      .innerJoin(outletsTable, eq(outletsTable.id, employeesTable.outlet_id))
+      .where(and(eq(employeesTable.user_id, userId), eq(employeesTable.is_active, true)))
+      .limit(1);
+    if (employment) {
+      return reply.send({
+        role: "employee",
+        data: {
+          id: employment.employee.id,
+          outlet_id: employment.outlet.id,
+          outlet_name: employment.outlet.name,
+          permissions: employment.employee.permissions ?? {},
+        },
+      });
     }
 
     return reply.send({ role: null, data: null });

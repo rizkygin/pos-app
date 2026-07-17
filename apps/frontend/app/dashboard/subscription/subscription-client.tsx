@@ -24,6 +24,7 @@ import {
   BarChart3,
   FileBarChart,
   XCircle,
+  UsersRound,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -38,6 +39,7 @@ type Plan = {
   trial_days: number;
   features: {
     maxOutlets?: number | null;
+    maxEmployees?: number;
     desktopCashier?: boolean;
     customerCanOrder?: boolean;
     salesInvoice?: boolean;
@@ -607,6 +609,9 @@ export function SubscriptionClient() {
                   <ul className="mt-4 flex-1 space-y-2 text-xs">
                     <FeatureRow ok icon={Store}>
                       {f.maxOutlets == null ? 'Outlet tanpa batas' : `${f.maxOutlets} outlet`}
+                    </FeatureRow>
+                    <FeatureRow ok={(f.maxEmployees ?? 0) > 0} icon={UsersRound}>
+                      {(f.maxEmployees ?? 0) > 0 ? `${f.maxEmployees} akun karyawan` : 'Akun karyawan'}
                     </FeatureRow>
                     <FeatureRow ok={!!f.customerCanOrder} icon={Smartphone}>
                       Pelanggan order online

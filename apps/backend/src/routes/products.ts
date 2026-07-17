@@ -17,6 +17,7 @@ import {
 } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
+import { getOutletAccess, requireOutletAccess } from "../lib/outlet-access";
 
 const UPLOADS_ROOT = path.join(process.cwd(), "uploads");
 const PRODUCTS_DIR = path.join(UPLOADS_ROOT, "products");
@@ -73,13 +74,12 @@ export async function productRoutes(app: FastifyInstance) {
     const session = await requireUser(request, reply);
     if (!session) return;
 
-    const [outlet] = await db
-      .select()
-      .from(outletsTable)
-      .where(eq(outletsTable.user_id, session.user.id))
-      .limit(1);
-
-    if (!outlet) return reply.send({ outlet: null, products: [] });
+    // Owner or ANY active employee: this is the read-only outlet+product list
+    // that every permitted page needs (cashier, faktur, stok). Mutations below
+    // require the 'products' permission explicitly.
+    const access = await getOutletAccess(session.user.id);
+    if (!access) return reply.send({ outlet: null, products: [] });
+    const outlet = access.outlet;
 
     const products = await db
       .select()
@@ -95,7 +95,8 @@ export async function productRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/products", async (request, reply) => {
-    if (!(await requireUser(request, reply))) return;
+    const access = await requireOutletAccess(request, reply, "products");
+    if (!access) return;
     try {
       const data = request.body as AddProductInput;
       const id = crypto.randomUUID();
@@ -107,7 +108,8 @@ export async function productRoutes(app: FastifyInstance) {
         price: service?.price ?? data.price,
         price_mark_down: service?.price_mark_down ?? data.price_mark_down,
         buying_price: data.buying_price,
-        outlet_id: data.outlet_id,
+        // Pinned to the caller's outlet — body.outlet_id is ignored.
+        outlet_id: access.outlet.id,
         category: data.category,
         description: data.description || "",
         unit: data.unit || "pcs",
@@ -127,7 +129,8 @@ export async function productRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/products/upload-image", async (request, reply) => {
-    if (!(await requireUser(request, reply))) return;
+    const access = await requireOutletAccess(request, reply, "products");
+    if (!access) return;
     try {
       const file = await request.file();
       if (!file) return reply.send({ success: false, message: "No image file provided." });
@@ -150,7 +153,8 @@ export async function productRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/products/remove-image", async (request, reply) => {
-    if (!(await requireUser(request, reply))) return;
+    const access = await requireOutletAccess(request, reply, "products");
+    if (!access) return;
     try {
       const { imageUrl } = (request.body as { imageUrl?: string }) ?? {};
       if (!imageUrl || !imageUrl.startsWith(PRODUCTS_URL_PREFIX)) {
@@ -189,7 +193,8 @@ export async function productRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/products/remove-image-db", async (request, reply) => {
-    if (!(await requireUser(request, reply))) return;
+    const access = await requireOutletAccess(request, reply, "products");
+    if (!access) return;
     try {
       const { imageUrl } = (request.body as { imageUrl?: string }) ?? {};
       await db
@@ -210,7 +215,8 @@ export async function productRoutes(app: FastifyInstance) {
   // nothing references is hard-deleted (image file included). Its own recipe
   // rows cascade with the row; an ingredient in use never reaches this path.
   app.post("/api/products/delete", async (request, reply) => {
-    if (!(await requireUser(request, reply))) return;
+    const access = await requireOutletAccess(request, reply, "products");
+    if (!access) return;
     try {
       const { productId } = (request.body as { productId?: string }) ?? {};
       if (!productId) return reply.send({ success: false, message: "productId is required" });
@@ -220,7 +226,8 @@ export async function productRoutes(app: FastifyInstance) {
         .from(productsTable)
         .where(eq(productsTable.id, productId))
         .limit(1);
-      if (!product) return reply.send({ success: false, message: "Product not found" });
+      if (!product || product.outlet_id !== access.outlet.id)
+        return reply.send({ success: false, message: "Product not found" });
 
       const referenced = (
         await Promise.all([
@@ -260,7 +267,8 @@ export async function productRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/products/update", async (request, reply) => {
-    if (!(await requireUser(request, reply))) return;
+    const access = await requireOutletAccess(request, reply, "products");
+    if (!access) return;
     try {
       const { productId, data } = (request.body as {
         productId?: string;
@@ -269,6 +277,14 @@ export async function productRoutes(app: FastifyInstance) {
       if (!productId || !data) {
         return reply.send({ success: false, message: "productId and data are required" });
       }
+
+      const [existing] = await db
+        .select({ outlet_id: productsTable.outlet_id })
+        .from(productsTable)
+        .where(eq(productsTable.id, productId))
+        .limit(1);
+      if (!existing || existing.outlet_id !== access.outlet.id)
+        return reply.send({ success: false, message: "Product not found" });
 
       const service = serviceProductFields(data);
 
@@ -304,15 +320,14 @@ export async function productRoutes(app: FastifyInstance) {
 
   // Recipe rows + ingredient display info for the product-form editor.
   app.get("/api/products/:id/recipe", async (request, reply) => {
-    const session = await requireUser(request, reply);
-    if (!session) return;
+    const access = await requireOutletAccess(request, reply, "products");
+    if (!access) return;
     const productId = (request.params as { id: string }).id;
 
     const [product] = await db
       .select({ outlet_id: productsTable.outlet_id, track_stock: productsTable.track_stock })
       .from(productsTable)
-      .innerJoin(outletsTable, eq(outletsTable.id, productsTable.outlet_id))
-      .where(and(eq(productsTable.id, productId), eq(outletsTable.user_id, session.user.id)))
+      .where(and(eq(productsTable.id, productId), eq(productsTable.outlet_id, access.outlet.id)))
       .limit(1);
     if (!product) return reply.status(404).send({ success: false, message: "Product not found" });
 
@@ -335,8 +350,8 @@ export async function productRoutes(app: FastifyInstance) {
   // Replace-on-save: the submitted list becomes the whole recipe (empty list
   // clears it). Rejected for track_stock products — one stock mode at a time.
   app.put("/api/products/:id/recipe", async (request, reply) => {
-    const session = await requireUser(request, reply);
-    if (!session) return;
+    const access = await requireOutletAccess(request, reply, "products");
+    if (!access) return;
     const productId = (request.params as { id: string }).id;
     const body = (request.body as { items?: { ingredient_id?: string; qty?: number | string }[] }) ?? {};
     const items = Array.isArray(body.items) ? body.items : [];
@@ -344,8 +359,7 @@ export async function productRoutes(app: FastifyInstance) {
     const [product] = await db
       .select({ outlet_id: productsTable.outlet_id, track_stock: productsTable.track_stock })
       .from(productsTable)
-      .innerJoin(outletsTable, eq(outletsTable.id, productsTable.outlet_id))
-      .where(and(eq(productsTable.id, productId), eq(outletsTable.user_id, session.user.id)))
+      .where(and(eq(productsTable.id, productId), eq(productsTable.outlet_id, access.outlet.id)))
       .limit(1);
     if (!product) return reply.status(404).send({ success: false, message: "Product not found" });
     if (product.track_stock && items.length > 0) {

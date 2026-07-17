@@ -10,7 +10,7 @@ export const getRole = async () => {
     const me = await res.json();
     if (!me?.role) return false;
 
-    return { role: me.role as "admin" | "customer" | "courier" | "owner", data: me.data };
+    return { role: me.role as "admin" | "customer" | "courier" | "owner" | "employee", data: me.data };
 };
 
 // The caller's outlet. Returns `{ result }` (array) to preserve the previous

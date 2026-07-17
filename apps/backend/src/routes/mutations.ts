@@ -14,6 +14,7 @@ import {
 } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
+import { requireOutletAccess } from "../lib/outlet-access";
 import { applySaleStockOut } from "../lib/stock";
 
 // Transaction client type (drizzle's tx has the same query builder as `db`).
@@ -54,10 +55,14 @@ async function addPosToCashflowin(tx: Tx, outletId: number, total: number) {
 export async function mutationRoutes(app: FastifyInstance) {
   app.post("/api/add-order-detail", async (request, reply) => {
     try {
-      const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-      if (!session?.user) return reply.status(401).send({ error: "Unauthorized" });
+      // Owner or employee with the cashier permission. The outlet comes from
+      // the caller's access — body.outletId is ignored (it let any session
+      // write orders into any outlet).
+      const access = await requireOutletAccess(request, reply, "cashier");
+      if (!access) return;
 
       const body = (request.body as any) || {};
+      body.outletId = access.outlet.id;
 
       // Find offline customer and courier (hardcoded for now, can be made dynamic)
       const EMAIL = "rizkygin1@gmail.com";
@@ -138,12 +143,12 @@ export async function mutationRoutes(app: FastifyInstance) {
 
   app.post("/api/add-pos-to-cashflowin", async (request, reply) => {
     try {
-      const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-      if (!session?.user) return reply.status(401).send({ error: "Unauthorized" });
+      const access = await requireOutletAccess(request, reply, "cashier");
+      if (!access) return;
 
       const body = (request.body as any) || {};
 
-      await db.transaction((tx) => addPosToCashflowin(tx, body.outletId, body.total));
+      await db.transaction((tx) => addPosToCashflowin(tx, access.outlet.id, body.total));
 
       return { success: true };
     } catch (error: any) {

@@ -25,10 +25,10 @@ const plans = [
 // to a tier's monthly and yearly plan. desktopCashier gates the native cashier
 // app; salesInvoice/purchaseInvoice/stock gate the Faktur & Stok suite.
 const featuresByTier: Record<string, Record<string, unknown>> = {
-  basic: { maxOutlets: 1, desktopCashier: false, customerCanOrder: true, salesInvoice: false, purchaseInvoice: false, stock: false, cashflow: true, report: true, reportInvoice: false },
-  pro: { maxOutlets: 1, desktopCashier: false, customerCanOrder: true, salesInvoice: true, purchaseInvoice: true, stock: false, cashflow: true, report: true, reportInvoice: false },
-  max_lite: { maxOutlets: 2, desktopCashier: true, customerCanOrder: true, salesInvoice: true, purchaseInvoice: true, stock: true, cashflow: true, report: true, reportInvoice: true },
-  max: { maxOutlets: 3, desktopCashier: true, customerCanOrder: true, salesInvoice: true, purchaseInvoice: true, stock: true, cashflow: true, report: true, reportInvoice: true },
+  basic: { maxOutlets: 1, maxEmployees: 1, desktopCashier: false, customerCanOrder: true, salesInvoice: false, purchaseInvoice: false, stock: false, cashflow: true, report: true, reportInvoice: false },
+  pro: { maxOutlets: 1, maxEmployees: 3, desktopCashier: false, customerCanOrder: true, salesInvoice: true, purchaseInvoice: true, stock: false, cashflow: true, report: true, reportInvoice: false },
+  max_lite: { maxOutlets: 2, maxEmployees: 5, desktopCashier: true, customerCanOrder: true, salesInvoice: true, purchaseInvoice: true, stock: true, cashflow: true, report: true, reportInvoice: true },
+  max: { maxOutlets: 3, maxEmployees: 5, desktopCashier: true, customerCanOrder: true, salesInvoice: true, purchaseInvoice: true, stock: true, cashflow: true, report: true, reportInvoice: true },
 };
 
 // PLACEHOLDER trial length (same for all plans). Adjust per tier if desired.

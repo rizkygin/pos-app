@@ -31,19 +31,22 @@ const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
     const isOwner = role && role.role === 'owner';
     const isCourier = role && role.role === 'courier';
     const isAdmin = role && role.role === 'admin';
-    const isCustomer = !isOwner && !isCourier && !isAdmin;
+    const isEmployee = role && role.role === 'employee';
+    const employeePermissions: Record<string, boolean> =
+        isEmployee ? ((role.data?.permissions as Record<string, boolean>) ?? {}) : {};
+    const isCustomer = !isOwner && !isCourier && !isAdmin && !isEmployee;
 
     return (
         <>
             <AppShell variant="sidebar">
-                <AppSidebar isOwner={isOwner} isCourier={isCourier} isCustomer={isCustomer} isAdmin={isAdmin} />
+                <AppSidebar isOwner={isOwner} isCourier={isCourier} isCustomer={isCustomer} isAdmin={isAdmin} isEmployee={isEmployee} employeePermissions={employeePermissions} />
 
                 <AppContent variant="sidebar" className="h-svh overflow-x-hidden overflow-y-auto">
                     <header className="animated-gradient header-shine sticky top-0 z-30 flex h-12 shrink-0 items-center gap-2 overflow-hidden border-b border-white/10 px-3 shadow-sm md:h-10">
                         <SidebarTrigger className="relative z-10 size-11 text-amber-50 hover:bg-white/15 hover:text-white md:size-7" />
                         <span className="relative z-10 flex items-center gap-2 text-sm font-semibold text-amber-50 drop-shadow-sm">
                             <span className="inline-block size-1.5 animate-pulse rounded-full bg-emerald-300 shadow-[0_0_8px_rgba(110,231,183,0.9)]" />
-                            {isAdmin ? 'Hello Admin' : isOwner ? 'Dashboard' : isCourier ? 'Kurir' : 'Dashboard'}
+                            {isAdmin ? 'Hello Admin' : isOwner ? 'Dashboard' : isCourier ? 'Kurir' : isEmployee ? 'Karyawan' : 'Dashboard'}
                         </span>
                     </header>
 

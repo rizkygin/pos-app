@@ -32,6 +32,7 @@ import {
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 import { getOutletByUserId } from "../lib/outlet-id";
+import { getOutletAccess, hasPermission } from "../lib/outlet-access";
 import { getUTCTime } from "../lib/timezone";
 import { getCurrentAdSlot } from "../lib/utils/ad-schedule";
 import { getCourierRatingInfo } from "../lib/utils/courier-availability";
@@ -46,7 +47,8 @@ export async function dashboardRoutes(app: FastifyInstance) {
     const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
     if (!session?.user) return reply.status(401).send({ ok: false });
 
-    const outlet = await getOutletByUserId(session.user.id);
+    const access = await getOutletAccess(session.user.id);
+    const outlet = access && hasPermission(access, "reports") ? access.outlet : null;
     if (!outlet) return reply.send({ ok: false });
     const outletId = outlet.id;
 

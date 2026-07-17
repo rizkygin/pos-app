@@ -16,27 +16,23 @@ import {
 } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
-import { getOutletByUserId } from "../lib/outlet-id";
+import { requireOutletAccess, type EmployeePermission } from "../lib/outlet-access";
 import { applySaleStockOut } from "../lib/stock";
 
 // Cashflow categories used when an invoice is paid (seeded in CATEGORY_OUT/IN).
 const PURCHASE_CASH_CATEGORY = "Pembelian stok barang dagang";
 const SALES_CASH_CATEGORY = "Penjualan produk/jasa";
 
-// Resolve the authenticated owner's outlet, or send the matching error + return
-// null. Mirrors the getSession -> getOutletByUserId pattern used across routes.
-async function getOwnerOutlet(request: FastifyRequest, reply: FastifyReply) {
-  const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-  if (!session?.user) {
-    reply.status(401).send({ success: false, error: "Unauthorized" });
-    return null;
-  }
-  const outlet = await getOutletByUserId(session.user.id);
-  if (!outlet) {
-    reply.status(403).send({ success: false, error: "No outlet found" });
-    return null;
-  }
-  return outlet;
+// Resolve the caller's outlet (owner OR active employee holding `perm`), or
+// send the matching error + return null. Owners implicitly hold every
+// permission; see lib/outlet-access.ts.
+async function getOwnerOutlet(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  perm: EmployeePermission,
+) {
+  const access = await requireOutletAccess(request, reply, perm);
+  return access ? access.outlet : null;
 }
 
 type ItemInput = {
@@ -181,7 +177,7 @@ async function nextInvoiceNumber(outletId: number, type: "purchase" | "sales") {
 export async function invoiceRoutes(app: FastifyInstance) {
   // ----------------------------------------------------------------- suppliers
   app.get("/api/suppliers", async (request, reply) => {
-    const outlet = await getOwnerOutlet(request, reply);
+    const outlet = await getOwnerOutlet(request, reply, "purchaseInvoice");
     if (!outlet) return;
     const rows = await db
       .select()
@@ -192,7 +188,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/suppliers", async (request, reply) => {
-    const outlet = await getOwnerOutlet(request, reply);
+    const outlet = await getOwnerOutlet(request, reply, "purchaseInvoice");
     if (!outlet) return;
     const body = request.body as {
       name?: string;
@@ -217,7 +213,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
   });
 
   app.patch("/api/suppliers/:id", async (request, reply) => {
-    const outlet = await getOwnerOutlet(request, reply);
+    const outlet = await getOwnerOutlet(request, reply, "purchaseInvoice");
     if (!outlet) return;
     const id = Number((request.params as { id: string }).id);
     const body = request.body as Partial<{ name: string; phone: string; email: string; address: string; note: string }>;
@@ -237,7 +233,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
   });
 
   app.delete("/api/suppliers/:id", async (request, reply) => {
-    const outlet = await getOwnerOutlet(request, reply);
+    const outlet = await getOwnerOutlet(request, reply, "purchaseInvoice");
     if (!outlet) return;
     const id = Number((request.params as { id: string }).id);
     const [row] = await db
@@ -251,7 +247,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
 
   // -------------------------------------------------------- purchase invoices
   app.get("/api/purchase-invoices", async (request, reply) => {
-    const outlet = await getOwnerOutlet(request, reply);
+    const outlet = await getOwnerOutlet(request, reply, "purchaseInvoice");
     if (!outlet) return;
     const { status } = request.query as { status?: string };
     const rows = await db
@@ -282,7 +278,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/purchase-invoices/:id", async (request, reply) => {
-    const outlet = await getOwnerOutlet(request, reply);
+    const outlet = await getOwnerOutlet(request, reply, "purchaseInvoice");
     if (!outlet) return;
     const id = Number((request.params as { id: string }).id);
     const [invoice] = await db
@@ -305,7 +301,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/purchase-invoices", async (request, reply) => {
-    const outlet = await getOwnerOutlet(request, reply);
+    const outlet = await getOwnerOutlet(request, reply, "purchaseInvoice");
     if (!outlet) return;
     const body = request.body as {
       supplier_id?: number | null;
@@ -376,7 +372,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
   // Post a draft: write stock-IN movements + bump products.stock. Idempotent —
   // only a draft can be posted.
   app.post("/api/purchase-invoices/:id/post", async (request, reply) => {
-    const outlet = await getOwnerOutlet(request, reply);
+    const outlet = await getOwnerOutlet(request, reply, "purchaseInvoice");
     if (!outlet) return;
     const id = Number((request.params as { id: string }).id);
 
@@ -444,7 +440,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
   // Pay (full or partial): record a cash-OUT (detail + cashFlows link) and update
   // amount_paid/status. Requires a posted/partial invoice.
   app.post("/api/purchase-invoices/:id/pay", async (request, reply) => {
-    const outlet = await getOwnerOutlet(request, reply);
+    const outlet = await getOwnerOutlet(request, reply, "purchaseInvoice");
     if (!outlet) return;
     const id = Number((request.params as { id: string }).id);
     const body = request.body as { amount?: number | string };
@@ -481,7 +477,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
   // Void: reverse stock movements (and the linked cashflow, if paid). Allowed
   // from posted/partial/paid; a draft is just deleted-equivalent (set void).
   app.post("/api/purchase-invoices/:id/void", async (request, reply) => {
-    const outlet = await getOwnerOutlet(request, reply);
+    const outlet = await getOwnerOutlet(request, reply, "purchaseInvoice");
     if (!outlet) return;
     const id = Number((request.params as { id: string }).id);
 
@@ -556,7 +552,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
   // carries the outlet-wide late aggregates (count + outstanding) so the
   // client's warning banner doesn't depend on which page/filter is loaded.
   app.get("/api/sales-invoices", async (request, reply) => {
-    const outlet = await getOwnerOutlet(request, reply);
+    const outlet = await getOwnerOutlet(request, reply, "salesInvoice");
     if (!outlet) return;
     const { status, q, late, page, limit } = request.query as {
       status?: string;
@@ -633,7 +629,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/sales-invoices/:id", async (request, reply) => {
-    const outlet = await getOwnerOutlet(request, reply);
+    const outlet = await getOwnerOutlet(request, reply, "salesInvoice");
     if (!outlet) return;
     const id = Number((request.params as { id: string }).id);
     const [invoice] = await db
@@ -647,7 +643,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/sales-invoices", async (request, reply) => {
-    const outlet = await getOwnerOutlet(request, reply);
+    const outlet = await getOwnerOutlet(request, reply, "salesInvoice");
     if (!outlet) return;
     const body = request.body as {
       customer_id?: number | null;
@@ -716,7 +712,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
   // totals. Only a draft may be edited (posted/paid invoices are immutable —
   // void and recreate instead).
   app.put("/api/sales-invoices/:id", async (request, reply) => {
-    const outlet = await getOwnerOutlet(request, reply);
+    const outlet = await getOwnerOutlet(request, reply, "salesInvoice");
     if (!outlet) return;
     const id = Number((request.params as { id: string }).id);
     const body = request.body as {
@@ -792,7 +788,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
 
   // Post: stock OUT. Overselling is allowed but reported in `warnings`.
   app.post("/api/sales-invoices/:id/post", async (request, reply) => {
-    const outlet = await getOwnerOutlet(request, reply);
+    const outlet = await getOwnerOutlet(request, reply, "salesInvoice");
     if (!outlet) return;
     const id = Number((request.params as { id: string }).id);
     try {
@@ -851,7 +847,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
 
   // Pay: record cash IN (detail + cashFlows) and update amount_paid/status.
   app.post("/api/sales-invoices/:id/pay", async (request, reply) => {
-    const outlet = await getOwnerOutlet(request, reply);
+    const outlet = await getOwnerOutlet(request, reply, "salesInvoice");
     if (!outlet) return;
     const id = Number((request.params as { id: string }).id);
     const body = request.body as { amount?: number | string };
@@ -885,7 +881,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
 
   // Void: restore stock (reverse the OUT movements) and remove the cash-IN.
   app.post("/api/sales-invoices/:id/void", async (request, reply) => {
-    const outlet = await getOwnerOutlet(request, reply);
+    const outlet = await getOwnerOutlet(request, reply, "salesInvoice");
     if (!outlet) return;
     const id = Number((request.params as { id: string }).id);
     try {
@@ -954,7 +950,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
   // Period (by issue_date) applies to the billed KPIs; outstanding (piutang/
   // hutang) and late are point-in-time; trend is always the last 6 months.
   app.get("/api/invoices/report", async (request, reply) => {
-    const outlet = await getOwnerOutlet(request, reply);
+    const outlet = await getOwnerOutlet(request, reply, "reports");
     if (!outlet) return;
     const { period = "30d" } = request.query as { period?: string };
 
@@ -1087,7 +1083,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
   // count. NO cashflow is created — the cash already left at purchase; spoilage
   // is inventory shrinkage, not a new cash movement (its value shows as lower HPP).
   app.post("/api/stock/opname", async (request, reply) => {
-    const outlet = await getOwnerOutlet(request, reply);
+    const outlet = await getOwnerOutlet(request, reply, "stock");
     if (!outlet) return;
     const body = request.body as {
       note?: string;
@@ -1140,7 +1136,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
   // the payload/scan stays bounded — backed by the
   // stock_movements_outlet_reason_created_idx index. `from`/`to` are YYYY-MM-DD.
   app.get("/api/stock/opname-history", async (request, reply) => {
-    const outlet = await getOwnerOutlet(request, reply);
+    const outlet = await getOwnerOutlet(request, reply, "stock");
     if (!outlet) return;
     const { from, to } = request.query as { from?: string; to?: string };
 
@@ -1178,7 +1174,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
   // number when one caused it. Outlet scoping comes from the movement rows
   // themselves, so a foreign productId simply returns nothing.
   app.get("/api/stock/movements", async (request, reply) => {
-    const outlet = await getOwnerOutlet(request, reply);
+    const outlet = await getOwnerOutlet(request, reply, "stock");
     if (!outlet) return;
     const { productId, limit } = request.query as { productId?: string; limit?: string };
     if (!productId) return reply.status(400).send({ success: false, error: "Missing productId" });

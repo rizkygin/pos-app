@@ -188,6 +188,13 @@ const ownerNavItems: NavItem[] = [
     iconBg: 'bg-rose-100 dark:bg-rose-950',
     iconColor: 'text-rose-600 dark:text-rose-400',
   },
+  {
+    name: 'Karyawan',
+    url: '/dashboard/employees',
+    icon: Users,
+    iconBg: 'bg-teal-100 dark:bg-teal-950',
+    iconColor: 'text-teal-600 dark:text-teal-400',
+  },
 ];
 
 const ratingNavItem: NavItem = {
@@ -374,17 +381,45 @@ export function AppSidebar({
   isCourier = false,
   isCustomer = false,
   isAdmin = false,
+  isEmployee = false,
+  employeePermissions = {},
 }: {
   isOwner?: boolean;
   isCourier?: boolean;
   isCustomer?: boolean;
   isAdmin?: boolean;
+  isEmployee?: boolean;
+  employeePermissions?: Record<string, boolean>;
 }) {
   const router = useRouter();
   const currentUrl = useCurrentUrl();
   const { data: session } = useSession();
   const ownerOnlyNames = new Set(['Product', 'Laporan', 'Kasir', 'Buku Kas']);
-  const visibleNavMain = isOwner
+  // Employees see exactly the pages their permission map allows (set by the
+  // owner in /dashboard/employees). Keys mirror backend EMPLOYEE_PERMISSIONS.
+  const can = (perm: string) => employeePermissions?.[perm] === true;
+  const employeeNavPerm: Record<string, string> = {
+    Dashboard: 'reports',
+    Product: 'products',
+    Laporan: 'reports',
+    Kasir: 'cashier',
+    'Buku Kas': 'cashflow',
+  };
+  const employeeInvoiceSubPerm: Record<string, string> = {
+    'Faktur Penjualan': 'salesInvoice',
+    'Faktur Pembelian': 'purchaseInvoice',
+    'Laporan Faktur': 'reports',
+    Stok: 'stock',
+    Supplier: 'purchaseInvoice',
+  };
+  const employeeInvoiceItems = invoiceNavSubItems.filter((i) =>
+    can(employeeInvoiceSubPerm[i.name] ?? ''),
+  );
+  const visibleNavMain = isEmployee
+    ? navMain.filter(
+        (item) => employeeNavPerm[item.name] && can(employeeNavPerm[item.name]),
+      )
+    : isOwner
     ? navMain.filter((item) => item.url !== '/dashboard/order')
     : isCourier
       ? navMain.filter(
@@ -529,13 +564,19 @@ export function AppSidebar({
                     isActive={ratingNavItem.url === currentUrl}
                   />
                 )}
-                {isOwner && (
+                {isEmployee && can('activeOrders') && (
+                  <NavRow
+                    item={ownerNavItems[0]}
+                    isActive={ownerNavItems[0].url === currentUrl}
+                  />
+                )}
+                {(isOwner || (isEmployee && employeeInvoiceItems.length > 0)) && (
                   <NavCollapsible
                     label="Faktur & Stok"
                     icon={FileText}
                     iconBg="bg-teal-100 dark:bg-teal-950"
                     iconColor="text-teal-600 dark:text-teal-400"
-                    items={invoiceNavSubItems}
+                    items={isEmployee ? employeeInvoiceItems : invoiceNavSubItems}
                     currentUrl={currentUrl}
                   />
                 )}

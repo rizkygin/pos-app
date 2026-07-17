@@ -696,6 +696,41 @@ export const recipeItemsTable = pgTable(
 );
 
 // ============================================================================
+// Outlet employees ("Karyawan"): staff accounts an OWNER creates for their
+// outlet. An employee is a real users-row (own login) linked here with a
+// page-level permission map the owner controls. One employment per account
+// (user_id unique) keeps role resolution unambiguous. The number of ACTIVE
+// employees is capped by the subscription plan's features.maxEmployees.
+// Billing, employee management, and outlet settings are owner-only by
+// construction — no permission key can grant them.
+// ============================================================================
+export const employeesTable = pgTable(
+  'employees',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    outlet_id: integer('outlet_id')
+      .notNull()
+      .references(() => outletsTable.id),
+    user_id: text('user_id')
+      .notNull()
+      .references(() => usersTable.id),
+    // Page-level toggles, e.g. { cashier: true, reports: false } — keys are
+    // the EMPLOYEE_PERMISSIONS list in lib/outlet-access.ts. Missing key =
+    // no access.
+    permissions: json('permissions')
+      .$type<Record<string, boolean>>()
+      .notNull()
+      .default({}),
+    is_active: boolean('is_active').notNull().default(true),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex('employees_user_id_uq').on(t.user_id),
+    index('employees_outlet_idx').on(t.outlet_id),
+  ],
+);
+
+// ============================================================================
 // SaaS subscription billing (platform-level — this is Ulun Pesan's OWN revenue,
 // deliberately separate from the merchant's cashflow/invoices tables).
 //
