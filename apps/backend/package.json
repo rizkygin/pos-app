@@ -8,6 +8,7 @@
     "start": "node dist/server.js",
     "db:migrate": "tsx src/db/migrate.ts",
     "db:seed": "tsx src/db/seed.ts",
+    "db:seed-plans": "tsx src/db/seed-plans.ts",
     "db:reset": "tsx src/db/reset.ts",
     "db:clear": "tsx src/db/clear-test-data.ts"
   },

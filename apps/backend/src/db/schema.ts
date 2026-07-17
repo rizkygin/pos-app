@@ -694,3 +694,306 @@ export const recipeItemsTable = pgTable(
     index('recipe_items_outlet_idx').on(table.outlet_id),
   ],
 );
+
+// ============================================================================
+// SaaS subscription billing (platform-level — this is Ulun Pesan's OWN revenue,
+// deliberately separate from the merchant's cashflow/invoices tables).
+//
+// Payment is MANUAL FIRST (merchant bank-transfers, our admin confirms), but the
+// schema is shaped so a Xendit gateway can slot in later WITHOUT a rewrite: the
+// manual bank-transfer columns and the (nullable) Xendit columns live side by
+// side on subscription_payments, and both paths converge on the same
+// "confirm payment -> extend period" transition. See [[project_railway_deploy]]
+// tenancy note: subscription is per ACCOUNT/OWNER (users.id), because one owner
+// can run several outlets that all share the one subscription.
+// ============================================================================
+
+// Tiers the merchant can subscribe to (gating limits live on subscription_plans
+// .features, read by the access middleware — built later).
+export const SUBSCRIPTION_TIER = pgEnum('subscription_tier', [
+  'basic',
+  'pro',
+  'max_lite',
+  'max',
+]);
+export const BILLING_INTERVAL = pgEnum('billing_interval', [
+  'monthly',
+  'yearly',
+]);
+export const SUBSCRIPTION_STATUS = pgEnum('subscription_status', [
+  'trialing',
+  'active',
+  'past_due',
+  'expired',
+  'canceled',
+]);
+// manual_transfer = merchant transfers + admin confirms (now).
+// xendit = hosted invoice / gateway settlement (later).
+export const SUBSCRIPTION_PAYMENT_METHOD = pgEnum(
+  'subscription_payment_method',
+  ['manual_transfer', 'xendit'],
+);
+// Covers both the manual flow (pending -> paid | rejected | expired) and the
+// Xendit flow (pending -> paid | expired | failed | refunded).
+export const SUBSCRIPTION_PAYMENT_STATUS = pgEnum(
+  'subscription_payment_status',
+  ['pending', 'paid', 'rejected', 'expired', 'failed', 'refunded'],
+);
+export const SUBSCRIPTION_ACTOR = pgEnum('subscription_actor', [
+  'system',
+  'admin',
+  'merchant',
+]);
+export const NOTIFICATION_CHANNEL = pgEnum('notification_channel', [
+  'email',
+  'whatsapp',
+  'in_app',
+]);
+export const NOTIFICATION_STATUS = pgEnum('notification_status', [
+  'pending',
+  'sent',
+  'failed',
+]);
+
+// A purchasable plan = one (tier × interval) row with its price + feature caps.
+export const subscriptionPlansTable = pgTable(
+  'subscription_plans',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    tier: SUBSCRIPTION_TIER('tier').notNull(),
+    interval: BILLING_INTERVAL('interval').notNull(),
+    name: varchar('name', { length: 100 }).notNull(),
+    // Base price in IDR. The amount a merchant actually transfers gets a small
+    // unique suffix at payment time (subscription_payments.unique_code).
+    price: numeric('price', { precision: 14, scale: 2 }).notNull(),
+    currency: varchar('currency', { length: 3 }).notNull().default('IDR'),
+    // Trial length granted on first subscribe (0 = no trial for this plan).
+    trial_days: integer('trial_days').notNull().default(0),
+    // Feature flags / usage caps this tier unlocks, read by the gating
+    // middleware. e.g. { "maxOutlets": 3, "desktopCashier": true }.
+    features: json('features')
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    is_active: boolean('is_active').notNull().default(true),
+    sort_order: integer('sort_order').notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex('subscription_plans_tier_interval_idx').on(t.tier, t.interval),
+  ],
+);
+
+// One subscription per account/owner. Access is granted while
+// now() < current_period_end (the gating middleware may add a grace window).
+export const subscriptionsTable = pgTable(
+  'subscriptions',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    // Per ACCOUNT/OWNER (a user may own several outlets) — hangs off users.id,
+    // NOT outlets.id. Middleware maps outlet -> outlets.user_id -> here.
+    user_id: text('user_id')
+      .notNull()
+      .references(() => usersTable.id),
+    plan_id: integer('plan_id').references(() => subscriptionPlansTable.id),
+    // Cached tier so gating doesn't join subscription_plans on every request.
+    tier: SUBSCRIPTION_TIER('tier'),
+    status: SUBSCRIPTION_STATUS('status').notNull().default('trialing'),
+    trial_ends_at: timestamp('trial_ends_at', { withTimezone: true }),
+    current_period_start: timestamp('current_period_start', {
+      withTimezone: true,
+    }),
+    current_period_end: timestamp('current_period_end', { withTimezone: true }),
+    // Merchant asked to stop renewing; access still runs until period_end.
+    cancel_at_period_end: boolean('cancel_at_period_end')
+      .notNull()
+      .default(false),
+    canceled_at: timestamp('canceled_at', { withTimezone: true }),
+    // Scheduled DOWNGRADE (Model 2): a confirmed lower-tier payment does not
+    // flip the tier immediately — the merchant keeps what they paid for until
+    // next_tier_at (the old period's end), when a lazy read applies next_* and
+    // clears them. Upgrades never sit here (they apply instantly, converting
+    // remaining value into bonus days at the new tier's daily rate).
+    next_plan_id: integer('next_plan_id').references(() => subscriptionPlansTable.id),
+    next_tier: SUBSCRIPTION_TIER('next_tier'),
+    next_tier_at: timestamp('next_tier_at', { withTimezone: true }),
+    // Marketing deal: percentage off, optionally scoped to one tier and/or one
+    // interval (NULL scope = applies to any). 0 = no deal. Applied at payment
+    // creation and snapshotted onto the payment row.
+    discount_pct: numeric('discount_pct', { precision: 5, scale: 2 })
+      .notNull()
+      .default('0'),
+    discount_tier: SUBSCRIPTION_TIER('discount_tier'),
+    discount_interval: BILLING_INTERVAL('discount_interval'),
+    discount_note: varchar('discount_note', { length: 255 }).default(''),
+    // Xendit-ready (nullable until the gateway migration): maps this account to
+    // a Xendit customer for hosted invoices / future recurring plans.
+    xendit_customer_id: varchar('xendit_customer_id', { length: 255 }),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex('subscriptions_user_id_idx').on(t.user_id),
+    index('subscriptions_status_period_idx').on(
+      t.status,
+      t.current_period_end,
+    ),
+  ],
+);
+
+// One row per payment attempt/renewal. Manual bank-transfer columns and the
+// (nullable) Xendit columns coexist so the gateway path reuses this table.
+export const subscriptionPaymentsTable = pgTable(
+  'subscription_payments',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    subscription_id: integer('subscription_id')
+      .notNull()
+      .references(() => subscriptionsTable.id),
+    // Denormalised owner for the admin queue / direct lookups.
+    user_id: text('user_id')
+      .notNull()
+      .references(() => usersTable.id),
+    plan_id: integer('plan_id')
+      .notNull()
+      .references(() => subscriptionPlansTable.id),
+    // Snapshots so a later plan price/def change can't rewrite history.
+    tier: SUBSCRIPTION_TIER('tier').notNull(),
+    interval: BILLING_INTERVAL('interval').notNull(),
+    currency: varchar('currency', { length: 3 }).notNull().default('IDR'),
+    // Base plan price...
+    amount: numeric('amount', { precision: 14, scale: 2 }).notNull(),
+    // Marketing-deal percentage applied to THIS payment (snapshot; the live
+    // deal lives on subscriptions). amount stays the base plan price.
+    discount_pct: numeric('discount_pct', { precision: 5, scale: 2 })
+      .notNull()
+      .default('0'),
+    // ...and the unique-amount matching trick: unique_code (e.g. 237) is added
+    // to the discounted price so admin can auto-match a bank transfer to THIS
+    // record. amount_due = discounted amount + unique_code = actual transfer.
+    unique_code: integer('unique_code').notNull().default(0),
+    amount_due: numeric('amount_due', { precision: 14, scale: 2 }).notNull(),
+    method: SUBSCRIPTION_PAYMENT_METHOD('method')
+      .notNull()
+      .default('manual_transfer'),
+    status: SUBSCRIPTION_PAYMENT_STATUS('status').notNull().default('pending'),
+    // The access window this payment grants; on confirm the subscription's
+    // current_period_end is set/extended to period_end.
+    period_start: timestamp('period_start', { withTimezone: true }),
+    period_end: timestamp('period_end', { withTimezone: true }),
+    // Set when an UPGRADE consumed this segment's remaining value (converted to
+    // bonus days on the new plan) — consumed segments never count twice.
+    converted_at: timestamp('converted_at', { withTimezone: true }),
+    // After this an unpaid pending payment is void (manual quote / Xendit invoice
+    // expiry).
+    expires_at: timestamp('expires_at', { withTimezone: true }),
+    paid_at: timestamp('paid_at', { withTimezone: true }),
+
+    // --- Manual bank-transfer fields (method = manual_transfer) ---
+    proof_image: varchar('proof_image', { length: 255 }),
+    sender_bank: varchar('sender_bank', { length: 100 }),
+    sender_name: varchar('sender_name', { length: 255 }),
+    transfer_date: timestamp('transfer_date', { withTimezone: true }),
+    merchant_note: varchar('merchant_note', { length: 500 }),
+
+    // --- Admin review / audit (manual confirm) ---
+    reviewed_by: text('reviewed_by').references(() => usersTable.id),
+    reviewed_at: timestamp('reviewed_at', { withTimezone: true }),
+    review_note: varchar('review_note', { length: 500 }),
+
+    // --- Xendit-ready (all nullable until the gateway migration) ---
+    // external_id = OUR idempotency key sent to Xendit (e.g. "subpay-<id>").
+    external_id: varchar('external_id', { length: 255 }),
+    xendit_invoice_id: varchar('xendit_invoice_id', { length: 255 }),
+    xendit_payment_request_id: varchar('xendit_payment_request_id', {
+      length: 255,
+    }),
+    // Hosted checkout URL Xendit returns; where the merchant pays.
+    invoice_url: text('invoice_url'),
+    // Concrete rail Xendit settled on (BCA VA, QRIS, OVO, ...).
+    payment_channel: varchar('payment_channel', { length: 50 }),
+    // Raw webhook body kept verbatim for audit / dispute.
+    gateway_payload: json('gateway_payload'),
+    ...timestamps,
+  },
+  (t) => [
+    index('subscription_payments_user_idx').on(t.user_id),
+    index('subscription_payments_subscription_idx').on(t.subscription_id),
+    index('subscription_payments_status_idx').on(t.status),
+    // Manual reconciliation: look up a pending payment by the exact transfer.
+    index('subscription_payments_amount_due_idx').on(t.amount_due),
+    // Nullable + unique: Postgres treats NULLs as distinct, so manual rows
+    // (external_id/xendit_invoice_id = NULL) never collide.
+    uniqueIndex('subscription_payments_external_id_idx').on(t.external_id),
+    uniqueIndex('subscription_payments_xendit_invoice_idx').on(
+      t.xendit_invoice_id,
+    ),
+  ],
+);
+
+// Append-only audit trail: every lifecycle change (submit/confirm/reject/renew/
+// upgrade/expire/cancel), who did it, and what changed.
+export const subscriptionEventsTable = pgTable(
+  'subscription_events',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    subscription_id: integer('subscription_id')
+      .notNull()
+      .references(() => subscriptionsTable.id),
+    user_id: text('user_id')
+      .notNull()
+      .references(() => usersTable.id),
+    payment_id: integer('payment_id').references(
+      () => subscriptionPaymentsTable.id,
+    ),
+    // Freeform verb, e.g. 'payment_submitted','payment_confirmed','renewed',
+    // 'upgraded','expired','trial_started'. String (not enum) so new event kinds
+    // don't each need a migration.
+    type: varchar('type', { length: 50 }).notNull(),
+    actor: SUBSCRIPTION_ACTOR('actor').notNull().default('system'),
+    // users.id of the acting admin/merchant when actor != system.
+    actor_id: text('actor_id').references(() => usersTable.id),
+    detail: json('detail'),
+    created_at: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [
+    index('subscription_events_subscription_idx').on(
+      t.subscription_id,
+      t.created_at,
+    ),
+  ],
+);
+
+// Notify outbox: durable, retryable record of merchant-facing notifications
+// (payment confirmed/rejected, expiring soon, expired). A dispatcher drains
+// status = 'pending'; in_app rows are also read straight from here.
+export const subscriptionNotificationsTable = pgTable(
+  'subscription_notifications',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    user_id: text('user_id')
+      .notNull()
+      .references(() => usersTable.id),
+    subscription_id: integer('subscription_id').references(
+      () => subscriptionsTable.id,
+    ),
+    event_id: integer('event_id').references(() => subscriptionEventsTable.id),
+    channel: NOTIFICATION_CHANNEL('channel').notNull().default('in_app'),
+    // e.g. 'payment_confirmed','payment_rejected','expiring_soon','expired'.
+    type: varchar('type', { length: 50 }).notNull(),
+    title: varchar('title', { length: 255 }),
+    body: varchar('body', { length: 1000 }),
+    status: NOTIFICATION_STATUS('status').notNull().default('pending'),
+    // email/wa: when dispatched. in_app: read_at is when the merchant saw it.
+    sent_at: timestamp('sent_at', { withTimezone: true }),
+    read_at: timestamp('read_at', { withTimezone: true }),
+    payload: json('payload'),
+    created_at: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [
+    index('subscription_notifications_user_idx').on(t.user_id, t.status),
+  ],
+);

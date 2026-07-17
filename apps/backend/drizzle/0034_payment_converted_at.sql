@@ -1,0 +1,1 @@
+ALTER TABLE "subscription_payments" ADD COLUMN "converted_at" timestamp with time zone;
