@@ -169,3 +169,13 @@ body {
   .animated-gradient { animation: none; }
   .header-shine::after { animation: none; display: none; }
 }
+
+/* Hide the scrollbar on horizontal snap carousels (plan cards, cashier
+   category row) while keeping them scrollable. */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}

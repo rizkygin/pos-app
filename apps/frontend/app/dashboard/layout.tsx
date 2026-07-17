@@ -9,6 +9,7 @@ import MessageChatComponent from "@/components/message/message-components"
 import { AppContent } from '@/components/app-content';
 import { AppShell } from '@/components/app-shell';
 import { AppSidebarHeader } from "@/components/app-sidebar-header"
+import { SubscriptionWarningBanner } from "@/components/subscription-warning-banner"
 
 
 const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
@@ -37,6 +38,10 @@ const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
                             {isAdmin ? 'Hello Admin' : isOwner ? 'Dashboard' : isCourier ? 'Kurir' : 'Dashboard'}
                         </span>
                     </header>
+
+                    {/* Subscription reminder for owners on every dashboard page.
+                        Dismiss is session-only — it returns on refresh. */}
+                    {isOwner && <SubscriptionWarningBanner />}
 
                     {children}
                     

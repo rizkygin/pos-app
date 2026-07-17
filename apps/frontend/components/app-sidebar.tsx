@@ -181,6 +181,13 @@ const ownerNavItems: NavItem[] = [
     iconBg: 'bg-amber-100 dark:bg-amber-950',
     iconColor: 'text-amber-600 dark:text-amber-400',
   },
+  {
+    name: 'Langganan',
+    url: '/dashboard/subscription',
+    icon: CreditCard,
+    iconBg: 'bg-rose-100 dark:bg-rose-950',
+    iconColor: 'text-rose-600 dark:text-rose-400',
+  },
 ];
 
 const ratingNavItem: NavItem = {

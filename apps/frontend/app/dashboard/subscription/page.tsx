@@ -3,19 +3,19 @@ import { getRole } from '@/lib/utils/get-role';
 import { DashboardHeader } from '@/components/dashboard-header';
 import { SubscriptionClient } from './subscription-client';
 
-const SubscriptionOutletPage = async () => {
+const SubscriptionPage = async () => {
   const role = await getRole();
-  if (!role || role.role !== 'admin') redirect('/dashboard');
+  if (!role || role.role !== 'owner') redirect('/dashboard');
 
   return (
     <main className="px-4 mx-2 md:mx-6 pb-12 space-y-4">
       <DashboardHeader
-        title="Langganan Merchant"
-        description="Konfirmasi pembayaran transfer manual — cocokkan 3 digit kode unik dengan mutasi bank"
+        title="Langganan"
+        description="Kelola paket langganan Ulun Pesan untuk usaha Pian"
       />
       <SubscriptionClient />
     </main>
   );
 };
 
-export default SubscriptionOutletPage;
+export default SubscriptionPage;
