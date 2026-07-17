@@ -5,7 +5,11 @@ import { usersTable, session, account, verification } from "./db/schema";
 import { Resend } from "resend";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
-const FROM = "POS App <noreply@yourdomain.com>";
+// Sender for all transactional mail. mail.ulunpesan.com is a dedicated sending
+// subdomain (verified in Resend, DNS records at name.com) so email reputation
+// stays isolated from the root domain. If Resend un-verifies it, every send is
+// rejected.
+const FROM = "Ulun Pesan <noreply@mail.ulunpesan.com>";
 const isProduction = process.env.NODE_ENV === "production";
 
 // Cookie attributes are env-driven so a production build can still be run over
