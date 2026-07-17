@@ -63,6 +63,13 @@ export const auth = betterAuth({
       });
     },
   },
+  // "Remember me": 30-day sessions (default is 7) with a rolling refresh —
+  // any visit at least a day after the last refresh extends the session, so
+  // active merchants effectively stay signed in.
+  session: {
+    expiresIn: 60 * 60 * 24 * 30,
+    updateAge: 60 * 60 * 24,
+  },
   trustedOrigins: [
     "https://ulunpesan.com",
     "https://www.ulunpesan.com",

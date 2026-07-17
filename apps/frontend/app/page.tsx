@@ -1,5 +1,8 @@
 import Link from "next/link";
 import Image from "next/image";
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+import { SERVER_API_URL } from "@/lib/api-url";
 import {
   Store,
   Smartphone,
@@ -265,7 +268,23 @@ const SHOWCASES = [
   },
 ];
 
-export default function LandingPage() {
+// Returning users skip the marketing page: a valid session goes straight to
+// the dashboard. Sessionless visitors (and crawlers — SEO unaffected) get the
+// landing; the cookie sniff avoids a backend round-trip for them.
+async function hasSession() {
+  const cookie = (await headers()).get("cookie") ?? "";
+  if (!cookie.includes("auth_session")) return false;
+  const res = await fetch(`${SERVER_API_URL}/api/auth/get-session`, {
+    headers: { cookie },
+    cache: "no-store",
+  }).catch(() => null);
+  if (!res?.ok) return false;
+  const data = await res.json().catch(() => null);
+  return !!data?.user;
+}
+
+export default async function LandingPage() {
+  if (await hasSession()) redirect("/dashboard");
   return (
     <main className="min-h-screen bg-[#0a0a0f] text-white">
       {/* SoftwareApplication JSON-LD: price-range rich result eligibility. */}
