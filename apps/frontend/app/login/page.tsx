@@ -6,7 +6,7 @@ import { Eye, EyeOff } from "lucide-react";
 import { authClient } from "@/lib/auth-client";
 import { AboutUlunPesan } from "@/components/about-ulun-pesan";
 
-export default function Home() {
+export default function LoginPage() {
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -51,20 +51,26 @@ export default function Home() {
     }
   };
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background overflow-hidden relative">
+    <div className="min-h-screen flex items-center justify-center bg-[#0a0a0f] overflow-hidden relative">
       {/* Background Decor */}
 
       {/* About / "Tentang Ulun Pesan" overlay trigger + modal */}
       <AboutUlunPesan />
 
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-gradient-to-br from-indigo-500/20 to-blue-500/20 blur-[120px] rounded-full pointer-events-none" />
+      <div className="absolute top-1/3 left-1/3 -translate-x-1/2 -translate-y-1/2 w-[420px] h-[420px] bg-rose-600/20 blur-[120px] rounded-full pointer-events-none" />
+      <div className="absolute top-2/3 left-2/3 -translate-x-1/2 -translate-y-1/2 w-[380px] h-[380px] bg-violet-600/20 blur-[120px] rounded-full pointer-events-none" />
+
+      {/* wordmark home link (GitHub-style) */}
+      <a href="/" className="absolute top-5 left-6 z-20 text-lg font-black tracking-tight text-white transition-opacity hover:opacity-80">
+        UlunPesan
+      </a>
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.8, ease: "easeOut" }}
         className="w-full max-w-md p-8 relative z-10"
       >
-        <div className="backdrop-blur-xl bg-foreground  border border-white/10 shadow-2xl rounded-3xl p-8 overflow-hidden">
+        <div className="backdrop-blur-xl bg-white/[0.04] border border-white/10 shadow-2xl rounded-3xl p-8 overflow-hidden">
           <div className="mb-8 text-center">
             <motion.div
               layout
@@ -111,7 +117,7 @@ export default function Home() {
                     type="text"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    className="w-full px-4 py-3 rounded-2xl bg-white/5 border border-white/10 text-white placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all font-medium"
+                    className="w-full px-4 py-3 rounded-2xl bg-white/5 border border-white/10 text-white placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-rose-500/40 transition-all font-medium"
                     placeholder="Nama Sampian"
                     required={!isLogin}
                   />
@@ -126,7 +132,7 @@ export default function Home() {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-4 py-3 rounded-2xl bg-white/5 border border-white/10 text-white placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all font-medium"
+                className="w-full px-4 py-3 rounded-2xl bg-white/5 border border-white/10 text-white placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-rose-500/40 transition-all font-medium"
                 placeholder="Email Pian"
                 required
               />
@@ -140,7 +146,7 @@ export default function Home() {
                   type={showPassword ? "text" : "password"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full px-4 py-3 pr-12 rounded-2xl bg-white/5 border border-white/10 text-white placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all font-medium"
+                  className="w-full px-4 py-3 pr-12 rounded-2xl bg-white/5 border border-white/10 text-white placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-rose-500/40 transition-all font-medium"
                   placeholder="••••••••"
                   required
                 />
@@ -185,7 +191,7 @@ export default function Home() {
                 setIsLogin(!isLogin);
                 setErrorMSG("");
               }}
-              className="text-white hover:text-indigo-300 font-medium transition-colors"
+              className="text-white hover:text-rose-300 font-medium transition-colors"
             >
               {isLogin ? "Daftar" : "Login"}
             </button>
