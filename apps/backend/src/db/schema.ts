@@ -554,6 +554,9 @@ export const invoicesTable = pgTable(
       .notNull()
       .default('0'),
     notes: varchar('notes', { length: 500 }).default(''),
+    // Who created the invoice (owner or employee) — staff attribution for the
+    // "dibuat oleh" line. Nullable: rows predating the column stay unattributed.
+    created_by: text('created_by').references(() => usersTable.id),
 
     // Link back to the cashflow detail this invoice generated when paid, so a
     // void can reverse it. Exactly one is set depending on type.

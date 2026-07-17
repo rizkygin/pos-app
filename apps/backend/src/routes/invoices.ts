@@ -13,6 +13,7 @@ import {
   cashOutDetailTable,
   cashInCategoryTable,
   cashInDetailTable,
+  usersTable,
 } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
@@ -297,12 +298,22 @@ export async function invoiceRoutes(app: FastifyInstance) {
         .where(eq(suppliersTable.id, invoice.supplier_id))
         .limit(1);
     }
-    return { success: true, data: { ...invoice, items, outlet, supplier } };
+    let created_by_name: string | null = null;
+    if (invoice.created_by) {
+      const [creator] = await db
+        .select({ name: usersTable.name })
+        .from(usersTable)
+        .where(eq(usersTable.id, invoice.created_by))
+        .limit(1);
+      created_by_name = creator?.name ?? null;
+    }
+    return { success: true, data: { ...invoice, items, outlet, supplier, created_by_name } };
   });
 
   app.post("/api/purchase-invoices", async (request, reply) => {
-    const outlet = await getOwnerOutlet(request, reply, "purchaseInvoice");
-    if (!outlet) return;
+    const access = await requireOutletAccess(request, reply, "purchaseInvoice");
+    if (!access) return;
+    const outlet = access.outlet;
     const body = request.body as {
       supplier_id?: number | null;
       party_name?: string;
@@ -347,6 +358,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
           discount: String(discount),
           total: String(total),
           amount_paid: "0",
+          created_by: access.userId,
           down_payment: String(downPayment),
           notes: body.notes ?? "",
         })
@@ -601,8 +613,10 @@ export async function invoiceRoutes(app: FastifyInstance) {
           due_date: invoicesTable.due_date,
           total: invoicesTable.total,
           amount_paid: invoicesTable.amount_paid,
+          created_by_name: usersTable.name,
         })
         .from(invoicesTable)
+        .leftJoin(usersTable, eq(usersTable.id, invoicesTable.created_by))
         .where(and(...conds))
         .orderBy(desc(invoicesTable.issue_date), desc(invoicesTable.id))
         .limit(limitN)
@@ -639,12 +653,22 @@ export async function invoiceRoutes(app: FastifyInstance) {
       .limit(1);
     if (!invoice) return reply.status(404).send({ success: false, error: "Faktur tidak ditemukan" });
     const items = await db.select().from(invoiceItemsTable).where(eq(invoiceItemsTable.invoice_id, id));
-    return { success: true, data: { ...invoice, items, outlet } };
+    let created_by_name: string | null = null;
+    if (invoice.created_by) {
+      const [creator] = await db
+        .select({ name: usersTable.name })
+        .from(usersTable)
+        .where(eq(usersTable.id, invoice.created_by))
+        .limit(1);
+      created_by_name = creator?.name ?? null;
+    }
+    return { success: true, data: { ...invoice, items, outlet, created_by_name } };
   });
 
   app.post("/api/sales-invoices", async (request, reply) => {
-    const outlet = await getOwnerOutlet(request, reply, "salesInvoice");
-    if (!outlet) return;
+    const access = await requireOutletAccess(request, reply, "salesInvoice");
+    if (!access) return;
+    const outlet = access.outlet;
     const body = request.body as {
       customer_id?: number | null;
       party_name?: string;
@@ -686,6 +710,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
           discount: String(discount),
           total: String(total),
           amount_paid: "0",
+          created_by: access.userId,
           down_payment: String(downPayment),
           notes: body.notes ?? "",
         })

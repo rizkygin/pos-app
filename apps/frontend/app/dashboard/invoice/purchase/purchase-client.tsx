@@ -24,6 +24,7 @@ type DetailInvoice = PurchaseRow & {
   discount: string;
   down_payment: string;
   notes: string | null;
+  created_by_name?: string | null;
   items: DetailItem[];
 };
 
@@ -224,6 +225,9 @@ export function PurchaseClient() {
                   Jatuh tempo:{" "}
                   {detail.due_date ? new Date(detail.due_date).toLocaleDateString("id-ID") : "—"}
                 </p>
+                {detail.created_by_name && (
+                  <p className="text-xs text-muted-foreground">Dibuat oleh: {detail.created_by_name}</p>
+                )}
               </div>
               <span
                 className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${PURCHASE_STATUS_STYLE[detail.status]}`}

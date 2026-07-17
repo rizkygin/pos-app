@@ -75,6 +75,7 @@ type DetailInvoice = SalesRow & {
   tax_amount: string;
   discount: string;
   down_payment: string;
+  created_by_name?: string | null;
   notes: string | null;
   items: DetailItem[];
 };
@@ -545,6 +546,11 @@ export function SalesClient() {
                   Jatuh tempo:{" "}
                   {detail.due_date ? new Date(detail.due_date).toLocaleDateString("id-ID") : "—"}
                 </p>
+                {detail.created_by_name && (
+                  <p className="text-xs text-muted-foreground">
+                    Dibuat oleh: {detail.created_by_name}
+                  </p>
+                )}
               </div>
               <div className="flex flex-col items-end gap-1">
                 <span
@@ -1220,6 +1226,7 @@ export function SalesClient() {
                 </div>
                 <p className="mt-1 truncate text-xs text-muted-foreground">
                   {inv.party_name || "Tanpa nama pelanggan"}
+                  {inv.created_by_name ? ` · oleh ${inv.created_by_name}` : ""}
                 </p>
                 <div className="mt-2 flex items-end justify-between">
                   <span className="text-base font-bold tabular-nums">{rupiah(inv.total)}</span>

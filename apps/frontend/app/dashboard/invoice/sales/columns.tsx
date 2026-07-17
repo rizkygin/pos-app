@@ -14,6 +14,7 @@ export type SalesRow = {
   due_date: string | null;
   total: string;
   amount_paid: string;
+  created_by_name?: string | null;
 };
 
 export type InvoiceAction = "post" | "pay" | "void";

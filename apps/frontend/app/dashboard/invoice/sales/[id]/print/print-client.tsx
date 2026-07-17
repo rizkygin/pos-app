@@ -25,6 +25,7 @@ type Invoice = {
   total: string;
   amount_paid: string;
   down_payment: string;
+  created_by_name?: string | null;
   notes: string | null;
   items: Item[];
   outlet: Outlet;
@@ -260,6 +261,9 @@ function ClassicInvoice({ inv, terms }: { inv: Invoice; terms: string }) {
           <p>No: <span className="font-semibold">{inv.number}</span></p>
           <p>Tanggal: {tgl(inv.issue_date)}</p>
           <p>Jatuh tempo: {tgl(inv.due_date)}</p>
+              {inv.created_by_name && (
+                <p className="text-zinc-400">Dibuat oleh: {inv.created_by_name}</p>
+              )}
           {inv.status === "paid" && <p className="mt-1 font-bold uppercase text-zinc-900">— Lunas —</p>}
           {inv.status === "partial" && <p className="mt-1 font-bold uppercase text-zinc-900">— DP Diterima —</p>}
         </div>
@@ -371,6 +375,9 @@ function ElegantInvoice({ inv, terms, c1, c2, totalBg }: { inv: Invoice; terms: 
           <div className="text-right text-zinc-500">
             <p>Tanggal: {tgl(inv.issue_date)}</p>
             <p>Jatuh tempo: {tgl(inv.due_date)}</p>
+              {inv.created_by_name && (
+                <p className="text-zinc-400">Dibuat oleh: {inv.created_by_name}</p>
+              )}
           </div>
         </div>
 
