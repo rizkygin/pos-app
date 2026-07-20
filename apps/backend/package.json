@@ -10,7 +10,8 @@
     "db:seed": "tsx src/db/seed.ts",
     "db:seed-plans": "tsx src/db/seed-plans.ts",
     "db:reset": "tsx src/db/reset.ts",
-    "db:clear": "tsx src/db/clear-test-data.ts"
+    "db:clear": "tsx src/db/clear-test-data.ts",
+    "db:backfill-subs": "tsx src/db/backfill-subscriptions.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",

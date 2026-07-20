@@ -15,7 +15,7 @@ import {
 } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
-import { getOutletAccess, hasPermission } from "../lib/outlet-access";
+import { getOutletAccess, hasPermission, parseActiveOutletId, getSubscriptionGate, gateBlocks } from "../lib/outlet-access";
 import { CATEGORY_IN } from "../lib/cashflow-categories";
 import { haversineKm } from "../lib/utils/geo";
 
@@ -92,9 +92,12 @@ async function computeDeliveryFee(userId: string, outletId: number): Promise<num
 }
 
 // Owner or employee with the activeOrders permission → outlet {id}, else null.
-async function outletForOrders(userId: string) {
-  const access = await getOutletAccess(userId);
+// Active-outlet cookie + subscription gate (order transitions are writes).
+async function outletForOrders(userId: string, request: import("fastify").FastifyRequest) {
+  const access = await getOutletAccess(userId, parseActiveOutletId(request));
   if (!access || !hasPermission(access, "activeOrders")) return null;
+  const gate = await getSubscriptionGate(access.outlet.user_id);
+  if (gateBlocks(gate, "activeOrders", request.method)) return null;
   return { id: access.outlet.id };
 }
 
@@ -211,7 +214,7 @@ export async function orderRoutes(app: FastifyInstance) {
     const { orderId } = (request.body as { orderId?: string }) ?? {};
     if (!orderId) return reply.status(400).send({ success: false, error: "orderId wajib diisi" });
 
-    const outlet = await outletForOrders(session.user.id);
+    const outlet = await outletForOrders(session.user.id, request);
 
     if (!outlet) return reply.status(403).send({ success: false, error: "Not an owner" });
 
@@ -237,7 +240,7 @@ export async function orderRoutes(app: FastifyInstance) {
     const { orderId } = (request.body as { orderId?: string }) ?? {};
     if (!orderId) return reply.status(400).send({ success: false, error: "orderId wajib diisi" });
 
-    const outlet = await outletForOrders(session.user.id);
+    const outlet = await outletForOrders(session.user.id, request);
 
     if (!outlet) return reply.status(403).send({ success: false, error: "Not an owner" });
 
@@ -266,7 +269,7 @@ export async function orderRoutes(app: FastifyInstance) {
     const { orderId } = (request.body as { orderId?: string }) ?? {};
     if (!orderId) return reply.status(400).send({ success: false, error: "orderId wajib diisi" });
 
-    const outlet = await outletForOrders(session.user.id);
+    const outlet = await outletForOrders(session.user.id, request);
 
     if (!outlet) return reply.status(403).send({ success: false, error: "Not an owner" });
 
@@ -373,7 +376,7 @@ export async function orderRoutes(app: FastifyInstance) {
       reply.status(401).send({ success: false, error: "Unauthorized" });
       return null;
     }
-    const outlet = await outletForOrders(session.user.id);
+    const outlet = await outletForOrders(session.user.id, request);
     if (!outlet) {
       reply.status(403).send({ success: false, error: "Not an owner" });
       return null;

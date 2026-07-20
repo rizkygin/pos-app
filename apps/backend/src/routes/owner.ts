@@ -20,7 +20,7 @@ import {
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 import { getOutletByUserId } from "../lib/outlet-id";
-import { getOutletAccess, hasPermission, type EmployeePermission } from "../lib/outlet-access";
+import { getOutletAccess, hasPermission, parseActiveOutletId, getSubscriptionGate, gateBlocks, type EmployeePermission } from "../lib/outlet-access";
 import { attachOrderItems } from "../lib/utils/order-items";
 import { getUTCRangeFromLocalDate, getUTCRangeFromLocalMonth } from "../lib/timezone";
 
@@ -36,11 +36,19 @@ const money = (col: AnyColumn) =>
 const OFFLINE_CUSTOMER_EMAIL = "rizkygin1@gmail.com";
 
 // Owner or employee holding `perm` → the outlet; otherwise null (each route
-// already replies 403 on null). Routes NOT converted stay getOutletByUserId,
-// i.e. strictly owner-only — deny is the default for anything unmapped.
-async function outletFor(userId: string, perm: EmployeePermission) {
-  const access = await getOutletAccess(userId);
+// already replies 403 on null). Honors the active-outlet cookie and the
+// subscription gate (read-only when expired, plan feature boundaries). Routes
+// NOT converted stay getOutletByUserId, i.e. strictly owner-only — deny is the
+// default for anything unmapped.
+async function outletFor(
+  userId: string,
+  perm: EmployeePermission,
+  request: import("fastify").FastifyRequest,
+) {
+  const access = await getOutletAccess(userId, parseActiveOutletId(request));
   if (!access || !hasPermission(access, perm)) return null;
+  const gate = await getSubscriptionGate(access.outlet.user_id);
+  if (gateBlocks(gate, perm, request.method)) return null;
   return access.outlet;
 }
 
@@ -56,7 +64,7 @@ export async function ownerRoutes(app: FastifyInstance) {
       const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
       if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
 
-      const outlet = await outletFor(session.user.id, "activeOrders");
+      const outlet = await outletFor(session.user.id, "activeOrders", request);
       if (!outlet) return reply.status(403).send({ success: false, error: "No outlet found" });
 
       const dateStart = dateFrom ? new Date(dateFrom) : undefined;
@@ -138,7 +146,7 @@ export async function ownerRoutes(app: FastifyInstance) {
     const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
     if (!session?.user) return reply.status(401).send({ success: false });
 
-    const outlet = await outletFor(session.user.id, "activeOrders");
+    const outlet = await outletFor(session.user.id, "activeOrders", request);
     if (!outlet) return reply.status(403).send({ success: false, error: "Not an owner" });
 
     const orders = await db
@@ -167,7 +175,7 @@ export async function ownerRoutes(app: FastifyInstance) {
     const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
     if (!session?.user) return reply.status(401).send({ success: false });
 
-    const outlet = await outletFor(session.user.id, "activeOrders");
+    const outlet = await outletFor(session.user.id, "activeOrders", request);
     if (!outlet) return reply.status(403).send({ success: false, error: "Not an owner" });
 
     const orders = await db
@@ -196,7 +204,7 @@ export async function ownerRoutes(app: FastifyInstance) {
     const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
     if (!session?.user) return reply.status(401).send({ success: false });
 
-    const outlet = await outletFor(session.user.id, "activeOrders");
+    const outlet = await outletFor(session.user.id, "activeOrders", request);
     if (!outlet) return reply.status(403).send({ success: false, error: "Not an owner" });
 
     const orders = await db
@@ -229,7 +237,7 @@ export async function ownerRoutes(app: FastifyInstance) {
       const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
       if (!session?.user) return reply.status(401).send({ success: false });
 
-      const outlet = await outletFor(session.user.id, "activeOrders");
+      const outlet = await outletFor(session.user.id, "activeOrders", request);
       if (!outlet) return reply.status(403).send({ success: false, error: "Not an owner" });
 
       // Order header + customer (user) info, scoped to this owner's outlet.
@@ -302,7 +310,7 @@ export async function ownerRoutes(app: FastifyInstance) {
       const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
       if (!session?.user) return reply.status(401).send({ success: false });
 
-      const outlet = await outletFor(session.user.id, "reports");
+      const outlet = await outletFor(session.user.id, "reports", request);
       if (!outlet) return reply.status(403).send({ success: false, error: "Not an owner" });
 
       const dateStart = dateFrom ? new Date(dateFrom) : undefined;
@@ -429,7 +437,7 @@ export async function ownerRoutes(app: FastifyInstance) {
       const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
       if (!session?.user) return reply.status(401).send({ error: "Unauthorized" });
 
-      const outlet = await outletFor(session.user.id, "reports");
+      const outlet = await outletFor(session.user.id, "reports", request);
       if (!outlet) return reply.status(401).send({ error: "Unauthorized" });
 
       function getLast6Months() {
@@ -468,7 +476,7 @@ export async function ownerRoutes(app: FastifyInstance) {
       const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
       if (!session?.user) return reply.status(401).send({ success: false });
 
-      const outlet = await outletFor(session.user.id, "reports");
+      const outlet = await outletFor(session.user.id, "reports", request);
       if (!outlet) return reply.status(401).send({ success: false, error: "Not an owner" });
 
       if (!date) return reply.status(400).send({ success: false, error: "Missing 'date' parameter" });
@@ -527,7 +535,7 @@ export async function ownerRoutes(app: FastifyInstance) {
       const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
       if (!session?.user) return reply.status(401).send({ success: false });
 
-      const outlet = await outletFor(session.user.id, "reports");
+      const outlet = await outletFor(session.user.id, "reports", request);
       if (!outlet) return reply.status(403).send({ success: false, error: "Not an owner" });
 
       // Local "today" (YYYY-MM-DD) in the outlet's timezone.
@@ -672,7 +680,7 @@ export async function ownerRoutes(app: FastifyInstance) {
       const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
       if (!session?.user) return reply.status(401).send({ success: false });
 
-      const outlet = await outletFor(session.user.id, "cashflow");
+      const outlet = await outletFor(session.user.id, "cashflow", request);
       if (!outlet) return reply.status(401).send({ success: false });
 
       if (!month) return reply.status(400).send({ error: "Missing 'month' parameter" });
@@ -746,7 +754,7 @@ export async function ownerRoutes(app: FastifyInstance) {
       const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
       if (!session?.user) return reply.status(401).send({ success: false });
 
-      const outlet = await outletFor(session.user.id, "cashflow");
+      const outlet = await outletFor(session.user.id, "cashflow", request);
       if (!outlet) return reply.status(401).send({ success: false });
 
       const { type, category, amount, date, timezone = "Asia/Jakarta" } = request.body as Record<string, any>;
@@ -803,7 +811,7 @@ export async function ownerRoutes(app: FastifyInstance) {
       const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
       if (!session?.user) return reply.status(401).send({ success: false });
 
-      const outlet = await outletFor(session.user.id, "cashflow");
+      const outlet = await outletFor(session.user.id, "cashflow", request);
       if (!outlet) return reply.status(401).send({ success: false });
 
       if (!id || isNaN(Number(id))) return reply.status(400).send({ error: "Missing or invalid 'id' parameter" });
@@ -837,7 +845,7 @@ export async function ownerRoutes(app: FastifyInstance) {
       const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
       if (!session?.user) return reply.status(401).send({ success: false });
 
-      const outlet = await outletFor(session.user.id, "reports");
+      const outlet = await outletFor(session.user.id, "reports", request);
       if (!outlet) return reply.status(401).send({ success: false });
 
       if (!date) return reply.status(400).send({ success: false, error: "Missing 'date' parameter" });
@@ -876,7 +884,7 @@ export async function ownerRoutes(app: FastifyInstance) {
       const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
       if (!session?.user) return reply.status(401).send({ success: false });
 
-      const outlet = await outletFor(session.user.id, "reports");
+      const outlet = await outletFor(session.user.id, "reports", request);
       if (!outlet) return reply.status(401).send({ success: false });
 
       let startUTC, endUTC;

@@ -17,7 +17,7 @@ import {
 } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
-import { getOutletAccess, requireOutletAccess } from "../lib/outlet-access";
+import { getOutletAccess, requireOutletAccess, parseActiveOutletId } from "../lib/outlet-access";
 
 const UPLOADS_ROOT = path.join(process.cwd(), "uploads");
 const PRODUCTS_DIR = path.join(UPLOADS_ROOT, "products");
@@ -77,7 +77,7 @@ export async function productRoutes(app: FastifyInstance) {
     // Owner or ANY active employee: this is the read-only outlet+product list
     // that every permitted page needs (cashier, faktur, stok). Mutations below
     // require the 'products' permission explicitly.
-    const access = await getOutletAccess(session.user.id);
+    const access = await getOutletAccess(session.user.id, parseActiveOutletId(request));
     if (!access) return reply.send({ outlet: null, products: [] });
     const outlet = access.outlet;
 

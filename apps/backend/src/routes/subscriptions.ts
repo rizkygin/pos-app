@@ -24,6 +24,7 @@ import {
   expireStalePayments,
   applyScheduledTierIfDue,
 } from "../lib/subscription";
+import { invalidateGate } from "../lib/outlet-access";
 
 const PROOF_DIR = path.join(process.cwd(), "uploads", "subscriptions");
 const PROOF_URL_PREFIX = "/uploads/subscriptions/";
@@ -471,6 +472,8 @@ export async function subscriptionRoutes(app: FastifyInstance) {
     const id = Number((request.params as { id: string }).id);
     try {
       const result = await confirmPayment(id, admin.id);
+      // The merchant's cached gate must reflect the new plan immediately.
+      invalidateGate(result.payment.user_id);
       return { success: true, data: result };
     } catch (e) {
       const msg = String(e instanceof Error ? e.message : e);

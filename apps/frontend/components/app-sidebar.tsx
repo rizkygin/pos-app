@@ -58,6 +58,7 @@ import dynamic from 'next/dynamic';
 import { useCurrentUrl } from '@/hooks/use-current-url';
 import { cn } from '@/lib/utils';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
+import { OutletSwitcher } from './outlet-switcher';
 import type { LucideIcon } from 'lucide-react';
 
 type NavItem = {
@@ -187,6 +188,13 @@ const ownerNavItems: NavItem[] = [
     icon: CreditCard,
     iconBg: 'bg-rose-100 dark:bg-rose-950',
     iconColor: 'text-rose-600 dark:text-rose-400',
+  },
+  {
+    name: 'Outlet Saya',
+    url: '/dashboard/outlets',
+    icon: Building2,
+    iconBg: 'bg-sky-100 dark:bg-sky-950',
+    iconColor: 'text-sky-600 dark:text-sky-400',
   },
   {
     name: 'Karyawan',
@@ -488,6 +496,8 @@ export function AppSidebar({
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
+
+      {isOwner && <OutletSwitcher />}
 
       <SidebarContent className="px-2 py-1 gap-0">
         <SidebarGroup className="p-0">
