@@ -107,12 +107,12 @@ const FEATURES = [
   {
     icon: Store,
     title: "Kasir Cepat (POS)",
-    body: "Ring up penjualan dalam hitungan detik — multi-tab pesanan, diskon, struk thermal, dan mode uang pas.",
+    body: "Ring up penjualan dalam hitungan detik, multi-tab pesanan, diskon, struk thermal, dan mode uang pas.",
   },
   {
     icon: Smartphone,
     title: "Pesanan Online",
-    body: "Pelanggan pesan langsung dari HP lewat halaman menu outlet Pian — tanpa install aplikasi.",
+    body: "Pelanggan pesan langsung dari HP lewat halaman menu outlet Pian, tanpa install aplikasi.",
   },
   {
     icon: Bike,
@@ -127,7 +127,7 @@ const FEATURES = [
   {
     icon: Boxes,
     title: "Manajemen Stok",
-    body: "Stok otomatis berkurang saat terjual — termasuk resep/bahan baku, opname, dan riwayat pergerakan.",
+    body: "Stok otomatis berkurang saat terjual, termasuk resep/bahan baku, opname, dan riwayat pergerakan.",
   },
   {
     icon: Wallet,
@@ -137,7 +137,7 @@ const FEATURES = [
   {
     icon: BarChart3,
     title: "Laporan Lengkap",
-    body: "Laporan penjualan harian/bulanan dan laporan faktur — tahu untung Pian tanpa hitung manual.",
+    body: "Laporan penjualan harian/bulanan dan laporan faktur, tahu untung Pian tanpa hitung manual.",
   },
   {
     icon: Monitor,
@@ -149,19 +149,19 @@ const FEATURES = [
 const FAQS = [
   {
     q: "Bagaimana cara pembayarannya?",
-    a: "Transfer bank manual dengan nominal unik — konfirmasi biasanya kurang dari 24 jam setelah bukti transfer diunggah. Tanpa kartu kredit.",
+    a: "Transfer bank manual dengan nominal unik, konfirmasi biasanya kurang dari 24 jam setelah bukti transfer diunggah. Tanpa kartu kredit.",
   },
   {
     q: "Apakah ada masa percobaan?",
-    a: "Ada — gratis 14 hari dengan semua fitur, tanpa perlu membayar dulu. Masa percobaan tidak hangus jika Pian membayar lebih awal.",
+    a: "Ada. Gratis 14 hari dengan semua fitur, tanpa perlu membayar dulu. Masa percobaan tidak hangus jika Pian membayar lebih awal.",
   },
   {
     q: "Bisa ganti paket di tengah jalan?",
-    a: "Bisa kapan saja. Upgrade berlaku langsung dan sisa masa aktif dikonversi jadi hari bonus; downgrade mulai setelah paket berjalan selesai — tidak ada yang hangus.",
+    a: "Bisa kapan saja. Upgrade berlaku langsung dan sisa masa aktif dikonversi jadi hari bonus; downgrade mulai setelah paket berjalan selesai, tidak ada yang hangus.",
   },
   {
     q: "Perlu install aplikasi?",
-    a: "Tidak — semuanya jalan di browser HP atau komputer. Aplikasi kasir desktop tersedia sebagai tambahan di paket Max Lite dan Max.",
+    a: "Tidak, semuanya jalan di browser HP atau komputer. Aplikasi kasir desktop tersedia sebagai tambahan di paket Max Lite dan Max.",
   },
 ];
 
@@ -236,7 +236,7 @@ function PhoneFrame({
 const SHOWCASES = [
   {
     title: "Faktur profesional dalam satu menit",
-    body: "Susun faktur penjualan atau pembelian langsung dari daftar produk — lengkap dengan DP, diskon per-item, pajak, jatuh tempo, dan cetak PDF.",
+    body: "Susun faktur penjualan atau pembelian langsung dari daftar produk, lengkap dengan DP, diskon per-item, pajak, jatuh tempo, dan cetak PDF.",
     src: "/landing/faktur.webp",
     w: 1600,
     h: 831,
@@ -244,7 +244,7 @@ const SHOWCASES = [
   },
   {
     title: "Tahu piutang & hutang tanpa buka buku",
-    body: "Laporan Faktur merangkum faktur terbit, yang sudah dibayar, piutang berjalan, sampai siapa yang terlambat — per hari, minggu, atau bulan.",
+    body: "Laporan Faktur merangkum faktur terbit, yang sudah dibayar, piutang berjalan, sampai siapa yang terlambat, per hari, minggu, atau bulan.",
     src: "/landing/laporan.webp",
     w: 1600,
     h: 831,
@@ -252,7 +252,7 @@ const SHOWCASES = [
   },
   {
     title: "Semua uang bermuara ke Buku Kas",
-    body: "Penjualan kasir dan pembayaran faktur tercatat otomatis — Pian tinggal menambah pengeluaran, dan posisi kas harian/bulanan selalu akurat.",
+    body: "Penjualan kasir dan pembayaran faktur tercatat otomatis, Pian tinggal menambah pengeluaran, dan posisi kas harian/bulanan selalu akurat.",
     src: "/landing/bukukas.webp",
     w: 1600,
     h: 839,
@@ -260,7 +260,7 @@ const SHOWCASES = [
   },
   {
     title: "Stok terpotong sendiri, bahkan lewat resep",
-    body: "Produk olahan bisa punya resep bahan — jual 1 porsi, stok mie dan telurnya berkurang otomatis. Opname dan riwayat pergerakan tersedia.",
+    body: "Produk olahan bisa punya resep bahan. Jual 1 porsi, stok mie dan telurnya berkurang otomatis. Opname dan riwayat pergerakan tersedia.",
     src: "/landing/stok-resep.webp",
     w: 1000,
     h: 1025,
@@ -348,7 +348,7 @@ export default async function LandingPage() {
             <Sparkles className="size-3.5" /> Gratis 14 hari — tanpa kartu kredit
           </p>
           <h1 className="text-4xl font-black leading-tight tracking-tight md:text-7xl">
-            Kasir, pesanan online, dan pembukuan —{" "}
+            Kasir, pesanan online, dan pembukuan dalam{" "}
             <span className="bg-gradient-to-r from-rose-400 via-violet-400 to-orange-300 bg-clip-text text-transparent">
               satu aplikasi
             </span>
@@ -356,7 +356,7 @@ export default async function LandingPage() {
           <p className="mx-auto mt-5 max-w-2xl text-base text-zinc-400 md:text-lg">
             Ulun Pesan membantu usaha lokal melayani pelanggan lebih cepat:
             kasir POS, menu online untuk pelanggan, pengantaran kurir, faktur,
-            stok, dan laporan — mulai dari {rupiah(30000)}/bulan.
+            stok, dan laporan mulai dari {rupiah(30000)}/bulan.
           </p>
           <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
             <Link
@@ -442,7 +442,7 @@ export default async function LandingPage() {
               {
                 n: "1",
                 t: "Daftar & buat outlet",
-                b: "Daftar gratis, isi nama usaha dan lokasi — langsung dapat halaman menu online sendiri.",
+                b: "Daftar gratis, isi nama usaha dan lokasi, langsung dapat halaman menu online sendiri.",
               },
               {
                 n: "2",
@@ -468,6 +468,71 @@ export default async function LandingPage() {
               </div>
             ))}
           </div>
+
+          {/* satu ekosistem: pemilik, pelanggan, kurir */}
+          <div className="mx-auto mt-16 max-w-2xl text-center">
+            <h3 className="text-xl font-black tracking-tight md:text-2xl">
+              Bukan cuma untuk pemilik usaha
+            </h3>
+            <p className="mt-2 text-sm text-zinc-400">
+              Ulun Pesan menghubungkan tiga sisi — usaha Pian, pelanggan, dan
+              kurir — dalam satu ekosistem.
+            </p>
+          </div>
+          <div className="mt-8 grid gap-6 md:grid-cols-2">
+            <div className="rounded-2xl border border-white/10 bg-[#0a0a0f] p-6">
+              <div className="mb-3 inline-flex rounded-xl bg-violet-500/15 p-2.5">
+                <Smartphone className="size-5 text-violet-400" />
+              </div>
+              <h4 className="font-bold">Untuk Pelanggan</h4>
+              <ul className="mt-3 space-y-2 text-sm text-zinc-400">
+                <li className="flex items-start gap-2">
+                  <Check className="mt-0.5 size-3.5 shrink-0 text-violet-400" />
+                  Buka halaman menu outlet dan pesan langsung dari HP — tanpa
+                  install aplikasi apa pun.
+                </li>
+                <li className="flex items-start gap-2">
+                  <Check className="mt-0.5 size-3.5 shrink-0 text-violet-400" />
+                  Pantau status pesanan dari dikonfirmasi, disiapkan, sampai
+                  diantar ke depan pintu.
+                </li>
+                <li className="flex items-start gap-2">
+                  <Check className="mt-0.5 size-3.5 shrink-0 text-violet-400" />
+                  Beri rating untuk outlet, produk, dan kurir — bantu usaha
+                  lokal favorit makin dikenal.
+                </li>
+              </ul>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-[#0a0a0f] p-6">
+              <div className="mb-3 inline-flex rounded-xl bg-orange-500/15 p-2.5">
+                <Bike className="size-5 text-orange-400" />
+              </div>
+              <h4 className="font-bold">Untuk Kurir</h4>
+              <ul className="mt-3 space-y-2 text-sm text-zinc-400">
+                <li className="flex items-start gap-2">
+                  <Check className="mt-0.5 size-3.5 shrink-0 text-orange-400" />
+                  Daftar gratis sebagai mitra kurir — cukup motor atau mobil
+                  dan nomor plat kendaraan.
+                </li>
+                <li className="flex items-start gap-2">
+                  <Check className="mt-0.5 size-3.5 shrink-0 text-orange-400" />
+                  Ambil orderan dari ruang tunggu saat Pian online — antar
+                  pesanan, dapat penghasilan.
+                </li>
+                <li className="flex items-start gap-2">
+                  <Check className="mt-0.5 size-3.5 shrink-0 text-orange-400" />
+                  Kumpulkan rating dari pelanggan — kurir terbaik makin
+                  dipercaya, makin sering dapat orderan.
+                </li>
+              </ul>
+              <Link
+                href="/login"
+                className="mt-4 inline-flex items-center gap-1.5 text-sm font-bold text-orange-400 transition-colors hover:text-orange-300"
+              >
+                Daftar jadi kurir <ArrowRight className="size-3.5" />
+              </Link>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -476,7 +541,7 @@ export default async function LandingPage() {
         <div className="mx-auto max-w-2xl text-center">
           <h2 className="text-2xl font-black tracking-tight md:text-4xl">Senyaman itu di HP</h2>
           <p className="mt-3 text-zinc-400">
-            Kelola bisnis dari genggaman — kasir multi-meja, ringkasan bisnis, sampai
+            Kelola bisnis dari genggaman, kasir multi-meja, ringkasan bisnis, sampai
             struk yang langsung tercetak ke printer thermal.
           </p>
         </div>
@@ -574,7 +639,7 @@ export default async function LandingPage() {
             </h3>
             <p className="mt-3 leading-relaxed text-zinc-400">
               Bayar via transfer bank dengan kode unik, konfirmasi kurang dari 24 jam,
-              dan kwitansi bernomor langsung masuk ke email Pian — bukti pembayaran
+              dan kwitansi bernomor langsung masuk ke email Pian,bukti pembayaran
               yang sah dan rapi.
             </p>
           </div>
@@ -620,7 +685,7 @@ export default async function LandingPage() {
             Usaha Pian siap naik kelas?
           </h2>
           <p className="mx-auto mt-3 max-w-xl text-sm text-white/85 md:text-base">
-            Coba semua fitur gratis 14 hari. Tanpa kartu kredit, tanpa ribet —
+            Coba semua fitur gratis 14 hari. Tanpa kartu kredit, tanpa ribet,
             batal kapan saja.
           </p>
           <Link
