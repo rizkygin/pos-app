@@ -10,7 +10,12 @@ export const getRole = async () => {
     const me = await res.json();
     if (!me?.role) return false;
 
-    return { role: me.role as "admin" | "customer" | "courier" | "owner" | "employee", data: me.data };
+    return {
+        role: me.role as "admin" | "customer" | "courier" | "owner" | "employee",
+        data: me.data,
+        // Subscription gate (owner/employee only): { alive, status, features }.
+        gate: me.gate as { alive: boolean; status: string; features: Record<string, unknown> } | undefined,
+    };
 };
 
 // The caller's outlet. Returns `{ result }` (array) to preserve the previous

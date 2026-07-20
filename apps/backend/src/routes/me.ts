@@ -4,6 +4,7 @@ import { db } from "../db";
 import { adminsTable, customersTable, couriersTable, outletsTable, employeesTable } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
+import { getSubscriptionGate } from "../lib/outlet-access";
 
 type Role = "admin" | "customer" | "courier" | "owner";
 
@@ -26,7 +27,15 @@ export async function meRoutes(app: FastifyInstance) {
 
     for (const probe of probes) {
       const data = await probe.row();
-      if (data) return reply.send({ role: probe.role, data });
+      if (data) {
+        // Owners carry their subscription gate so the frontend can screen
+        // plan-bound pages (Faktur/Stok/...) without extra round-trips.
+        if (probe.role === "owner") {
+          const gate = await getSubscriptionGate(userId);
+          return reply.send({ role: probe.role, data, gate });
+        }
+        return reply.send({ role: probe.role, data });
+      }
     }
 
     // Fifth role: an ACTIVE outlet employee. data carries the permission map +
@@ -38,8 +47,10 @@ export async function meRoutes(app: FastifyInstance) {
       .where(and(eq(employeesTable.user_id, userId), eq(employeesTable.is_active, true)))
       .limit(1);
     if (employment) {
+      const gate = await getSubscriptionGate(employment.outlet.user_id);
       return reply.send({
         role: "employee",
+        gate,
         data: {
           id: employment.employee.id,
           outlet_id: employment.outlet.id,
