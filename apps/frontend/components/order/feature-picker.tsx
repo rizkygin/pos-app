@@ -203,7 +203,7 @@ export function FeaturePicker() {
                                                         <p className="text-[11px] text-muted-foreground">{item.outletName}</p>
                                                         <div className="flex items-center gap-1">
                                                             <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
-                                                            <span className="text-[11px] font-bold text-amber-600">{item.rating.toFixed(1)}</span>
+                                                            <span className="text-[11px] font-bold text-amber-600">{Number(item.rating ?? 5).toFixed(1)}</span>
                                                         </div>
                                                         <div className="flex items-center justify-between">
                                                             <p className="text-sm font-black text-rose-600">{fmt(finalPrice)}</p>
@@ -305,7 +305,7 @@ export function FeaturePicker() {
 
                                             <div className="flex items-center gap-1.5">
                                                 <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
-                                                <span className="text-xs font-bold text-amber-600">{item.rating.toFixed(1)}</span>
+                                                <span className="text-xs font-bold text-amber-600">{Number(item.rating ?? 5).toFixed(1)}</span>
                                             </div>
 
                                             <div>

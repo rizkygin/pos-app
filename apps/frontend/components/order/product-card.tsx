@@ -78,7 +78,7 @@ export function ProductCard({
                 <h4 className="font-black text-sm leading-tight line-clamp-2">{product.product_name}</h4>
                 <div className="flex items-center gap-1.5">
                     <StarRating rating={product.ratings} size="sm" />
-                    <span className="text-xs font-bold text-amber-600">{product.ratings.toFixed(1)}</span>
+                    <span className="text-xs font-bold text-amber-600">{Number(product.ratings ?? 5).toFixed(1)}</span>
                 </div>
                 <div className="space-y-0.5">
                     {product.discountPercent ? (

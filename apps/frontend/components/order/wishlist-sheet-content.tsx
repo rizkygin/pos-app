@@ -54,7 +54,7 @@ export function WishlistSheetContent({
                                 <p className="font-bold text-sm leading-tight line-clamp-1">{product.product_name}</p>
                                 <div className="flex items-center gap-1 mt-0.5">
                                     <StarRating rating={product.ratings} size="sm" />
-                                    <span className="text-xs text-amber-600 font-bold">{product.ratings.toFixed(1)}</span>
+                                    <span className="text-xs text-amber-600 font-bold">{Number(product.ratings ?? 5).toFixed(1)}</span>
                                 </div>
                                 <p className="text-xs font-black text-rose-600 mt-0.5">{fmtIDR(finalPrice)}</p>
                                 <div className="flex items-center gap-2 mt-2">

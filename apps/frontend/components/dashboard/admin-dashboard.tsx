@@ -33,7 +33,7 @@ type RecentOrder = {
 
 type AdminDashboardProps = {
   revenue30Days: number;
-  revenuePercentageChange: number;
+  revenuePercentageChange: number | null;
   pendingOrdersCount: number;
   activeOrdersCount: number;
   onlineCouriersCount: number;
@@ -83,7 +83,10 @@ export const AdminDashboard = ({
   totalCustomers,
   recentOrders,
 }: AdminDashboardProps) => {
-  const isPositive = revenuePercentageChange >= 0;
+  // Nullable in practice (e.g. res.ok but the JSON omits the field) — never
+  // call .toFixed() on the raw prop.
+  const revenueChange = revenuePercentageChange ?? 0;
+  const isPositive = revenueChange >= 0;
 
   return (
     <main className="px-4 mx-2 md:mx-6 pb-24 lg:pb-12">
@@ -104,7 +107,7 @@ export const AdminDashboard = ({
               {isPositive ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
               <span>
                 {isPositive ? '+' : ''}
-                {revenuePercentageChange.toFixed(1)}%
+                {revenueChange.toFixed(1)}%
               </span>
             </div>
           </div>

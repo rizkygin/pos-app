@@ -35,7 +35,7 @@ export function ProductSearchCard({ product, feature }: { product: Product; feat
                     <p className="text-[11px] text-muted-foreground">{product.outlet}</p>
                     <div className="flex items-center gap-1.5">
                         <StarRating rating={product.ratings} />
-                        <span className="text-[11px] font-bold text-amber-600">{product.ratings.toFixed(1)}</span>
+                        <span className="text-[11px] font-bold text-amber-600">{Number(product.ratings ?? 5).toFixed(1)}</span>
                     </div>
                     <div className="flex items-center justify-between">
                         <div>

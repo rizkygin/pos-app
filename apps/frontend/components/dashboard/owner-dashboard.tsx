@@ -81,7 +81,9 @@ export const OwnerDashboard = ({
   total6monthsSales: Total6MonthsSales;
   topProduct: TopProduct;
 }) => {
-  const isPositive = total6monthsSales.percentage >= 0;
+  // Defensive: a stale cached response (this is a PWA) could omit the field.
+  const salesPct = total6monthsSales.percentage ?? 0;
+  const isPositive = salesPct >= 0;
 
   return (
     <main className="mx-auto max-w-5xl px-4 pb-16 md:px-6">
@@ -124,7 +126,7 @@ export const OwnerDashboard = ({
               >
                 {isPositive ? <ArrowUpRight className="size-3.5" /> : <ArrowDownRight className="size-3.5" />}
                 {isPositive ? '+' : ''}
-                {total6monthsSales.percentage.toFixed(1)}%
+                {salesPct.toFixed(1)}%
               </span>
             </div>
           </div>

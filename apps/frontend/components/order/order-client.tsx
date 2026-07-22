@@ -319,7 +319,7 @@ export function OrderClient({
                   <div className="flex items-center gap-1">
                     <StarRating rating={outlet?.ratings} size="sm" />
                     <span className="font-black text-amber-300">
-                      {outlet?.ratings.toFixed(1)}
+                      {Number(outlet?.ratings ?? 5).toFixed(1)}
                     </span>
                     <span className="text-white/60">
                       ({fmtCount(outlet?.reviewCount ?? 0)} ulasan)

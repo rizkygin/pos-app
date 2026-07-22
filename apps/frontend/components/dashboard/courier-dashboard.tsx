@@ -619,8 +619,8 @@ export const CourierDashboard = ({
               <p className="text-xs font-bold opacity-60">Total Earnings</p>
               <h2 className="text-4xl font-black">{weeklyPerformance.totalEarnings}</h2>
               <p className="text-[10px] font-bold bg-white/20 w-fit px-2 py-0.5 rounded-full">
-                {weeklyPerformance.percentageChange >= 0 ? '+' : ''}
-                {weeklyPerformance.percentageChange.toFixed(1)}% from last week
+                {(weeklyPerformance.percentageChange ?? 0) >= 0 ? '+' : ''}
+                {(weeklyPerformance.percentageChange ?? 0).toFixed(1)}% from last week
               </p>
             </div>
             <div className="grid grid-cols-2 gap-4 border-t border-white/10 pt-6">
