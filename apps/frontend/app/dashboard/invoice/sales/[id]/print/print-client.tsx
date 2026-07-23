@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { Printer, Loader2, Sparkles, Layout, ScrollText } from "lucide-react";
+import { Printer, Loader2, Sparkles, Layout, ScrollText, Terminal } from "lucide-react";
 import { API_URL } from "@/lib/api-url";
 import { resolveOutletImage } from "@/lib/image-src";
 import { getSalesTerms } from "@/lib/invoice-terms";
@@ -31,7 +31,7 @@ type Invoice = {
   outlet: Outlet;
 };
 
-type Theme = "modern" | "classic" | "elegant";
+type Theme = "modern" | "classic" | "elegant" | "dotmatrix";
 const THEME_KEY = "pos_invoice_theme";
 const MODERN_COLOR_KEY = "pos_invoice_modern_color";
 const ELEGANT_C1_KEY = "pos_invoice_elegant_c1";
@@ -47,6 +47,7 @@ const THEMES: { key: Theme; label: string; icon: typeof Layout }[] = [
   { key: "modern", label: "Modern", icon: Layout },
   { key: "classic", label: "Klasik", icon: ScrollText },
   { key: "elegant", label: "Elegan", icon: Sparkles },
+  { key: "dotmatrix", label: "Dot Matrix", icon: Terminal },
 ];
 
 const rupiah = (v: number | string) =>
@@ -440,6 +441,123 @@ function ElegantInvoice({ inv, terms, c1, c2, totalBg }: { inv: Invoice; terms: 
   );
 }
 
+/* A row of "=" characters, clipped to the container width — the ASCII divider
+   dot-matrix/POS software used before printers could draw real rules. */
+function AsciiLine() {
+  return <p className="overflow-hidden whitespace-nowrap text-[10px] leading-none">{"=".repeat(80)}</p>;
+}
+
+/* ─────────────────────────────── Dot Matrix ─────────────────────────────
+   Styled after continuous-form invoices run off 9/24-pin impact printers
+   (the kind still wired into a lot of Indonesian toko back offices):
+   monospace throughout, pure black-on-white (a ribbon can't do gradients
+   or rounded corners), ASCII "====" rules instead of drawn lines, and a
+   perforated tractor-feed edge down each side. */
+function DotMatrixInvoice({ inv, terms }: { inv: Invoice; terms: string }) {
+  return (
+    <div className="relative border-2 border-black bg-white font-mono text-black">
+      {/* Sprocket-hole strips evoking tractor-feed paper. Purely decorative —
+          real continuous stationery has these perforated off before use. */}
+      <div
+        className="pointer-events-none absolute inset-y-0 left-0 w-3 bg-repeat-y"
+        style={{ backgroundImage: "radial-gradient(circle, #00000030 2px, transparent 2.5px)", backgroundSize: "100% 18px" }}
+      />
+      <div
+        className="pointer-events-none absolute inset-y-0 right-0 w-3 bg-repeat-y"
+        style={{ backgroundImage: "radial-gradient(circle, #00000030 2px, transparent 2.5px)", backgroundSize: "100% 18px" }}
+      />
+
+      <div className="px-6 py-6 sm:px-8">
+        <div className="text-center">
+          <h1 className="text-base font-bold uppercase tracking-[0.15em] sm:text-lg">{inv.outlet.name}</h1>
+          <p className="text-[11px] uppercase tracking-wide">{inv.outlet.address}</p>
+          <p className="text-[11px] uppercase tracking-wide">
+            {inv.outlet.phone}
+            {inv.outlet.email ? ` - ${inv.outlet.email}` : ""}
+          </p>
+        </div>
+
+        <AsciiLine />
+        <p className="text-center text-sm font-bold uppercase tracking-[0.3em]">*** Faktur Penjualan ***</p>
+        <p className="text-center text-[10px] uppercase tracking-widest text-zinc-500">Lembar : Asli - Untuk Pelanggan</p>
+        <AsciiLine />
+
+        <div className="mt-3 flex flex-col gap-1 text-xs sm:flex-row sm:justify-between">
+          <div>
+            <p>Kepada Yth.</p>
+            <p className="font-bold uppercase">{inv.party_name || "—"}</p>
+          </div>
+          <div className="sm:text-right">
+            <p>No. Faktur : <span className="font-bold">{inv.number}</span></p>
+            <p>Tanggal&nbsp;&nbsp;&nbsp; : {tgl(inv.issue_date)}</p>
+            <p>Jth. Tempo : {tgl(inv.due_date)}</p>
+            {inv.created_by_name && <p>Kasir&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; : {inv.created_by_name}</p>}
+          </div>
+        </div>
+
+        {(inv.status === "paid" || inv.status === "partial") && (
+          <p className="mt-2 text-center text-xs font-bold uppercase tracking-widest">
+            {inv.status === "paid" ? "[ L U N A S ]" : "[ DP DITERIMA ]"}
+          </p>
+        )}
+
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full border-collapse text-[11px] sm:text-xs">
+            <thead>
+              <tr className="border-y-2 border-black uppercase">
+                <th className="border-r border-dashed border-black px-1.5 py-1 text-left font-bold">Keterangan</th>
+                <th className="border-r border-dashed border-black px-1.5 py-1 text-right font-bold">Qty</th>
+                <th className="border-r border-dashed border-black px-1.5 py-1 text-right font-bold">Harga</th>
+                <th className="border-r border-dashed border-black px-1.5 py-1 text-right font-bold">Disk</th>
+                <th className="px-1.5 py-1 text-right font-bold">Jumlah</th>
+              </tr>
+            </thead>
+            <tbody>
+              {inv.items.map((it) => (
+                <tr key={it.id} className="border-b border-dotted border-black">
+                  <td className="border-r border-dashed border-black px-1.5 py-1">{it.description}</td>
+                  <td className="border-r border-dashed border-black px-1.5 py-1 text-right tabular-nums">{Number(it.quantity)}</td>
+                  <td className="whitespace-nowrap border-r border-dashed border-black px-1.5 py-1 text-right tabular-nums">{rupiah(it.unit_price)}</td>
+                  <td className="border-r border-dashed border-black px-1.5 py-1 text-right tabular-nums">{discLabel(it.discount_pct)}</td>
+                  <td className="whitespace-nowrap px-1.5 py-1 text-right tabular-nums">{rupiah(it.line_total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="mt-3 flex justify-end">
+          <div className="w-full space-y-1 text-xs sm:max-w-[260px]">
+            <Row label="SUBTOTAL" value={rupiah(inv.subtotal)} />
+            {Number(inv.discount) > 0 && <Row label="DISKON" value={`-${rupiah(inv.discount)}`} />}
+            <Row label={`PAJAK (${Number(inv.tax_rate)}%)`} value={rupiah(inv.tax_amount)} />
+            <div className="flex justify-between border-y-4 border-double border-black py-1 text-sm font-bold">
+              <span>TOTAL</span>
+              <span className="tabular-nums">{rupiah(inv.total)}</span>
+            </div>
+            <PaidRows inv={inv} />
+          </div>
+        </div>
+
+        <Footer inv={inv} terms={terms} accent="#000000" />
+
+        <div className="mt-10 flex justify-end">
+          <div className="text-center text-xs">
+            <p>Hormat kami,</p>
+            <div className="mt-12 border-t border-black px-8" />
+            <p className="mt-1 font-bold uppercase">{inv.outlet.name}</p>
+          </div>
+        </div>
+
+        <AsciiLine />
+        <p className="text-center text-[9px] uppercase tracking-widest text-zinc-400">
+          Dicetak oleh sistem - sah tanpa tanda tangan basah
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export function PrintClient() {
   const params = useParams();
   const id = params?.id as string;
@@ -634,6 +752,8 @@ export function PrintClient() {
             <ClassicInvoice inv={inv} terms={terms} />
           ) : theme === "elegant" ? (
             <ElegantInvoice inv={inv} terms={terms} c1={c1} c2={c2} totalBg={totalBg} />
+          ) : theme === "dotmatrix" ? (
+            <DotMatrixInvoice inv={inv} terms={terms} />
           ) : (
             <ModernInvoice inv={inv} terms={terms} accent={modernColor} />
           )}
