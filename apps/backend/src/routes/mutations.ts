@@ -64,6 +64,26 @@ export async function mutationRoutes(app: FastifyInstance) {
       const body = (request.body as any) || {};
       body.outletId = access.outlet.id;
 
+      // Idempotency: the desktop cashier (offline-queue capable) sends its own
+      // client-generated orderId so a retried request — e.g. the response was
+      // lost after the server already committed — replays as a no-op instead
+      // of ringing up the sale twice. The web cashier sends no orderId; that
+      // path is untouched (server mints one as before). orders.id is a real
+      // PRIMARY KEY, so a genuine duplicate is caught below even if this
+      // pre-check loses a race.
+      const clientOrderId: string | undefined =
+        typeof body.orderId === "string" && body.orderId.length > 0 ? body.orderId : undefined;
+      if (clientOrderId) {
+        const [already] = await db
+          .select({ id: ordersTable.id })
+          .from(ordersTable)
+          .where(eq(ordersTable.id, clientOrderId))
+          .limit(1);
+        if (already) {
+          return { success: true, message: "Order already processed", orderId: clientOrderId, replay: true };
+        }
+      }
+
       // Find offline customer and courier (hardcoded for now, can be made dynamic)
       const EMAIL = "rizkygin1@gmail.com";
       const EMAIL_COURIER = "rizkygin3@gmail.com";
@@ -84,56 +104,68 @@ export async function mutationRoutes(app: FastifyInstance) {
 
       let new_order_id: string | undefined;
 
-      await db.transaction(async (tx) => {
-        if (body.cart && body.cart.length > 0) {
-          new_order_id = crypto.randomUUID();
-          await tx.insert(ordersTable).values({
-            id: new_order_id,
-            customer_id: customer_offline?.id || 1,
-            courier_id: courier_offline?.id || 1,
-            status: "delivered",
-            outlet_id: body.outletId,
-            note: {
-              customerName: body.customerName || null,
-              cashierName: body.cashierName || null,
-              discountAmount: body.discountAmount ?? 0,
-              paymentMethod: body.paymentMethod ?? "cash",
-              amountPaid: body.amountPaid ?? 0,
-              changeDue: body.changeDue ?? 0,
-            },
-          });
-
-          for (const item of body.cart as any[]) {
-            const qty = Number(item.quantity);
-            const summary_price =
-              item.product.price_mark_down && item.product.price_mark_down !== "0"
-                ? parseFloat(item.product.price_mark_down) * qty
-                : parseFloat(item.product.price) * qty;
-
-            await tx.insert(orderDetailsTable).values({
-              order_id: new_order_id,
-              product_id: item.product.id,
-              quantity: item.quantity,
-              note_product: item.note_product || "-",
-              summary_price: summary_price.toString(),
-              status: "checkout",
+      try {
+        await db.transaction(async (tx) => {
+          if (body.cart && body.cart.length > 0) {
+            new_order_id = clientOrderId ?? crypto.randomUUID();
+            await tx.insert(ordersTable).values({
+              id: new_order_id,
+              customer_id: customer_offline?.id || 1,
+              courier_id: courier_offline?.id || 1,
+              status: "delivered",
+              outlet_id: body.outletId,
+              note: {
+                customerName: body.customerName || null,
+                cashierName: body.cashierName || null,
+                discountAmount: body.discountAmount ?? 0,
+                paymentMethod: body.paymentMethod ?? "cash",
+                amountPaid: body.amountPaid ?? 0,
+                changeDue: body.changeDue ?? 0,
+              },
             });
 
-            // POS is an immediate sale: move stock (own stock for track_stock
-            // products, ingredients for recipe products) with an audit trail.
-            // Oversell warnings are ignored here — a POS sale must never fail
-            // because stock records lag reality.
-            await applySaleStockOut(tx, {
-              outletId: body.outletId,
-              productId: item.product.id,
-              qty,
-              note: `POS ${new_order_id}`,
-            });
+            for (const item of body.cart as any[]) {
+              const qty = Number(item.quantity);
+              const summary_price =
+                item.product.price_mark_down && item.product.price_mark_down !== "0"
+                  ? parseFloat(item.product.price_mark_down) * qty
+                  : parseFloat(item.product.price) * qty;
+
+              await tx.insert(orderDetailsTable).values({
+                order_id: new_order_id,
+                product_id: item.product.id,
+                quantity: item.quantity,
+                note_product: item.note_product || "-",
+                summary_price: summary_price.toString(),
+                status: "checkout",
+              });
+
+              // POS is an immediate sale: move stock (own stock for track_stock
+              // products, ingredients for recipe products) with an audit trail.
+              // Oversell warnings are ignored here — a POS sale must never fail
+              // because stock records lag reality.
+              await applySaleStockOut(tx, {
+                outletId: body.outletId,
+                productId: item.product.id,
+                qty,
+                note: `POS ${new_order_id}`,
+              });
+            }
           }
-        }
 
-        await addPosToCashflowin(tx, body.outletId, body.total);
-      });
+          await addPosToCashflowin(tx, body.outletId, body.total);
+        });
+      } catch (err: any) {
+        // Race: two near-simultaneous retries both slipped past the pre-check
+        // above. orders.id is a real PRIMARY KEY, so Postgres catches the
+        // duplicate here — treat it exactly like the pre-check hit (already
+        // processed), instead of surfacing a raw constraint-violation 500.
+        const pgCode = err?.code ?? err?.cause?.code;
+        if (clientOrderId && pgCode === "23505") {
+          return { success: true, message: "Order already processed", orderId: clientOrderId, replay: true };
+        }
+        throw err; // anything else: let the outer catch handle it, unchanged
+      }
 
       return { success: true, message: "Order created successfully", orderId: new_order_id };
     } catch (error: any) {

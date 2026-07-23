@@ -23,6 +23,7 @@ import {
   Check,
   Search,
   AlertTriangle,
+  Barcode,
 } from 'lucide-react';
 import QRCode from 'react-qr-code';
 import { Button } from '@/components/ui/button';
@@ -61,6 +62,7 @@ type Product = {
   stock: string;
   lowest_price?: string | null;
   highest_price?: string | null;
+  barcode?: string | null;
 };
 
 const rupiah = (v: number | string) =>
@@ -171,6 +173,7 @@ export const ProductsManager = ({
     unit: 'pcs',
     lowest_price: '',
     highest_price: '',
+    barcode: '',
   });
 
   // Service products (category "jasa") are priced as a negotiable range instead
@@ -243,6 +246,7 @@ export const ProductsManager = ({
         unit: 'pcs',
         lowest_price: '',
         highest_price: '',
+        barcode: '',
       });
       setImageUrl('');
       setEditingProductId(null);
@@ -289,6 +293,7 @@ export const ProductsManager = ({
       unit: product.unit,
       lowest_price: product.lowest_price ?? '',
       highest_price: product.highest_price ?? '',
+      barcode: product.barcode ?? '',
     });
     setView('form');
   };
@@ -389,7 +394,7 @@ export const ProductsManager = ({
                 className="rounded-xl border-border hover:bg-muted/50 transition-colors"
               >
                 <Share2 className="mr-2 h-4 w-4" />
-                Share Menu
+                Share Produk
               </Button>
               <Button
                 onClick={() => {
@@ -403,6 +408,7 @@ export const ProductsManager = ({
                     unit: 'pcs',
                     lowest_price: '',
                     highest_price: '',
+                    barcode: '',
                   });
                   setImageUrl('');
                   setSelectedFeatures([]);
@@ -515,6 +521,12 @@ export const ProductsManager = ({
                                     {product.category || '—'}
                                     {!product.is_for_sale && ' · inventaris'}
                                   </span>
+                                  {product.barcode && (
+                                    <span className="flex items-center gap-1 text-[11px] text-muted-foreground font-mono truncate mt-0.5">
+                                      <Barcode className="h-3 w-3 shrink-0" />
+                                      {product.barcode}
+                                    </span>
+                                  )}
                                 </div>
                               </div>
                             </td>
@@ -907,6 +919,32 @@ export const ProductsManager = ({
                 </datalist>
                 <p className="text-xs text-muted-foreground">
                   Satuan hitung stok & resep (maks. 10 huruf) — bebas diisi.
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-bold flex items-center gap-2">
+                  <Barcode className="h-4 w-4 text-muted-foreground" />
+                  Barcode
+                  <span className="font-normal text-xs text-muted-foreground">(opsional)</span>
+                </label>
+                <input
+                  name="barcode"
+                  value={formData.barcode}
+                  onChange={handleInputChange}
+                  // USB barcode scanners emulate typing + an Enter keystroke —
+                  // without this, scanning into this field would submit the
+                  // whole product form early instead of just filling it in.
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') e.preventDefault();
+                  }}
+                  maxLength={64}
+                  className="flex h-12 w-full rounded-xl border border-input bg-transparent px-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 font-mono"
+                  placeholder="Scan atau ketik kode barcode…"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Cocok untuk produk mart/ritel. Harus unik per outlet — dua produk tidak
+                  boleh berbagi barcode yang sama.
                 </p>
               </div>
 

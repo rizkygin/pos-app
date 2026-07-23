@@ -16,6 +16,8 @@ export type AddProductInput = {
   // Service products: negotiable price range (backend derives price = lowest).
   lowest_price?: string;
   highest_price?: string;
+  // Optional — mainly for retail/mart items. Unique per outlet on the backend.
+  barcode?: string;
 };
 
 type ActionResult = { success: boolean; message?: string };

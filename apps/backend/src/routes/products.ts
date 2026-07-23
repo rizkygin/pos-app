@@ -40,7 +40,28 @@ type AddProductInput = {
   // product is treated as a service (price mirrors lowest_price, no stock).
   lowest_price?: string;
   highest_price?: string;
+  // Optional, mainly for retail/mart items. Unique per outlet — see
+  // products_outlet_barcode_uq in schema.ts.
+  barcode?: string;
 };
+
+// Empty string -> null so the unique-per-outlet index (which allows unlimited
+// NULLs) doesn't treat "no barcode yet" as a collision between two products.
+function normalizeBarcode(barcode: string | undefined): string | null | undefined {
+  if (barcode === undefined) return undefined;
+  const trimmed = barcode.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
+async function findBarcodeConflict(outletId: number, barcode: string, excludeProductId?: string) {
+  const [conflict] = await db
+    .select({ id: productsTable.id, product_name: productsTable.product_name })
+    .from(productsTable)
+    .where(and(eq(productsTable.outlet_id, outletId), eq(productsTable.barcode, barcode)))
+    .limit(1);
+  if (!conflict || conflict.id === excludeProductId) return null;
+  return conflict;
+}
 
 // A service product is priced by range. Mirror `price`/`price_mark_down` to the
 // lowest price so existing "mulai dari" customer displays keep working, and force
@@ -101,25 +122,46 @@ export async function productRoutes(app: FastifyInstance) {
       const data = request.body as AddProductInput;
       const id = crypto.randomUUID();
       const service = serviceProductFields(data);
+      const barcode = normalizeBarcode(data.barcode);
 
-      await db.insert(productsTable).values({
-        id,
-        product_name: data.product_name,
-        price: service?.price ?? data.price,
-        price_mark_down: service?.price_mark_down ?? data.price_mark_down,
-        buying_price: data.buying_price,
-        // Pinned to the caller's outlet — body.outlet_id is ignored.
-        outlet_id: access.outlet.id,
-        category: data.category,
-        description: data.description || "",
-        unit: data.unit || "pcs",
-        image: data.image || "avatar.png",
-        features: data.features ?? [],
-        is_for_sale: data.is_for_sale ?? true,
-        track_stock: service ? false : (data.track_stock ?? true),
-        lowest_price: service?.lowest_price ?? null,
-        highest_price: service?.highest_price ?? null,
-      });
+      if (barcode) {
+        const conflict = await findBarcodeConflict(access.outlet.id, barcode);
+        if (conflict) {
+          return reply.send({
+            success: false,
+            message: `Barcode sudah dipakai produk "${conflict.product_name}" di outlet ini.`,
+          });
+        }
+      }
+
+      try {
+        await db.insert(productsTable).values({
+          id,
+          product_name: data.product_name,
+          price: service?.price ?? data.price,
+          price_mark_down: service?.price_mark_down ?? data.price_mark_down,
+          buying_price: data.buying_price,
+          // Pinned to the caller's outlet — body.outlet_id is ignored.
+          outlet_id: access.outlet.id,
+          category: data.category,
+          description: data.description || "",
+          unit: data.unit || "pcs",
+          image: data.image || "avatar.png",
+          features: data.features ?? [],
+          is_for_sale: data.is_for_sale ?? true,
+          track_stock: service ? false : (data.track_stock ?? true),
+          lowest_price: service?.lowest_price ?? null,
+          highest_price: service?.highest_price ?? null,
+          barcode: barcode ?? null,
+        });
+      } catch (err: any) {
+        // Race-safe fallback: two concurrent saves could both pass the
+        // pre-check above before either commits.
+        if ((err?.code ?? err?.cause?.code) === "23505") {
+          return reply.send({ success: false, message: "Barcode sudah dipakai produk lain di outlet ini." });
+        }
+        throw err;
+      }
 
       return reply.send({ success: true, message: "Product added successfully." });
     } catch (error) {
@@ -287,25 +329,44 @@ export async function productRoutes(app: FastifyInstance) {
         return reply.send({ success: false, message: "Product not found" });
 
       const service = serviceProductFields(data);
+      const barcode = normalizeBarcode(data.barcode);
 
-      await db
-        .update(productsTable)
-        .set({
-          product_name: data.product_name,
-          price: service?.price ?? data.price,
-          price_mark_down: service?.price_mark_down ?? data.price_mark_down,
-          buying_price: data.buying_price,
-          category: data.category,
-          description: data.description,
-          unit: data.unit,
-          ...(data.image && { image: data.image }),
-          ...(data.features !== undefined && { features: data.features }),
-          ...(data.is_for_sale !== undefined && { is_for_sale: data.is_for_sale }),
-          ...(service
-            ? { lowest_price: service.lowest_price, highest_price: service.highest_price, track_stock: false, discount_percent: null }
-            : data.track_stock !== undefined && { track_stock: data.track_stock }),
-        })
-        .where(eq(productsTable.id, productId));
+      if (barcode) {
+        const conflict = await findBarcodeConflict(access.outlet.id, barcode, productId);
+        if (conflict) {
+          return reply.send({
+            success: false,
+            message: `Barcode sudah dipakai produk "${conflict.product_name}" di outlet ini.`,
+          });
+        }
+      }
+
+      try {
+        await db
+          .update(productsTable)
+          .set({
+            product_name: data.product_name,
+            price: service?.price ?? data.price,
+            price_mark_down: service?.price_mark_down ?? data.price_mark_down,
+            buying_price: data.buying_price,
+            category: data.category,
+            description: data.description,
+            unit: data.unit,
+            ...(data.image && { image: data.image }),
+            ...(data.features !== undefined && { features: data.features }),
+            ...(data.is_for_sale !== undefined && { is_for_sale: data.is_for_sale }),
+            ...(barcode !== undefined && { barcode }),
+            ...(service
+              ? { lowest_price: service.lowest_price, highest_price: service.highest_price, track_stock: false, discount_percent: null }
+              : data.track_stock !== undefined && { track_stock: data.track_stock }),
+          })
+          .where(eq(productsTable.id, productId));
+      } catch (err: any) {
+        if ((err?.code ?? err?.cause?.code) === "23505") {
+          return reply.send({ success: false, message: "Barcode sudah dipakai produk lain di outlet ini." });
+        }
+        throw err;
+      }
 
       return reply.send({ success: true, message: "Product updated successfully." });
     } catch (error) {

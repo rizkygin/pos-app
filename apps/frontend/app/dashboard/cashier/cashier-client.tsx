@@ -18,6 +18,7 @@ import {
   X,
   ChevronDown,
   Layers,
+  Barcode,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatCurrency } from '@/lib/utils/format';
@@ -34,6 +35,7 @@ type Product = {
   isAvailable: boolean;
   description: string | null;
   unit: string;
+  barcode?: string | null;
 };
 
 type CartItem = {
@@ -97,6 +99,17 @@ export const CashierClient = ({
 }: CashierClientProps) => {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState('');
+  // Dedicated barcode field — separate from the name search above, since a
+  // scanner (or a cashier typing a code) means "find this EXACT item", not
+  // "filter the grid". Enter/scan looks it up and adds it straight to cart.
+  const [barcodeQuery, setBarcodeQuery] = useState('');
+  const [barcodeFeedback, setBarcodeFeedback] = useState<{ ok: boolean; text: string } | null>(null);
+  // Two refs, not one: the mobile and desktop barcode inputs below are both
+  // mounted at once (toggled by CSS breakpoint classes, not conditional
+  // rendering) — a single ref would only ever point at whichever renders
+  // last in JSX order.
+  const barcodeInputMobileRef = useRef<HTMLInputElement>(null);
+  const barcodeInputDesktopRef = useRef<HTMLInputElement>(null);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
   const [receipt, setReceipt] = useState<ReceiptData | null>(null);
@@ -339,6 +352,34 @@ export const CashierClient = ({
     });
   };
 
+  const handleBarcodeScan = (source: React.RefObject<HTMLInputElement | null>) => {
+    const code = barcodeQuery.trim();
+    if (!code) return;
+
+    const match = initialProducts.find((p) => p.barcode && p.barcode === code);
+    if (!match) {
+      setBarcodeFeedback({ ok: false, text: `Barcode "${code}" tidak ditemukan.` });
+    } else if (!match.isAvailable) {
+      setBarcodeFeedback({ ok: false, text: `${match.product_name} sedang tidak tersedia.` });
+    } else {
+      addToCart(match);
+      setBarcodeFeedback({ ok: true, text: `${match.product_name} ditambahkan.` });
+    }
+    setBarcodeQuery('');
+    // Keep the SAME field focused so the next scan can land immediately —
+    // there are two mounted inputs (mobile/desktop), only refocus the one
+    // that was actually just used.
+    source.current?.focus();
+  };
+
+  // Feedback is transient — clear it a moment after each scan so a stale
+  // "not found" message doesn't linger and get mistaken for the current scan.
+  useEffect(() => {
+    if (!barcodeFeedback) return;
+    const t = setTimeout(() => setBarcodeFeedback(null), 2500);
+    return () => clearTimeout(t);
+  }, [barcodeFeedback]);
+
   const updateQuantity = (productId: string, delta: number) => {
     setCart((prev) =>
       prev.map((item) => {
@@ -512,8 +553,8 @@ export const CashierClient = ({
       <div className="flex-1 flex flex-col min-w-0 bg-background/50 backdrop-blur-sm border-r">
         {/* Header & Search */}
         <div className="p-3 pb-0">
-          {/* Mobile: search only */}
-          <div className="flex items-center gap-2 mb-2 md:hidden">
+          {/* Mobile: search + barcode */}
+          <div className="flex items-center gap-2 mb-1 md:hidden">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <input
@@ -524,7 +565,29 @@ export const CashierClient = ({
                 className="w-full h-9 pl-10 pr-4 rounded-xl border bg-background/80 shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none text-sm"
               />
             </div>
+            <div className="relative flex-1">
+              <Barcode className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <input
+                ref={barcodeInputMobileRef}
+                type="text"
+                placeholder="Scan barcode..."
+                value={barcodeQuery}
+                onChange={(e) => setBarcodeQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleBarcodeScan(barcodeInputMobileRef);
+                  }
+                }}
+                className="w-full h-9 pl-10 pr-4 rounded-xl border bg-background/80 shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none text-sm font-mono"
+              />
+            </div>
           </div>
+          {barcodeFeedback && (
+            <p className={`text-xs mb-1 md:hidden ${barcodeFeedback.ok ? 'text-emerald-600' : 'text-rose-600'}`}>
+              {barcodeFeedback.text}
+            </p>
+          )}
 
           {/* Desktop: full header */}
           <div className="hidden md:flex flex-row gap-4 items-center justify-between">
@@ -536,15 +599,41 @@ export const CashierClient = ({
                 Select items to add to cart
               </p>
             </div>
-            <div className="relative w-72">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <input
-                type="text"
-                placeholder="Search products..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full h-11 pl-10 pr-4 rounded-xl border bg-background/80 shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none"
-              />
+            <div className="flex flex-col items-end gap-1">
+              <div className="flex gap-3">
+                <div className="relative w-56">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <input
+                    type="text"
+                    placeholder="Search products..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full h-11 pl-10 pr-4 rounded-xl border bg-background/80 shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none"
+                  />
+                </div>
+                <div className="relative w-56">
+                  <Barcode className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <input
+                    ref={barcodeInputDesktopRef}
+                    type="text"
+                    placeholder="Scan barcode..."
+                    value={barcodeQuery}
+                    onChange={(e) => setBarcodeQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleBarcodeScan(barcodeInputDesktopRef);
+                      }
+                    }}
+                    className="w-full h-11 pl-10 pr-4 rounded-xl border bg-background/80 shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none font-mono"
+                  />
+                </div>
+              </div>
+              {barcodeFeedback && (
+                <p className={`text-xs ${barcodeFeedback.ok ? 'text-emerald-600' : 'text-rose-600'}`}>
+                  {barcodeFeedback.text}
+                </p>
+              )}
             </div>
           </div>
 

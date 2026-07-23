@@ -188,6 +188,12 @@ export const productsTable = pgTable(
     track_stock: boolean('track_stock').default(true).notNull(),
     description: varchar('description', { length: 255 }).default(''),
     unit: varchar('unit', { length: 10 }).notNull().default('pcs'),
+    // Optional — mainly for "mart"/retail goods, but available on any category
+    // (packaged drinks, building materials, etc. can carry a real barcode too).
+    // Unique per outlet (see products_outlet_barcode_uq below) so a future
+    // barcode-scanner checkout can look a code up unambiguously; NULL is exempt
+    // from the constraint, so any number of products can go without one.
+    barcode: varchar('barcode', { length: 64 }),
     features: text('features').array().default([]).notNull(),
     is_recommended: boolean('is_recommended').default(false).notNull(),
     discount_percent: integer('discount_percent'),
@@ -206,6 +212,10 @@ export const productsTable = pgTable(
       table.deletedAt,
     ),
     index('products_outlet_id_idx').on(table.outlet_id),
+    uniqueIndex('products_outlet_barcode_uq').on(
+      table.outlet_id,
+      table.barcode,
+    ),
   ],
 );
 
