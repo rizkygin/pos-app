@@ -45,3 +45,8 @@ apps/backend/uploads/
 
 # local backups & DB dumps (sensitive — never commit)
 /backups/
+
+# Standalone Electron cashier — its OWN git repo, never committed here. Also
+# keeps its 400MB+ Electron dist/ out of the `railway up` upload archive (the
+# root Dockerfile does `COPY . .`, so anything uploaded lands in the image).
+apps/desktop-cashier/
