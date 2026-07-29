@@ -77,6 +77,11 @@ type CashierClientProps = {
   initialProducts: Product[];
 };
 
+// Ceiling on a hand-typed quantity: four digits is far past any real counter
+// sale, and it keeps a fat-fingered paste from turning the order total into
+// nonsense. The +/- buttons are unbounded as before.
+const MAX_QUANTITY = 9999;
+
 const INITIAL_CATEGORIES = [
   {
     id: 'All',
@@ -389,6 +394,32 @@ export const CashierClient = ({
         }
         return item;
       }),
+    );
+  };
+
+  // Typing "100" beats tapping + ninety-nine times. The half-typed value lives
+  // in a draft slot rather than in the cart, so an intermediate empty field
+  // never writes quantity 0 into the order; the cart only changes on commit.
+  // One slot is enough — only the focused input is ever being edited.
+  const [qtyDraft, setQtyDraft] = useState<{ id: string; value: string } | null>(
+    null,
+  );
+  // Escape cancels. Set at keydown and read on the blur it triggers, because
+  // the input's DOM value still holds the draft at that point.
+  const qtyCancelledRef = useRef(false);
+
+  const setQuantity = (productId: string, raw: string) => {
+    setQtyDraft(null);
+    const parsed = parseInt(raw, 10);
+    // Blank or junk means "never mind" — keep the previous quantity instead of
+    // silently dropping the line. Trash is what the button is for.
+    if (!Number.isFinite(parsed) || parsed < 1) return;
+    setCart((prev) =>
+      prev.map((item) =>
+        item.product.id === productId
+          ? { ...item, quantity: Math.min(parsed, MAX_QUANTITY) }
+          : item,
+      ),
     );
   };
 
@@ -957,9 +988,48 @@ export const CashierClient = ({
                         >
                           <Minus className="h-3 w-3" />
                         </button>
-                        <span className="text-sm font-bold w-4 text-center">
-                          {item.quantity}
-                        </span>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          aria-label={`Jumlah ${item.product.product_name}`}
+                          value={
+                            qtyDraft?.id === item.product.id
+                              ? qtyDraft.value
+                              : String(item.quantity)
+                          }
+                          onFocus={(e) => {
+                            setQtyDraft({
+                              id: item.product.id,
+                              value: String(item.quantity),
+                            });
+                            // Select-all so the cashier can just type over it.
+                            e.currentTarget.select();
+                          }}
+                          onChange={(e) =>
+                            setQtyDraft({
+                              id: item.product.id,
+                              value: e.target.value.replace(/\D/g, '').slice(0, 4),
+                            })
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              e.currentTarget.blur();
+                            } else if (e.key === 'Escape') {
+                              qtyCancelledRef.current = true;
+                              e.currentTarget.blur();
+                            }
+                          }}
+                          onBlur={(e) => {
+                            if (qtyCancelledRef.current) {
+                              qtyCancelledRef.current = false;
+                              setQtyDraft(null);
+                              return;
+                            }
+                            setQuantity(item.product.id, e.target.value);
+                          }}
+                          className="w-10 h-6 text-sm font-bold text-center bg-transparent rounded-md outline-none transition-colors focus:bg-muted focus:ring-2 focus:ring-blue-500"
+                        />
                         <button
                           onClick={() => updateQuantity(item.product.id, 1)}
                           className="w-6 h-6 flex items-center justify-center rounded-md bg-blue-50 hover:bg-blue-100 text-blue-600 transition-colors"

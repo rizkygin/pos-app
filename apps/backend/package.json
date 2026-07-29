@@ -23,11 +23,13 @@
     "pg": "^8.20.0",
     "resend": "^6.12.3",
     "sharp": "^0.34.5",
+    "web-push": "^3.6.7",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^20",
     "@types/pg": "^8.20.0",
+    "@types/web-push": "^3.6.4",
     "drizzle-kit": "^0.31.10",
     "tsx": "^4.21.0",
     "typescript": "5.9.3"

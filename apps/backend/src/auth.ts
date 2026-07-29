@@ -22,6 +22,32 @@ const cookieSecure = process.env.COOKIE_SECURE
 const cookieDomain =
   process.env.COOKIE_DOMAIN ?? (isProduction ? ".ulunpesan.com" : undefined);
 
+// FRONTEND_ORIGIN may list several origins (apex + www) for CORS; the first one
+// is the canonical site we point email links back at.
+const FRONTEND_URL = (process.env.FRONTEND_ORIGIN ?? "http://localhost:3000")
+  .split(",")[0]
+  .trim();
+
+// Both email links are handled by the backend first (to burn the token), then
+// redirected to a `callbackURL`. better-auth resolves a relative callbackURL
+// against the BACKEND origin — so the caller-supplied "/dashboard" or
+// "/reset-password" would land the user on api.ulunpesan.com, a 404. Force an
+// absolute frontend URL instead; trustedOrigins already allows it.
+function withFrontendCallback(url: string, landing: string) {
+  const parsed = new URL(url);
+  parsed.searchParams.set("callbackURL", `${FRONTEND_URL}${landing}`);
+  return parsed.toString();
+}
+
+// The ?verified=1 marker tells the page it was reached from a real verification
+// attempt: better-auth appends &error=<code> on failure and nothing at all on
+// success, so without a marker a plain visit to /verify-email would look
+// exactly like a successful one.
+const VERIFY_EMAIL_LANDING = "/verify-email?verified=1";
+// The reset callback needs no marker — success carries ?token=<token> and
+// failure carries ?error=INVALID_TOKEN, so the two are already distinguishable.
+const RESET_PASSWORD_LANDING = "/reset-password";
+
 export const auth = betterAuth({
   database: drizzleAdapter(db, {
     provider: "pg",
@@ -42,13 +68,21 @@ export const auth = betterAuth({
         html: `
           <p>Hi ${user.name},</p>
           <p>Click the link below to reset your password. This link expires in 1 hour.</p>
-          <a href="${url}" style="display:inline-block;padding:12px 24px;background:#f43f5e;color:#fff;border-radius:8px;text-decoration:none;font-weight:bold;">Reset Password</a>
+          <a href="${withFrontendCallback(url, RESET_PASSWORD_LANDING)}" style="display:inline-block;padding:12px 24px;background:#f43f5e;color:#fff;border-radius:8px;text-decoration:none;font-weight:bold;">Reset Password</a>
           <p>If you didn't request this, ignore this email.</p>
         `,
       });
     },
   },
   emailVerification: {
+    // Fire on sign-up. requireEmailVerification stays off, so an unverified
+    // account can still sign in — verification is a confirmation step, not a
+    // gate (turning it into a gate would lock out every existing account).
+    sendOnSignUp: true,
+    // Merchants often open the link on a different device than they signed up
+    // on; signing them in there saves a second login.
+    autoSignInAfterVerification: true,
+    expiresIn: 60 * 60 * 24,
     sendVerificationEmail: async ({ user, url }) => {
       await resend.emails.send({
         from: FROM,
@@ -56,8 +90,8 @@ export const auth = betterAuth({
         subject: "Verify your email address",
         html: `
           <p>Hi ${user.name},</p>
-          <p>Click the link below to verify your email address.</p>
-          <a href="${url}" style="display:inline-block;padding:12px 24px;background:#f43f5e;color:#fff;border-radius:8px;text-decoration:none;font-weight:bold;">Verify Email</a>
+          <p>Click the link below to verify your email address. This link expires in 24 hours.</p>
+          <a href="${withFrontendCallback(url, VERIFY_EMAIL_LANDING)}" style="display:inline-block;padding:12px 24px;background:#f43f5e;color:#fff;border-radius:8px;text-decoration:none;font-weight:bold;">Verify Email</a>
           <p>If you didn't create an account, ignore this email.</p>
         `,
       });
@@ -69,6 +103,21 @@ export const auth = betterAuth({
   session: {
     expiresIn: 60 * 60 * 24 * 30,
     updateAge: 60 * 60 * 24,
+  },
+  // Every one of these paths spends a Resend send on someone else's inbox, so
+  // they get a tighter budget than better-auth's built-in 3-per-60s default.
+  // Keyed per client IP (resolved from x-forwarded-for behind Railway's edge),
+  // stored in memory — fine while the backend runs as a single instance; a
+  // second replica would give each its own counters.
+  rateLimit: {
+    // better-auth only rate-limits in production by default. AUTH_RATE_LIMIT=true
+    // forces it on locally so the flow can be exercised end to end.
+    enabled: process.env.AUTH_RATE_LIMIT === "true" || isProduction,
+    customRules: {
+      "/send-verification-email": { window: 300, max: 3 },
+      "/forget-password": { window: 300, max: 3 },
+      "/request-password-reset": { window: 300, max: 3 },
+    },
   },
   trustedOrigins: [
     "https://ulunpesan.com",

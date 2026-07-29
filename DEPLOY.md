@@ -45,6 +45,13 @@ Railway provides `DATABASE_URL` automatically. Use that value for the backend.
 | `RESEND_API_KEY` | your Resend key |
 | `COOKIE_SECURE` | `true` |
 | `COOKIE_DOMAIN` | `.yourdomain.com` (shared parent of frontend + backend) |
+| `VAPID_PUBLIC_KEY` | Web Push key pair — generate once with `npx web-push generate-vapid-keys`, then reuse forever. Rotating it invalidates every owner's push subscription. |
+| `VAPID_PRIVATE_KEY` | paired private key — keep secret, backend-only |
+| `VAPID_SUBJECT` | `mailto:you@yourdomain.com` (contact the push services can reach if they need to flag abuse) |
+
+Push notifications degrade gracefully without these — `/api/push/public-key` just
+reports unconfigured and the frontend hides the enable button. No frontend env
+var needed: the public key is served at runtime, not baked into the build.
 
 ### frontend
 | Var | Value |

@@ -14,6 +14,9 @@
     "db:migrate": "npm run db:migrate -w backend",
     "db:seed": "npm run db:seed -w backend",
     "db:reset": "npm run db:reset -w backend",
-    "db:clear": "npm run db:clear -w backend"
+    "db:clear": "npm run db:clear -w backend",
+    "dev:desktop": "npm run dev -w desktop-cashier",
+    "build:desktop": "npm run build -w desktop-cashier",
+    "package:desktop": "npm run package -w desktop-cashier"
   }
 }

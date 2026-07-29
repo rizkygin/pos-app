@@ -13,11 +13,13 @@ export default function LoginPage() {
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(false);
   const [errorMSG, setErrorMSG] = useState("");
+  const [noticeMSG, setNoticeMSG] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setErrorMSG("");
+    setNoticeMSG("");
     try {
       if (isLogin) {
         const { data, error } = await authClient.signIn.email({
@@ -41,8 +43,13 @@ export default function LoginPage() {
 
           }
         });
-        // Handle successful signup
-        setIsLogin(!isLogin);
+        if (error) throw new Error(error.message);
+        // Handle successful signup. Sign-up also fires a verification email —
+        // the account works right away, but say so or the mail looks unprompted.
+        setNoticeMSG(
+          "Akun sudah jadi! Ulun kirimi tautan verifikasi ke email pian, dibuka lah."
+        );
+        setIsLogin(true);
       }
     } catch (err: any) {
       setErrorMSG(err.message || "An error occurred");
@@ -158,6 +165,16 @@ export default function LoginPage() {
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
+              {isLogin && (
+                <div className="mt-2 text-right">
+                  <a
+                    href="/forgot-password"
+                    className="text-xs text-zinc-400 hover:text-rose-300 font-medium transition-colors"
+                  >
+                    Kada ingat password?
+                  </a>
+                </div>
+              )}
             </motion.div>
             {errorMSG && (
               <motion.div
@@ -166,6 +183,18 @@ export default function LoginPage() {
                 className="text-red-400 text-sm font-medium bg-red-400/10 p-3 rounded-xl border border-red-400/20"
               >
                 {errorMSG}
+              </motion.div>
+            )}
+            {noticeMSG && (
+              <motion.div
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="text-emerald-400 text-sm font-medium bg-emerald-400/10 p-3 rounded-xl border border-emerald-400/20"
+              >
+                {noticeMSG}{" "}
+                <a href="/verify-email" className="underline hover:text-emerald-300">
+                  Kirim ulang
+                </a>
               </motion.div>
             )}
             <motion.button
@@ -190,6 +219,7 @@ export default function LoginPage() {
               onClick={() => {
                 setIsLogin(!isLogin);
                 setErrorMSG("");
+                setNoticeMSG("");
               }}
               className="text-white hover:text-rose-300 font-medium transition-colors"
             >

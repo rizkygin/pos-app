@@ -18,6 +18,7 @@ import { toWebHeaders } from "../lib/web-headers";
 import { getOutletAccess, hasPermission, parseActiveOutletId, getSubscriptionGate, gateBlocks } from "../lib/outlet-access";
 import { CATEGORY_IN } from "../lib/cashflow-categories";
 import { haversineKm } from "../lib/utils/geo";
+import { sendPushToUser } from "../lib/push";
 
 type NoteJson = {
   location: {
@@ -131,13 +132,18 @@ export async function orderRoutes(app: FastifyInstance) {
     try {
       // Service orders have no courier/delivery, so there's no delivery fee to
       // compute (and no drop-off location to compute it from).
-      const [[customer], delivery_fee] = await Promise.all([
+      const [[customer], delivery_fee, [outlet]] = await Promise.all([
         db
           .select({ id: customersTable.id })
           .from(customersTable)
           .where(eq(customersTable.user_id, session.user.id))
           .limit(1),
         isService ? Promise.resolve(0) : computeDeliveryFee(session.user.id, data.outlet_id),
+        db
+          .select({ user_id: outletsTable.user_id, name: outletsTable.name })
+          .from(outletsTable)
+          .where(eq(outletsTable.id, data.outlet_id))
+          .limit(1),
       ]);
 
       if (!customer) throw new Error("Customer record not found for this user");
@@ -169,6 +175,24 @@ export async function orderRoutes(app: FastifyInstance) {
           );
         }
       });
+
+      // Fire-and-forget: a push failure (no subscription, dead endpoint,
+      // provider outage) must never fail an order that has already committed.
+      // This is why it happens after the transaction, not inside it.
+      if (outlet?.user_id) {
+        const itemCount = data.items.reduce((sum, i) => sum + i.quantity, 0);
+        sendPushToUser(outlet.user_id, {
+          title: isService ? "Permintaan layanan baru" : "Pesanan baru masuk",
+          body: `${session.user.name ?? "Pelanggan"} · ${itemCount} item${
+            isService ? "" : ` · ${orderId.slice(-8).toUpperCase()}`
+          }`,
+          url: "/dashboard/activeorder",
+          // One live notification per outlet's pending queue, not one per
+          // order — a burst of orders while the owner's phone is silenced
+          // shouldn't leave a stack of a dozen banners to swipe through.
+          tag: `orders-pending-${data.outlet_id}`,
+        }).catch((err) => app.log.error(err, "Failed to push new-order notification"));
+      }
 
       return reply.send({ success: true, orderId });
     } catch (e) {

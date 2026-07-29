@@ -171,6 +171,24 @@ export async function ownerRoutes(app: FastifyInstance) {
     return { success: true, orders: ordersWithItems };
   });
 
+  // Count-only sibling of the route above. The incoming-order alarm polls this
+  // from every dashboard page, so it must stay cheap — no joins, no item
+  // fan-out, just how many orders are waiting on the owner right now.
+  app.get("/api/get-pending-orders-count", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false });
+
+    const outlet = await outletFor(session.user.id, "activeOrders", request);
+    if (!outlet) return reply.status(403).send({ success: false, error: "Not an owner" });
+
+    const [row] = await db
+      .select({ count: count() })
+      .from(ordersTable)
+      .where(and(eq(ordersTable.outlet_id, outlet.id), eq(ordersTable.status, "pending")));
+
+    return { success: true, count: row?.count ?? 0 };
+  });
+
   app.get("/api/get-preparing-orders", async (request, reply) => {
     const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
     if (!session?.user) return reply.status(401).send({ success: false });

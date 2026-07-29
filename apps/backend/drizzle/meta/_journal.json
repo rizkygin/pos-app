@@ -267,6 +267,13 @@
       "when": 1784821704532,
       "tag": "0037_flawless_ikaris",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1785292176898,
+      "tag": "0038_dear_maginty",
+      "breakpoints": true
     }
   ]
 }

@@ -11,6 +11,7 @@ import { FEATURES } from "@/lib/feature-categories";
 import { ORDER_FEATURES } from "@/lib/order-features";
 import { API_URL } from "@/lib/api-url";
 import { resolveOutletImage, isBackendImage } from "@/lib/image-src";
+import { PushNotificationCard } from "@/components/dashboard/push-notification-card";
 
 const FEATURE_META = ORDER_FEATURES.filter((f) => f.isAvailable);
 
@@ -185,6 +186,9 @@ export function OwnerSetting() {
                         />
                     </button>
                 </div>
+
+                {/* ── Push Notifications ───────────────────────────────── */}
+                <PushNotificationCard />
 
                 {/* ── Avatar ────────────────────────────────────────────── */}
                 <div className="flex items-center gap-5 p-5 rounded-2xl border border-border/60 bg-card shadow-sm">

@@ -11,6 +11,8 @@ import { AppContent } from '@/components/app-content';
 import { AppShell } from '@/components/app-shell';
 import { AppSidebarHeader } from "@/components/app-sidebar-header"
 import { SubscriptionWarningBanner } from "@/components/subscription-warning-banner"
+import { IncomingOrderAlarm } from "@/components/dashboard/incoming-order-alarm"
+import { PushNotificationNudge } from "@/components/dashboard/push-notification-nudge"
 
 // Private, authenticated area — never index. robots.ts also disallows
 // crawling it, but noindex here is the real guarantee (a disallowed page can
@@ -53,6 +55,15 @@ const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
                     {/* Subscription reminder for owners on every dashboard page.
                         Dismiss is session-only — it returns on refresh. */}
                     {isOwner && <SubscriptionWarningBanner />}
+
+                    {/* Rings until every pending order is answered. Lives in the
+                        layout, not the Order Lobby, so an owner working the
+                        cashier still hears an order land. */}
+                    {isOwner && <IncomingOrderAlarm />}
+
+                    {/* One-time prompt to enable background push notifications —
+                        the alarm above only rings while a tab is open. */}
+                    {isOwner && <PushNotificationNudge />}
 
                     {children}
                     

@@ -21,6 +21,7 @@ import { dashboardRoutes } from "./routes/dashboard";
 import { invoiceRoutes } from "./routes/invoices";
 import { subscriptionRoutes } from "./routes/subscriptions";
 import { employeeRoutes } from "./routes/employees";
+import { pushRoutes } from "./routes/push";
 
 const PORT = Number(process.env.PORT ?? 4000);
 // FRONTEND_ORIGIN accepts a comma-separated list so apex + www (and any extra
@@ -59,6 +60,10 @@ async function main() {
     origin: ALLOWED_ORIGINS,
     credentials: true,
     methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    // better-auth answers a rate-limited request with 429 + X-Retry-After.
+    // Without exposing it, the browser hides the header from the frontend and
+    // the "try again in Ns" countdown has nothing to count.
+    exposedHeaders: ["X-Retry-After"],
   });
 
   // 6MB cap gives headroom over the 5MB client-side image check.
@@ -105,6 +110,7 @@ async function main() {
   await app.register(invoiceRoutes);
   await app.register(subscriptionRoutes);
   await app.register(employeeRoutes);
+  await app.register(pushRoutes);
 
   app.get("/health", async () => ({ ok: true }));
 

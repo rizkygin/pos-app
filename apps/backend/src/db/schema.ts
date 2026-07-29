@@ -1045,3 +1045,26 @@ export const subscriptionNotificationsTable = pgTable(
     index('subscription_notifications_user_idx').on(t.user_id, t.status),
   ],
 );
+
+// Web Push endpoints, one row per browser/device a user has opted in from. The
+// endpoint URL is the push service's own handle for that device and is unique,
+// so it doubles as the natural key for upserts — a browser re-subscribing after
+// a key rotation hands back the same endpoint rather than piling up rows.
+export const pushSubscriptionsTable = pgTable(
+  'push_subscriptions',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    user_id: text('user_id')
+      .notNull()
+      .references(() => usersTable.id, { onDelete: 'cascade' }),
+    endpoint: text('endpoint').notNull().unique(),
+    // Encryption material handed over by the browser at subscribe time.
+    p256dh: text('p256dh').notNull(),
+    auth: text('auth').notNull(),
+    user_agent: varchar('user_agent', { length: 500 }),
+    created_at: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [index('push_subscriptions_user_idx').on(t.user_id)],
+);

@@ -48,7 +48,10 @@ export default function ResetPasswordPage() {
 function ResetPasswordForm() {
     const searchParams = useSearchParams();
     const router = useRouter();
+    // The backend validates the token first and redirects here with either
+    // ?token=<valid token> or ?error=INVALID_TOKEN (which also covers expiry).
     const token = searchParams?.get("token") ?? "";
+    const linkDead = !token;
 
     const [newPassword, setNewPassword] = useState("");
     const [confirmPassword, setConfirmPassword] = useState("");
@@ -106,14 +109,28 @@ function ResetPasswordForm() {
                             <KeyRound className="h-6 w-6 text-rose-400" />
                         </div>
                         <h1 className="text-2xl font-semibold tracking-tight text-white mb-1">
-                            Set new password
+                            {linkDead ? "Link no longer valid" : "Set new password"}
                         </h1>
                         <p className="text-zinc-400 text-sm">
-                            Choose a strong password for your account.
+                            {linkDead
+                                ? "This reset link has expired or has already been used."
+                                : "Choose a strong password for your account."}
                         </p>
                     </div>
 
-                    {result?.ok ? (
+                    {linkDead ? (
+                        <div className="flex flex-col items-center gap-4 py-2 text-center">
+                            <a
+                                href="/forgot-password"
+                                className="w-full bg-rose-500 hover:bg-rose-600 text-white font-semibold py-3.5 px-4 rounded-2xl transition-all"
+                            >
+                                Request a new link
+                            </a>
+                            <a href="/login" className="text-sm text-zinc-400 hover:text-white transition-colors">
+                                Back to sign in
+                            </a>
+                        </div>
+                    ) : result?.ok ? (
                         <motion.div
                             initial={{ opacity: 0, scale: 0.95 }}
                             animate={{ opacity: 1, scale: 1 }}

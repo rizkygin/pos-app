@@ -1,4 +1,5 @@
 import { authClient } from "@/lib/auth-client";
+import { rateLimitMessage, readRetryAfter } from "@/lib/auth-email-cooldown";
 
 // These call the backend's better-auth endpoints via the shared auth client
 // (baseURL = NEXT_PUBLIC_API_URL, credentials included). The client returns
@@ -24,8 +25,13 @@ export async function changePasswordAction(currentPassword: string, newPassword:
 
 // Requires emailVerification.sendVerificationEmail to be configured in the backend auth
 export async function sendVerificationEmailAction(email: string) {
-    const { error } = await authClient.sendVerificationEmail({ email });
+    let retryAfter = 0;
+    const { error } = await authClient.sendVerificationEmail(
+        { email },
+        { onError: (ctx) => { retryAfter = readRetryAfter(ctx.response); } }
+    );
     if (error) {
+        if (error.status === 429) return { success: false, message: rateLimitMessage(retryAfter) };
         const code = `${error.message ?? ""} ${error.code ?? ""}`;
         if (code.includes("VERIFICATION_EMAIL_NOT_ENABLED")) {
             return { success: false, message: "Email verification is not configured yet." };
@@ -35,10 +41,16 @@ export async function sendVerificationEmailAction(email: string) {
     return { success: true, message: "Verification email sent. Check your inbox." };
 }
 
-// Requires emailAndPassword.sendResetPassword to be configured in the backend auth
+// Requires emailAndPassword.sendResetPassword to be configured in the backend auth.
+// No redirectTo — the backend pins the link's landing page to the frontend.
 export async function requestPasswordResetAction(email: string) {
-    const { error } = await authClient.requestPasswordReset({ email, redirectTo: "/reset-password" });
+    let retryAfter = 0;
+    const { error } = await authClient.requestPasswordReset(
+        { email },
+        { onError: (ctx) => { retryAfter = readRetryAfter(ctx.response); } }
+    );
     if (error) {
+        if (error.status === 429) return { success: false, message: rateLimitMessage(retryAfter) };
         const code = `${error.message ?? ""} ${error.code ?? ""}`;
         if (code.includes("RESET_PASSWORD_DISABLED")) {
             return { success: false, message: "Password reset is not configured yet." };
