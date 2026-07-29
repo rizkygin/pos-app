@@ -21,6 +21,7 @@ import {
 const OFFLINE_CUSTOMER_EMAIL = "rizkygin1@gmail.com";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
+import { closeStaleCourierSessions, staleShiftCutoff } from "../lib/utils/courier-availability";
 
 async function requireAdmin(userId: string) {
   const [admin] = await db
@@ -720,7 +721,14 @@ export async function adminRoutes(app: FastifyInstance) {
       db
         .select({ total: countDistinct(courierSessionsTable.courier_id) })
         .from(courierSessionsTable)
-        .where(isNull(courierSessionsTable.ended_at)),
+        // Abandoned sessions past the 12h cap aren't "online" — without this
+        // the couriers-online KPI only ever climbs.
+        .where(
+          and(
+            isNull(courierSessionsTable.ended_at),
+            gte(courierSessionsTable.started_at, staleShiftCutoff()),
+          ),
+        ),
       db.select({ total: count() }).from(outletsTable).where(isNull(outletsTable.deletedAt)),
       db.select({ total: count() }).from(couriersTable).where(isNull(couriersTable.deletedAt)),
       db.select({ total: count() }).from(customersTable).where(isNull(customersTable.deletedAt)),
@@ -936,5 +944,62 @@ export async function adminRoutes(app: FastifyInstance) {
       .where(eq(orderDetailsTable.order_id, orderId));
 
     return reply.send({ success: true, order, items });
+  });
+
+  // Courier shift log. Sessions are platform-wide (couriers have no outlet_id),
+  // so this is admin-only — an outlet owner has no basis to see a courier's
+  // whole working day, only the orders of theirs that courier carried.
+  //
+  // Returns two lists rather than one paginated feed: "who is on shift right
+  // now" is the operational question, and it must not get buried under history.
+  app.get("/api/admin/courier-sessions", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
+    if (!(await requireAdmin(session.user.id))) {
+      return reply.status(403).send({ success: false, error: "Forbidden" });
+    }
+
+    const { limit = "50" } = request.query as Record<string, string>;
+    const historyLimit = Math.min(200, Math.max(1, Number(limit) || 50));
+
+    // Tidy overran shifts before reading so the log self-heals: this page is
+    // the one place a human looks at session data, and it's not hot enough for
+    // the write to matter.
+    await closeStaleCourierSessions();
+
+    const baseFields = {
+      sessionId: courierSessionsTable.id,
+      courierId: couriersTable.id,
+      courierName: usersTable.name,
+      courierPhone: usersTable.phone,
+      avatar: couriersTable.avatar,
+      vehiclePlate: couriersTable.vehicle_plate,
+      vehicleType: couriersTable.vehicle_type,
+      startedAt: courierSessionsTable.started_at,
+      endedAt: courierSessionsTable.ended_at,
+    };
+
+    const [online, history] = await Promise.all([
+      // DISTINCT ON courier: a courier with more than one open row (crashed
+      // client, missed go-offline) is still one person on shift, and listing
+      // them twice would misreport the headcount. Newest open session wins.
+      db
+        .selectDistinctOn([courierSessionsTable.courier_id], baseFields)
+        .from(courierSessionsTable)
+        .innerJoin(couriersTable, eq(courierSessionsTable.courier_id, couriersTable.id))
+        .innerJoin(usersTable, eq(couriersTable.user_id, usersTable.id))
+        .where(isNull(courierSessionsTable.ended_at))
+        .orderBy(courierSessionsTable.courier_id, desc(courierSessionsTable.started_at)),
+      db
+        .select(baseFields)
+        .from(courierSessionsTable)
+        .innerJoin(couriersTable, eq(courierSessionsTable.courier_id, couriersTable.id))
+        .innerJoin(usersTable, eq(couriersTable.user_id, usersTable.id))
+        .where(sql`${courierSessionsTable.ended_at} is not null`)
+        .orderBy(desc(courierSessionsTable.started_at))
+        .limit(historyLimit),
+    ]);
+
+    return reply.send({ success: true, online, history });
   });
 }

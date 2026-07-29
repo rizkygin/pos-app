@@ -33,9 +33,9 @@ import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 import { getOutletByUserId } from "../lib/outlet-id";
 import { getOutletAccess, hasPermission, parseActiveOutletId } from "../lib/outlet-access";
-import { getUTCTime } from "../lib/timezone";
+import { getUTCRangeFromLocalDate, getUTCTime } from "../lib/timezone";
 import { getCurrentAdSlot } from "../lib/utils/ad-schedule";
-import { getCourierRatingInfo } from "../lib/utils/courier-availability";
+import { getCourierRatingInfo, MAX_SHIFT_HOURS, staleShiftCutoff } from "../lib/utils/courier-availability";
 import { formatCurrency } from "../lib/utils/format";
 import { haversineKm } from "../lib/utils/geo";
 
@@ -179,28 +179,48 @@ export async function dashboardRoutes(app: FastifyInstance) {
         and(
           eq(courierSessionsTable.courier_id, courier.id),
           isNull(courierSessionsTable.ended_at),
+          // Past the 12h cap the shift is over, so the courier's own dashboard
+          // shouldn't still show them on duty.
+          gte(courierSessionsTable.started_at, staleShiftCutoff()),
         ),
       )
       .limit(1);
 
     initialIsOnline = !!openSession;
 
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    // "Today" means the courier's local day (WIB), not the server's. Railway
+    // runs the container in UTC, so `new Date().setHours(0,0,0,0)` marked
+    // midnight UTC = 07:00 WIB — every morning before 7am the figure still
+    // carried most of the previous day's hours.
+    const todayLocal = getUTCTime().toISOString().slice(0, 10);
+    const { startUTC: dayStart, endUTC: dayEnd } = getUTCRangeFromLocalDate(todayLocal);
 
     const [onlineResult] = await db
       .select({
+        // Sum the part of each shift that falls INSIDE today, rather than the
+        // whole shift: a 22:00->02:00 run belongs to two different days, and
+        // counting it wholly against either one is wrong. Three clamps:
+        //   - LEAST(...)  end of the overlap: shift end, the 12h cap, or midnight
+        //   - GREATEST(started_at, dayStart)  start of the overlap
+        //   - GREATEST(0, ...)  a shift entirely outside today contributes 0
         totalSeconds: sql<number>`
-          COALESCE(SUM(
-            EXTRACT(EPOCH FROM (COALESCE(ended_at, NOW()) - started_at))
-          ), 0)
+          COALESCE(SUM(GREATEST(0, EXTRACT(EPOCH FROM (
+            LEAST(
+              COALESCE(${courierSessionsTable.ended_at}, NOW()),
+              ${courierSessionsTable.started_at} + make_interval(hours => ${MAX_SHIFT_HOURS}),
+              ${dayEnd}::timestamptz
+            )
+            - GREATEST(${courierSessionsTable.started_at}, ${dayStart}::timestamptz)
+          )))), 0)
         `,
       })
       .from(courierSessionsTable)
       .where(
         and(
           eq(courierSessionsTable.courier_id, courier.id),
-          gte(courierSessionsTable.started_at, todayStart),
+          // Any shift overlapping today, including one that began yesterday.
+          lte(courierSessionsTable.started_at, dayEnd),
+          sql`least(coalesce(${courierSessionsTable.ended_at}, now()), ${courierSessionsTable.started_at} + make_interval(hours => ${MAX_SHIFT_HOURS})) >= ${dayStart}::timestamptz`,
         ),
       );
 

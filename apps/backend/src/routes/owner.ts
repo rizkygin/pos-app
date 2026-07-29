@@ -52,6 +52,37 @@ async function outletFor(
   return access.outlet;
 }
 
+// The Order Lobby's lanes differ only by status, so they share one query.
+// `courier_id` is part of the projection deliberately: the UI gates the "Siap"
+// button and the courier-search lane on it, and leaving it out doesn't error —
+// it silently reads as undefined and disables the button forever.
+async function lobbyOrdersByStatus(
+  outletId: number,
+  status: "pending" | "confirmed" | "preparing" | "ready",
+) {
+  const orders = await db
+    .select({
+      orderId: ordersTable.id,
+      customerName: usersTable.name,
+      customerPhone: usersTable.phone,
+      courierId: ordersTable.courier_id,
+      deliveryFee: ordersTable.delivery_fee,
+      note: ordersTable.note,
+      createdAt: ordersTable.createdAt,
+      status: ordersTable.status,
+      fulfillment: ordersTable.fulfillment,
+      scheduledAt: ordersTable.scheduled_at,
+      discountAmount: ordersTable.discount_amount,
+    })
+    .from(ordersTable)
+    .innerJoin(customersTable, eq(ordersTable.customer_id, customersTable.id))
+    .innerJoin(usersTable, eq(customersTable.user_id, usersTable.id))
+    .where(and(eq(ordersTable.outlet_id, outletId), eq(ordersTable.status, status)))
+    .orderBy(ordersTable.createdAt);
+
+  return attachOrderItems(orders);
+}
+
 export async function ownerRoutes(app: FastifyInstance) {
   app.get("/api/get-outlet-orders", async (request, reply) => {
     try {
@@ -149,26 +180,7 @@ export async function ownerRoutes(app: FastifyInstance) {
     const outlet = await outletFor(session.user.id, "activeOrders", request);
     if (!outlet) return reply.status(403).send({ success: false, error: "Not an owner" });
 
-    const orders = await db
-      .select({
-        orderId: ordersTable.id,
-        customerName: usersTable.name,
-        customerPhone: usersTable.phone,
-        deliveryFee: ordersTable.delivery_fee,
-        note: ordersTable.note,
-        createdAt: ordersTable.createdAt,
-        fulfillment: ordersTable.fulfillment,
-        scheduledAt: ordersTable.scheduled_at,
-        discountAmount: ordersTable.discount_amount,
-      })
-      .from(ordersTable)
-      .innerJoin(customersTable, eq(ordersTable.customer_id, customersTable.id))
-      .innerJoin(usersTable, eq(customersTable.user_id, usersTable.id))
-      .where(and(eq(ordersTable.outlet_id, outlet.id), eq(ordersTable.status, "pending")))
-      .orderBy(ordersTable.createdAt);
-
-    const ordersWithItems = await attachOrderItems(orders);
-    return { success: true, orders: ordersWithItems };
+    return { success: true, orders: await lobbyOrdersByStatus(outlet.id, "pending") };
   });
 
   // Count-only sibling of the route above. The incoming-order alarm polls this
@@ -196,26 +208,21 @@ export async function ownerRoutes(app: FastifyInstance) {
     const outlet = await outletFor(session.user.id, "activeOrders", request);
     if (!outlet) return reply.status(403).send({ success: false, error: "Not an owner" });
 
-    const orders = await db
-      .select({
-        orderId: ordersTable.id,
-        customerName: usersTable.name,
-        customerPhone: usersTable.phone,
-        deliveryFee: ordersTable.delivery_fee,
-        note: ordersTable.note,
-        createdAt: ordersTable.createdAt,
-        fulfillment: ordersTable.fulfillment,
-        scheduledAt: ordersTable.scheduled_at,
-        discountAmount: ordersTable.discount_amount,
-      })
-      .from(ordersTable)
-      .innerJoin(customersTable, eq(ordersTable.customer_id, customersTable.id))
-      .innerJoin(usersTable, eq(customersTable.user_id, usersTable.id))
-      .where(and(eq(ordersTable.outlet_id, outlet.id), eq(ordersTable.status, "preparing")))
-      .orderBy(ordersTable.createdAt);
+    return { success: true, orders: await lobbyOrdersByStatus(outlet.id, "preparing") };
+  });
 
-    const ordersWithItems = await attachOrderItems(orders);
-    return { success: true, orders: ordersWithItems };
+  // "Mencari kurir" lane: the owner has confirmed the order but no courier has
+  // claimed it yet (courier.ts flips confirmed -> preparing and sets courier_id
+  // in one update). These orders were previously surfaced NOWHERE — they left
+  // the pending tab on confirm and only reappeared once a courier accepted.
+  app.get("/api/get-confirmed-orders", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false });
+
+    const outlet = await outletFor(session.user.id, "activeOrders", request);
+    if (!outlet) return reply.status(403).send({ success: false, error: "Not an owner" });
+
+    return { success: true, orders: await lobbyOrdersByStatus(outlet.id, "confirmed") };
   });
 
   app.get("/api/get-ready-orders", async (request, reply) => {
@@ -225,26 +232,7 @@ export async function ownerRoutes(app: FastifyInstance) {
     const outlet = await outletFor(session.user.id, "activeOrders", request);
     if (!outlet) return reply.status(403).send({ success: false, error: "Not an owner" });
 
-    const orders = await db
-      .select({
-        orderId: ordersTable.id,
-        customerName: usersTable.name,
-        customerPhone: usersTable.phone,
-        deliveryFee: ordersTable.delivery_fee,
-        note: ordersTable.note,
-        createdAt: ordersTable.createdAt,
-        fulfillment: ordersTable.fulfillment,
-        scheduledAt: ordersTable.scheduled_at,
-        discountAmount: ordersTable.discount_amount,
-      })
-      .from(ordersTable)
-      .innerJoin(customersTable, eq(ordersTable.customer_id, customersTable.id))
-      .innerJoin(usersTable, eq(customersTable.user_id, usersTable.id))
-      .where(and(eq(ordersTable.outlet_id, outlet.id), eq(ordersTable.status, "ready")))
-      .orderBy(ordersTable.createdAt);
-
-    const ordersWithItems = await attachOrderItems(orders);
-    return { success: true, orders: ordersWithItems };
+    return { success: true, orders: await lobbyOrdersByStatus(outlet.id, "ready") };
   });
 
   app.get("/api/get-outlet-order-detail", async (request, reply) => {

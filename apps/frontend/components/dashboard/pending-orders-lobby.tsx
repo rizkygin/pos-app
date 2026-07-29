@@ -18,6 +18,7 @@ import {
   Truck,
   Star,
   Printer,
+  Bike,
 } from 'lucide-react';
 import {
   confirmOrder,
@@ -26,6 +27,7 @@ import {
   closeServiceOrder,
 } from '@/app/dashboard/activeorder/actions';
 import { ServiceConfirmModal } from '@/components/dashboard/service-confirm-modal';
+import { ReceiptModal, type ReceiptData } from '@/components/dashboard/receipt-modal';
 import { CalendarClock, Wrench } from 'lucide-react';
 import { API_URL } from '@/lib/api-url';
 import {
@@ -70,7 +72,21 @@ type Order = {
   discountAmount?: string | null;
 };
 
-type Tab = 'pending' | 'preparing' | 'ready';
+// 'searching' = confirmed by the owner, no courier has claimed it yet. It is a
+// real order status (`confirmed`), not a client-side slice of `preparing`:
+// courier.ts flips confirmed -> preparing and sets courier_id in one update, so
+// a preparing delivery order always has a courier.
+type Tab = 'pending' | 'searching' | 'preparing' | 'ready';
+
+// Outlet header for the printed pickup slip, passed down from the server page
+// (same values /dashboard/cashier hands to its own receipt).
+type OutletInfo = {
+  outletName: string;
+  outletAddress: string;
+  outletPhone: string;
+  outletLogo: string;
+  cashierName: string;
+};
 
 function fmtIDR(amount: number) {
   return new Intl.NumberFormat('id-ID', {
@@ -142,6 +158,13 @@ function EmptyState({ tab }: { tab: Tab }) {
       icon: <ShoppingBag className="h-8 w-8 text-purple-400" />,
       title: 'Menunggu Pesanan Masuk',
       desc: 'Belum ada pesanan yang menunggu konfirmasi.',
+    },
+    searching: {
+      ring: 'border-orange-300/50',
+      bg: 'bg-orange-50 dark:bg-orange-950/30',
+      icon: <Bike className="h-8 w-8 text-orange-400" />,
+      title: 'Tidak Ada Pesanan Mencari Kurir',
+      desc: 'Pesanan yang sudah kamu konfirmasi akan menunggu kurir di sini.',
     },
     preparing: {
       ring: 'border-blue-300/50',
@@ -328,6 +351,84 @@ function PendingOrderCard({
           }}
         />
       )}
+    </motion.div>
+  );
+}
+
+// Orders the owner has confirmed that are still waiting for a courier to claim
+// them. There is no owner action here — the wait is on the courier side — so the
+// card is informational, with the elapsed time made prominent: that is the one
+// signal telling an owner it's time to chase a driver.
+function SearchingCourierCard({ order, index }: { order: Order; index: number }) {
+  const note = noteStr(order.note?.customer_note ?? '');
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20, scale: 0.97 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.95, y: -10 }}
+      transition={{ duration: 0.3, delay: index * 0.05 }}
+      className="rounded-2xl border bg-background shadow-sm hover:shadow-md transition-shadow overflow-hidden flex flex-col"
+    >
+      <div className="flex items-center justify-between px-5 py-3 bg-orange-50 dark:bg-orange-950/20 border-b border-orange-100 dark:border-orange-900/30">
+        <div className="flex items-center gap-2">
+          <span className="font-mono font-black text-sm text-orange-700 dark:text-orange-400">
+            #{order.orderId.slice(-8).toUpperCase()}
+          </span>
+          <span className="px-2 py-0.5 rounded-full bg-orange-100 dark:bg-orange-900/40 text-orange-600 dark:text-orange-400 text-[10px] font-bold uppercase tracking-wider">
+            Mencari Kurir
+          </span>
+        </div>
+        <div className="flex items-center gap-1 text-xs text-muted-foreground">
+          <Clock className="h-3 w-3" />
+          <span>{timeAgo(order.createdAt)}</span>
+        </div>
+      </div>
+
+      <div className="px-5 py-4 flex flex-col gap-4 flex-1">
+        <div className="flex items-center gap-2 text-sm">
+          <User className="h-4 w-4 text-muted-foreground shrink-0" />
+          <span className="font-semibold">{order.customerName}</span>
+          {order.customerPhone && (
+            <span className="text-muted-foreground text-xs">
+              · {order.customerPhone}
+            </span>
+          )}
+        </div>
+        <ItemList items={order.items} />
+        {note && (
+          <p className="text-xs text-muted-foreground italic border-l-2 border-muted pl-3 leading-relaxed">
+            {note}
+          </p>
+        )}
+
+        <div className="flex items-center gap-2.5 rounded-xl bg-orange-50/60 dark:bg-orange-950/20 px-3 py-2.5">
+          <motion.span
+            animate={{ x: [0, 4, 0] }}
+            transition={{ duration: 1.4, repeat: Infinity, ease: 'easeInOut' }}
+            className="text-orange-500 shrink-0"
+          >
+            <Bike className="h-4 w-4" />
+          </motion.span>
+          <p className="text-xs font-semibold text-orange-700 dark:text-orange-300">
+            Menunggu kurir menerima pesanan
+          </p>
+        </div>
+
+        <div className="flex items-end justify-between mt-auto pt-4 border-t border-border/50">
+          <div>
+            <p className="text-xs text-muted-foreground">Total</p>
+            <p className="text-xl font-black tabular-nums">
+              {fmtIDR(order.totalAmount)}
+            </p>
+            {order.deliveryFee && parseInt(order.deliveryFee) > 0 && (
+              <p className="text-xs text-muted-foreground">
+                +{fmtIDR(parseInt(order.deliveryFee))} ongkir
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
     </motion.div>
   );
 }
@@ -538,78 +639,63 @@ function ReadyOrderCard({
   );
 }
 
+// Turns a lobby Order into the same ReceiptData the cashier builds, so the
+// courier's pickup slip is byte-for-byte the same layout as a counter receipt
+// (and gets the same ESC/POS + ThermalBridge printing for free).
+//
+// Two shape gaps are bridged here: the lobby's items carry a line total
+// (summaryPrice) rather than a unit price, and a delivery order has no
+// cash/change to report — see ReceiptData for why payment is left off.
+function orderToReceipt(order: Order, outlet: OutletInfo): ReceiptData {
+  const deliveryFee = order.deliveryFee ? parseInt(order.deliveryFee) : 0;
+  const discountAmount = order.discountAmount ? parseInt(order.discountAmount) : 0;
+
+  return {
+    orderId: order.orderId,
+    customerName: order.customerName,
+    items: order.items.map((item) => ({
+      product_name: item.productName,
+      quantity: item.quantity,
+      // Unit price, recovered from the line total. price_mark_down is "0":
+      // per-item discounts aren't carried on this endpoint, so the receipt
+      // shows the price actually charged with no strikethrough.
+      price: String(
+        item.quantity > 0
+          ? Math.round(parseInt(item.summaryPrice || '0') / item.quantity)
+          : 0,
+      ),
+      price_mark_down: '0',
+    })),
+    subtotal: order.totalAmount,
+    discountAmount,
+    discountLabel: 'Diskon',
+    deliveryFee,
+    total: order.totalAmount - discountAmount + deliveryFee,
+    date: new Date(),
+    outletName: outlet.outletName,
+    outletAddress: outlet.outletAddress,
+    outletPhone: outlet.outletPhone,
+    outletLogo: outlet.outletLogo,
+    cashierName: outlet.cashierName,
+  };
+}
+
 function QRScannerBar({
   orders,
   onPickup,
+  outlet,
 }: {
   orders: Order[];
   onPickup: (id: string) => void;
+  outlet: OutletInfo;
 }) {
   const [input, setInput] = useState('');
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [pendingPickup, setPendingPickup] = useState<Order | null>(null);
+  const [receipt, setReceipt] = useState<ReceiptData | null>(null);
 
-  //SEARCH:: print reciept from picking courier
-  const printPickupReceipt = (order: Order) => {
-    const shortId = order.orderId.slice(-8).toUpperCase();
-    const date = new Date();
-    const deliveryFee = order.deliveryFee ? parseInt(order.deliveryFee) : 0;
-
-    const itemsHtml = order.items
-      .map(
-        (item) => `
-            <div style="margin-bottom:6px">
-                <p class="item-name">${item.productName}</p>
-                <div class="row">
-                    <span class="item-detail">${item.quantity} × ${fmtIDR(Math.round(parseInt(item.summaryPrice || '0') / item.quantity))}</span>
-                    <span>${fmtIDR(parseInt(item.summaryPrice || '0'))}</span>
-                </div>
-                ${item.noteProduct ? `<p class="item-detail">Catatan: ${item.noteProduct}</p>` : ''}
-            </div>
-        `,
-      )
-      .join('');
-
-    const w = window.open('', '_blank', 'width=420,height=700');
-    if (!w) return;
-    w.document
-      .write(`<!DOCTYPE html><html><head><title>Receipt #${shortId}</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: 'Courier New', monospace; font-size: 12px; width: 300px; margin: 0 auto; padding: 16px 8px; color: #111; }
-  .center { text-align: center; }
-  .bold { font-weight: bold; }
-  .large { font-size: 15px; }
-  .small { font-size: 11px; color: #555; }
-  .divider { border-top: 1px dashed #888; margin: 8px 0; }
-  .row { display: flex; justify-content: space-between; margin: 3px 0; }
-  .total-row { display: flex; justify-content: space-between; font-weight: bold; font-size: 14px; margin-top: 4px; }
-  .item-name { font-weight: bold; }
-  .item-detail { color: #555; font-size: 11px; }
-</style></head><body>
-<div class="center bold large" style="margin-bottom:4px;">BUKTI PENGIRIMAN</div>
-<div class="divider"></div>
-<div class="row"><span class="small">Order #</span><span class="bold">${shortId}</span></div>
-<div class="row"><span class="small">Pelanggan</span><span>${order.customerName}</span></div>
-${order.customerPhone ? `<div class="row"><span class="small">Telepon</span><span>${order.customerPhone}</span></div>` : ''}
-<div class="row"><span class="small">Tanggal</span><span>${date.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })}</span></div>
-<div class="row"><span class="small">Waktu</span><span>${date.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}</span></div>
-<div class="divider"></div>
-${itemsHtml}
-<div class="divider"></div>
-<div class="row"><span class="small">Subtotal</span><span>${fmtIDR(order.totalAmount)}</span></div>
-${deliveryFee > 0 ? `<div class="row"><span class="small">Ongkos kirim</span><span>${fmtIDR(deliveryFee)}</span></div>` : ''}
-<div class="total-row"><span>TOTAL</span><span>${fmtIDR(order.totalAmount + deliveryFee)}</span></div>
-<div class="divider"></div>
-<p class="center small" style="margin-top:12px;">Terima kasih!</p>
-</body></html>`);
-    w.document.close();
-    w.focus();
-    w.onafterprint = () => w.close();
-    w.print();
-  };
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef<number>(0);
@@ -841,10 +927,14 @@ ${deliveryFee > 0 ? `<div class="row"><span class="small">Ongkos kirim</span><sp
         </div>
       </div>
 
+      {/* Only ever one modal on screen: opening the receipt hides this dialog
+          rather than stacking on top of it, and closing the receipt brings it
+          back so the owner can still confirm the pickup. pendingPickup stays
+          set throughout — it's what the receipt was built from. */}
       <AlertDialog
-        open={pendingPickup != null}
+        open={pendingPickup != null && receipt == null}
         onOpenChange={(open) => {
-          if (!open) setPendingPickup(null);
+          if (!open && receipt == null) setPendingPickup(null);
         }}
       >
         <AlertDialogContent>
@@ -892,7 +982,9 @@ ${deliveryFee > 0 ? `<div class="row"><span class="small">Ongkos kirim</span><sp
             <Button
               type="button"
               variant="outline"
-              onClick={() => pendingPickup && printPickupReceipt(pendingPickup)}
+              onClick={() =>
+                pendingPickup && setReceipt(orderToReceipt(pendingPickup, outlet))
+              }
             >
               <Printer />
               Print Receipt
@@ -913,6 +1005,14 @@ ${deliveryFee > 0 ? `<div class="row"><span class="small">Ongkos kirim</span><sp
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {receipt && (
+        <ReceiptModal
+          data={receipt}
+          heading="Bukti Pengiriman"
+          onClose={() => setReceipt(null)}
+        />
+      )}
     </>
   );
 }
@@ -948,14 +1048,16 @@ function useOrdersPolling(endpoint: string) {
 
 const TAB_CONFIG: { id: Tab; label: string; badgeColor: string }[] = [
   { id: 'pending', label: 'Pending', badgeColor: 'bg-amber-500' },
+  { id: 'searching', label: 'Mencari Kurir', badgeColor: 'bg-orange-500' },
   { id: 'preparing', label: 'Preparing', badgeColor: 'bg-blue-500' },
   { id: 'ready', label: 'Ready', badgeColor: 'bg-emerald-500' },
 ];
 
-export function PendingOrdersLobby() {
+export function PendingOrdersLobby(outlet: OutletInfo) {
   const [activeTab, setActiveTab] = useState<Tab>('pending');
 
   const pending = useOrdersPolling(`${API_URL}/api/get-pending-orders`);
+  const searching = useOrdersPolling(`${API_URL}/api/get-confirmed-orders`);
   const preparing = useOrdersPolling(`${API_URL}/api/get-preparing-orders`);
   const ready = useOrdersPolling(`${API_URL}/api/get-ready-orders`);
 
@@ -1005,11 +1107,14 @@ export function PendingOrdersLobby() {
   const current =
     activeTab === 'pending'
       ? pending
-      : activeTab === 'preparing'
-        ? preparing
-        : ready;
+      : activeTab === 'searching'
+        ? searching
+        : activeTab === 'preparing'
+          ? preparing
+          : ready;
   const counts: Record<Tab, number> = {
     pending: pending.orders.length,
+    searching: searching.orders.length,
     preparing: preparing.orders.length,
     ready: ready.orders.length,
   };
@@ -1100,62 +1205,41 @@ export function PendingOrdersLobby() {
             </div>
           ) : current.orders.length === 0 ? (
             <EmptyState tab={activeTab} />
+          ) : activeTab === 'searching' ? (
+            <AnimatePresence mode="popLayout">
+              <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
+                {searching.orders.map((order, i) => (
+                  <SearchingCourierCard
+                    key={order.orderId}
+                    order={order}
+                    index={i}
+                  />
+                ))}
+              </div>
+            </AnimatePresence>
           ) : activeTab === 'preparing' ? (
-            (() => {
-              const waiting = preparing.orders.filter(
-                (o) => o.courierId == null && o.fulfillment !== 'service',
-              );
-              const assigned = preparing.orders.filter(
-                (o) => o.courierId != null || o.fulfillment === 'service',
-              );
-              return (
-                <div className="space-y-8">
-                  {assigned.length > 0 && (
-                    <div>
-                      <p className="text-xs font-bold text-blue-600 dark:text-blue-400 uppercase tracking-widest mb-3">
-                        Kurir sudah accept · {assigned.length} pesanan
-                      </p>
-                      <AnimatePresence mode="popLayout">
-                        <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
-                          {assigned.map((order, i) => (
-                            <PreparingOrderCard
-                              key={order.orderId}
-                              order={order}
-                              index={i}
-                              onMarkReady={handleMarkReady}
-                            />
-                          ))}
-                        </div>
-                      </AnimatePresence>
-                    </div>
-                  )}
-                  {waiting.length > 0 && (
-                    <div>
-                      <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-3">
-                        Menunggu kurir · {waiting.length} pesanan
-                      </p>
-                      <AnimatePresence mode="popLayout">
-                        <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
-                          {waiting.map((order, i) => (
-                            <PreparingOrderCard
-                              key={order.orderId}
-                              order={order}
-                              index={i}
-                              onMarkReady={handleMarkReady}
-                            />
-                          ))}
-                        </div>
-                      </AnimatePresence>
-                    </div>
-                  )}
-                </div>
-              );
-            })()
+            // Flat grid: the old "menunggu kurir" / "kurir sudah accept" split
+            // lived here, but a preparing delivery order always has a courier
+            // (courier.ts sets status and courier_id together), so the waiting
+            // half was permanently empty. That lane is now the Mencari Kurir tab.
+            <AnimatePresence mode="popLayout">
+              <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
+                {preparing.orders.map((order, i) => (
+                  <PreparingOrderCard
+                    key={order.orderId}
+                    order={order}
+                    index={i}
+                    onMarkReady={handleMarkReady}
+                  />
+                ))}
+              </div>
+            </AnimatePresence>
           ) : activeTab === 'ready' ? (
             <>
               <QRScannerBar
                 orders={ready.orders.filter((o) => o.fulfillment !== 'service')}
                 onPickup={handlePickup}
+                outlet={outlet}
               />
               <AnimatePresence mode="popLayout">
                 <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">

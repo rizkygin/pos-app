@@ -1,8 +1,44 @@
 import { db } from '../../db';
 import { courierSessionsTable, couriersTable, ordersTable, ratingsTable } from '../../db/schema';
-import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm';
 
 const ACTIVE_ORDER_STATUSES = ['preparing', 'ready', 'on_delivery'] as const;
+
+// Hard ceiling on one shift. Nothing closes a session when a courier simply
+// walks away — it stays open until their *next* go-online — so without a cap a
+// courier reads as online indefinitely and keeps being offered orders. Real
+// data contained a single 665-hour "shift" (1 Jul -> 29 Jul).
+export const MAX_SHIFT_HOURS = 12;
+
+/** Open sessions that started before this are over, whatever the row says. */
+export function staleShiftCutoff() {
+  return new Date(Date.now() - MAX_SHIFT_HOURS * 60 * 60 * 1000);
+}
+
+/** SQL expression capping a shift's end at started_at + MAX_SHIFT_HOURS. */
+export const cappedShiftEnd = sql`least(coalesce(${courierSessionsTable.ended_at}, now()), ${courierSessionsTable.started_at} + make_interval(hours => ${MAX_SHIFT_HOURS}))`;
+
+/**
+ * Stamps ended_at on shifts that overran the cap.
+ *
+ * The end is set to started_at + 12h, NOT now(): the courier did not work up
+ * to this moment, and stamping now() is precisely what turned an abandoned
+ * session into a 665-hour record. Safe to call repeatedly — it only matches
+ * rows that are still open and already past the cap.
+ */
+export async function closeStaleCourierSessions() {
+  await db
+    .update(courierSessionsTable)
+    .set({
+      ended_at: sql`${courierSessionsTable.started_at} + make_interval(hours => ${MAX_SHIFT_HOURS})`,
+    })
+    .where(
+      and(
+        isNull(courierSessionsTable.ended_at),
+        lt(courierSessionsTable.started_at, staleShiftCutoff()),
+      ),
+    );
+}
 
 // Couriers whose recent ratings drop below the threshold go on probation:
 // they can still receive orders, but new orders are shown to them after a
@@ -62,6 +98,9 @@ export async function getCourierRatingInfo(courierId: number) {
 }
 
 export async function getCourierAvailability(courierId: number) {
+  // A session past the cap doesn't count as online. Filtered on read rather
+  // than closed here: this runs on every order-offer check, and a write on a
+  // hot read path isn't worth it — closeStaleCourierSessions() does the tidying.
   const [openSession] = await db
     .select({ id: courierSessionsTable.id })
     .from(courierSessionsTable)
@@ -69,6 +108,7 @@ export async function getCourierAvailability(courierId: number) {
       and(
         eq(courierSessionsTable.courier_id, courierId),
         isNull(courierSessionsTable.ended_at),
+        gte(courierSessionsTable.started_at, staleShiftCutoff()),
       ),
     )
     .limit(1);

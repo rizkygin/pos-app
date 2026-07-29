@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
-import { ReceiptModal, type ReceiptData } from './receipt-modal';
+import { ReceiptModal, type ReceiptData } from '@/components/dashboard/receipt-modal';
 import Image from 'next/image';
 import {
   Search,

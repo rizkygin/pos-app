@@ -62,12 +62,10 @@ function formatSeconds(totalSeconds: number): string {
   return `${s}d`;
 }
 
-function OnlineTimer({ initialSeconds }: { initialSeconds: number }) {
-  const [seconds, setSeconds] = useState(initialSeconds);
-  useEffect(() => {
-    const id = setInterval(() => setSeconds((s) => s + 1), 1000);
-    return () => clearInterval(id);
-  }, []);
+// The running total lives in the parent (see CourierDashboard): the tile is
+// hidden while offline, so state held here would be destroyed on unmount and
+// restart from a stale page-load value the next time the courier goes online.
+function OnlineTimer({ seconds }: { seconds: number }) {
   return <span>{formatSeconds(seconds)}</span>;
 }
 
@@ -119,6 +117,16 @@ export const CourierDashboard = ({
 }: Props) => {
   const [isOnline, setIsOnline] = useState(initialIsOnline);
   const [isPending, startTransition] = useTransition();
+  // Today's accumulated online time. Ticks only while actually on shift —
+  // previously it counted up regardless, so an offline courier's total kept
+  // growing and was wrong the moment they came back online.
+  const [onlineSeconds, setOnlineSeconds] = useState(todayOnlineSeconds);
+  useEffect(() => setOnlineSeconds(todayOnlineSeconds), [todayOnlineSeconds]);
+  useEffect(() => {
+    if (!isOnline) return;
+    const id = setInterval(() => setOnlineSeconds((s) => s + 1), 1000);
+    return () => clearInterval(id);
+  }, [isOnline]);
   const [showConfirm, setShowConfirm] = useState(false);
   const confirmTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -175,7 +183,7 @@ export const CourierDashboard = ({
     },
     {
       label: 'Online Today',
-      value: <OnlineTimer initialSeconds={todayOnlineSeconds} />,
+      value: <OnlineTimer seconds={onlineSeconds} />,
       icon: Clock,
       color: 'text-purple-600',
       bg: 'bg-purple-100',

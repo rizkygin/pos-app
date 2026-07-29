@@ -19,9 +19,20 @@ export type ReceiptData = {
     discountAmount: number;
     discountLabel: string;
     total: number;
-    paymentMethod: 'cash' | 'non_cash';
-    amountPaid: number;
-    changeDue: number;
+    /**
+     * Delivery orders only. The cashier (counter sale) omits it and no ongkir
+     * line is printed.
+     */
+    deliveryFee?: number;
+    /**
+     * Omitted by the Order Lobby's pickup slip: a courier handout is proof of
+     * what's being delivered, and the money hasn't been collected at that point.
+     * When absent the whole cash/change block is skipped rather than printing a
+     * misleading "Kembali Rp 0".
+     */
+    paymentMethod?: 'cash' | 'non_cash';
+    amountPaid?: number;
+    changeDue?: number;
     date: Date;
     outletName: string;
     outletAddress: string;
@@ -33,6 +44,8 @@ export type ReceiptData = {
 type Props = {
     data: ReceiptData;
     onClose: () => void;
+    /** Modal title. "Order Placed!" is wrong for a courier pickup slip. */
+    heading?: string;
 };
 
 const fmt = (n: number) =>
@@ -181,6 +194,7 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
 
     row("Subtotal", fmt(data.subtotal));
     if (data.discountAmount > 0) row(data.discountLabel, `-${fmt(data.discountAmount)}`);
+    if (data.deliveryFee) row("Ongkos kirim", fmt(data.deliveryFee));
     bold(true);
     size(0x01); // double height for the total
     row("TOTAL", fmt(data.total));
@@ -188,13 +202,15 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
     bold(false);
     divider();
 
-    if (data.paymentMethod === "non_cash") {
-        row("Pembayaran", "Non-Tunai");
-    } else {
-        row("Tunai", fmt(data.amountPaid));
-        row("Kembali", fmt(data.changeDue));
+    if (data.paymentMethod) {
+        if (data.paymentMethod === "non_cash") {
+            row("Pembayaran", "Non-Tunai");
+        } else {
+            row("Tunai", fmt(data.amountPaid ?? 0));
+            row("Kembali", fmt(data.changeDue ?? 0));
+        }
+        divider();
     }
-    divider();
 
     align(1);
     line("Terima kasih!");
@@ -210,7 +226,7 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
     return btoa(bin);
 }
 
-export function ReceiptModal({ data, onClose }: Props) {
+export function ReceiptModal({ data, onClose, heading = "Order Placed!" }: Props) {
     const shortId = data.orderId.split("-")[0].toUpperCase();
 
     // Outlet logo, or null while it's still the placeholder avatar.
@@ -251,11 +267,15 @@ export function ReceiptModal({ data, onClose }: Props) {
             })
             .join("");
 
-        const paymentHtml =
-            data.paymentMethod === "non_cash"
-                ? `<div class="row b"><span>Pembayaran</span><span>Non-Tunai</span></div>`
-                : `<div class="row"><span>Tunai</span><span>${fmt(data.amountPaid)}</span></div>` +
-                  `<div class="row b"><span>Kembali</span><span>${fmt(data.changeDue)}</span></div>`;
+        // No payment method (Order Lobby pickup slip) -> skip the block entirely,
+        // including its divider, rather than printing a misleading zero.
+        const paymentHtml = !data.paymentMethod
+            ? ""
+            : (data.paymentMethod === "non_cash"
+                  ? `<div class="row b"><span>Pembayaran</span><span>Non-Tunai</span></div>`
+                  : `<div class="row"><span>Tunai</span><span>${fmt(data.amountPaid ?? 0)}</span></div>` +
+                    `<div class="row b"><span>Kembali</span><span>${fmt(data.changeDue ?? 0)}</span></div>`) +
+              `<div class="dv"></div>`;
 
         const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Struk #${shortId}</title>
 <style>
@@ -289,10 +309,10 @@ export function ReceiptModal({ data, onClose }: Props) {
   <div class="dv"></div>
   <div class="row sm"><span>Subtotal</span><span>${fmt(data.subtotal)}</span></div>
   ${data.discountAmount > 0 ? `<div class="row sm"><span>${esc(data.discountLabel)}</span><span>-${fmt(data.discountAmount)}</span></div>` : ""}
+  ${data.deliveryFee ? `<div class="row sm"><span>Ongkos kirim</span><span>${fmt(data.deliveryFee)}</span></div>` : ""}
   <div class="row b lg"><span>TOTAL</span><span>${fmt(data.total)}</span></div>
   <div class="dv"></div>
   ${paymentHtml}
-  <div class="dv"></div>
   <div class="c sm">Terima kasih!</div>
   <div class="c sm">Silakan datang kembali ^^</div>
   <div class="dv"></div>
@@ -364,7 +384,7 @@ export function ReceiptModal({ data, onClose }: Props) {
                 <div className="flex items-center justify-between px-5 py-4 border-b">
                     <div className="flex items-center gap-2 text-green-600">
                         <CheckCircle className="h-5 w-5" />
-                        <span className="font-bold text-base">Order Placed!</span>
+                        <span className="font-bold text-base">{heading}</span>
                     </div>
                     <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1">
                         <X className="h-5 w-5" />
@@ -461,6 +481,12 @@ export function ReceiptModal({ data, onClose }: Props) {
                                 {data.discountAmount > 0 ? '-' : ''}{fmt(data.discountAmount)}
                             </span>
                         </div>
+                        {data.deliveryFee ? (
+                            <div className="flex justify-between text-xs mb-2">
+                                <span className="text-gray-500">Ongkos kirim</span>
+                                <span>{fmt(data.deliveryFee)}</span>
+                            </div>
+                        ) : null}
                         <div className="flex justify-between font-bold text-sm">
                             <span>TOTAL</span>
                             <span className="text-blue-600">{fmt(data.total)}</span>
@@ -468,26 +494,29 @@ export function ReceiptModal({ data, onClose }: Props) {
 
                         <div className="border-t border-dashed border-gray-300 my-3" />
 
-                        {/* Payment */}
-                        {data.paymentMethod === 'non_cash' ? (
-                            <div className="flex justify-between font-bold text-sm">
-                                <span>Payment</span>
-                                <span className="text-blue-600">Non-Cash</span>
-                            </div>
-                        ) : (
+                        {/* Payment — omitted for a courier pickup slip (see ReceiptData). */}
+                        {data.paymentMethod && (
                             <>
-                                <div className="flex justify-between text-xs mb-1">
-                                    <span className="text-gray-500">Cash</span>
-                                    <span>{fmt(data.amountPaid)}</span>
-                                </div>
-                                <div className="flex justify-between font-bold text-sm">
-                                    <span>Change</span>
-                                    <span className="text-emerald-600">{fmt(data.changeDue)}</span>
-                                </div>
+                                {data.paymentMethod === 'non_cash' ? (
+                                    <div className="flex justify-between font-bold text-sm">
+                                        <span>Payment</span>
+                                        <span className="text-blue-600">Non-Cash</span>
+                                    </div>
+                                ) : (
+                                    <>
+                                        <div className="flex justify-between text-xs mb-1">
+                                            <span className="text-gray-500">Cash</span>
+                                            <span>{fmt(data.amountPaid ?? 0)}</span>
+                                        </div>
+                                        <div className="flex justify-between font-bold text-sm">
+                                            <span>Change</span>
+                                            <span className="text-emerald-600">{fmt(data.changeDue ?? 0)}</span>
+                                        </div>
+                                    </>
+                                )}
+                                <div className="border-t border-dashed border-gray-300 my-3" />
                             </>
                         )}
-
-                        <div className="border-t border-dashed border-gray-300 my-3" />
 
                         {/* Footer */}
                         <p className="text-center text-xs text-gray-400">Thank you for your purchase!</p>

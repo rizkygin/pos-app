@@ -4,7 +4,7 @@ import { db } from "../db";
 import { couriersTable, courierSessionsTable, ordersTable } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
-import { getCourierAvailability } from "../lib/utils/courier-availability";
+import { cappedShiftEnd, getCourierAvailability } from "../lib/utils/courier-availability";
 
 async function getCourierId(userId: string) {
   const [courier] = await db
@@ -18,7 +18,11 @@ async function getCourierId(userId: string) {
 async function closeOpenSessions(courierId: number) {
   await db
     .update(courierSessionsTable)
-    .set({ ended_at: new Date() })
+    // Capped, not plain now(): go-online closes any dangling session, so a
+    // courier who forgot to go offline a week ago would otherwise have that
+    // abandoned session stamped with today's date and recorded as a week-long
+    // shift. This is how a real 665-hour row got created.
+    .set({ ended_at: cappedShiftEnd })
     .where(
       and(
         eq(courierSessionsTable.courier_id, courierId),
