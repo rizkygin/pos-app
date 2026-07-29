@@ -80,8 +80,13 @@ self.addEventListener("push", (event) => {
   event.waitUntil(
     self.registration.showNotification(data.title, {
       body: data.body,
+      // Full-colour brand mark shown as the notification's large icon.
       icon: "/icons/icon-192x192.png",
-      badge: "/icons/icon-192x192.png",
+      // NOT the same file as `icon`: Android masks the badge by its alpha
+      // channel and repaints it a flat colour for the status bar, so the opaque
+      // app icon rendered as a featureless square. badge-96x96.png is the mark
+      // alone, white on transparent, so the silhouette survives the mask.
+      badge: "/icons/badge-96x96.png",
       // Same tag as a later push on the same topic (see orders.ts) collapses
       // them into one notification instead of stacking a dozen.
       tag: data.tag || "order",
