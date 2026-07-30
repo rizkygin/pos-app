@@ -4,9 +4,10 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import Image from "next/image";
 import QRCode from "react-qr-code";
-import { MapPin, Phone, Star, Share2, X, Copy, Check, MessageCircle, Navigation } from "lucide-react";
+import { MapPin, Phone, Star, Share2, X, Copy, Check, MessageCircle, Navigation, ArrowRight } from "lucide-react";
 import { fmtIDR } from "@/lib/utils/format";
 import { resolveProductImage, isBackendImage } from "@/lib/image-src";
+import { ORDER_FEATURES } from "@/lib/order-features";
 
 type Outlet = {
     id: number;
@@ -36,12 +37,32 @@ type Product = {
     is_recommended: boolean;
     isAvailable: boolean;
     discount_percent: number | null;
+    // Owner-defined menu section. Null for products not assigned to one — those
+    // fall back to being grouped under their platform `category`.
+    menu_group: string | null;
+    menu_group_order: number | null;
+    // Order-feature slugs (e.g. ["food"]). Decides which /dashboard/order page
+    // the "Pesan" button opens.
+    features: string[];
 };
 
 type Props = {
     outlet: Outlet;
     products: Product[];
 };
+
+// Section anchor ids. Group names are owner-typed free text ("Minuman Dingin",
+// "Nasi & Mie"), so they can't go into an href unescaped.
+const slugify = (s: string) =>
+    s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "grup";
+
+// Which /dashboard/order/[feature] page this product belongs to. Prefers the
+// product's own feature (an outlet may offer several), falling back to the
+// slug that owns its category, then to "food" so the button is never dead.
+const orderFeatureSlug = (product: Product) =>
+    product.features?.[0] ??
+    ORDER_FEATURES.find((f) => f.category === product.category)?.slug ??
+    "food";
 
 function getImageSrc(image: string): string {
     return resolveProductImage(image);
@@ -95,7 +116,15 @@ function TiltCard({ children, className }: { children: React.ReactNode; classNam
     );
 }
 
-function ProductCard({ product, index }: { product: Product; index: number }) {
+function ProductCard({
+    product,
+    index,
+    onOpen,
+}: {
+    product: Product;
+    index: number;
+    onOpen: (p: Product) => void;
+}) {
     const [imgError, setImgError] = useState(false);
 
     const isDiscounted =
@@ -117,7 +146,16 @@ function ProductCard({ product, index }: { product: Product; index: number }) {
             transition={{ duration: 0.4, delay: (index % 8) * 0.055, ease: [0.22, 1, 0.36, 1] }}
         >
             <TiltCard className="h-full">
-                <div className="relative h-full flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/5 backdrop-blur-md hover:border-white/20 hover:bg-white/8 transition-colors">
+                {/* A real <button> rather than an onClick div: the whole card is
+                    the hit target, and this gets keyboard + screen-reader
+                    support for free. Nothing inside is interactive, so there
+                    are no nested controls to worry about. */}
+                <button
+                    type="button"
+                    onClick={() => onOpen(product)}
+                    aria-label={`Lihat detail ${product.product_name}`}
+                    className="relative h-full w-full text-left flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/5 backdrop-blur-md hover:border-white/20 hover:bg-white/8 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
+                >
                     {/* Image */}
                     <div className="relative aspect-[4/3] w-full overflow-hidden">
                         <Image
@@ -186,14 +224,158 @@ function ProductCard({ product, index }: { product: Product; index: number }) {
                             )}
                         </div>
                     </div>
-                </div>
+                </button>
             </TiltCard>
         </motion.div>
     );
 }
 
+// Tapping a card opens this instead of expanding in place: the cards sit in a
+// 2–4 column grid whose rows stretch to the tallest item, so an inline expand
+// would inflate the whole row and leave dead space beside it.
+function ProductDetailSheet({
+    product,
+    outletId,
+    onClose,
+}: {
+    product: Product;
+    outletId: number;
+    onClose: () => void;
+}) {
+    const [imgError, setImgError] = useState(false);
+
+    const isDiscounted =
+        product.price_mark_down &&
+        product.price_mark_down !== "0" &&
+        parseFloat(product.price_mark_down) > 0;
+    const displayPrice = isDiscounted
+        ? parseFloat(product.price_mark_down)
+        : parseFloat(product.price);
+
+    const orderHref = `/dashboard/order/${orderFeatureSlug(product)}/${outletId}`;
+
+    // Esc to close, and lock the page behind the sheet so the menu doesn't
+    // scroll underneath on mobile.
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === "Escape") onClose();
+        };
+        document.addEventListener("keydown", onKey);
+        const prev = document.body.style.overflow;
+        document.body.style.overflow = "hidden";
+        return () => {
+            document.removeEventListener("keydown", onKey);
+            document.body.style.overflow = prev;
+        };
+    }, [onClose]);
+
+    return (
+        <>
+            <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm"
+                onClick={onClose}
+            />
+            <motion.div
+                role="dialog"
+                aria-modal="true"
+                aria-label={product.product_name}
+                // Bottom sheet on mobile, centred dialog from sm up.
+                initial={{ opacity: 0, y: 40, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 40, scale: 0.98 }}
+                transition={{ type: "spring", stiffness: 420, damping: 34 }}
+                className="fixed inset-x-0 bottom-0 z-50 max-h-[88vh] overflow-y-auto rounded-t-3xl border border-white/15 bg-[#1a1a1e] shadow-2xl sm:inset-x-4 sm:bottom-auto sm:top-1/2 sm:mx-auto sm:max-w-md sm:-translate-y-1/2 sm:rounded-3xl"
+            >
+                <div className="relative aspect-4/3 w-full overflow-hidden rounded-t-3xl sm:rounded-t-3xl">
+                    <Image
+                        src={imgError ? "/avatar.png" : getImageSrc(product.image)}
+                        unoptimized={isBackendImage(product.image)}
+                        alt={product.product_name}
+                        fill
+                        className="object-cover"
+                        onError={() => setImgError(true)}
+                        sizes="(max-width: 640px) 100vw, 448px"
+                    />
+                    <div className="absolute inset-0 bg-linear-to-t from-black/70 via-transparent to-transparent" />
+                    <button
+                        onClick={onClose}
+                        aria-label="Tutup"
+                        className="absolute right-3 top-3 rounded-full bg-black/50 p-2 text-white/80 backdrop-blur-sm transition-colors hover:bg-black/70 hover:text-white"
+                    >
+                        <X className="h-4 w-4" />
+                    </button>
+                    {!product.isAvailable && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+                            <span className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-black uppercase tracking-widest text-white">
+                                Habis
+                            </span>
+                        </div>
+                    )}
+                </div>
+
+                <div className="space-y-4 p-5">
+                    <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-white/40">
+                                {product.menu_group ?? product.category}
+                            </span>
+                            <h3 className="mt-0.5 text-lg font-black leading-tight text-white">
+                                {product.product_name}
+                            </h3>
+                        </div>
+                        <StarRating
+                            value={parseFloat(product.ratings)}
+                            count={product.review_count}
+                            size="xs"
+                        />
+                    </div>
+
+                    {product.description ? (
+                        <p className="text-sm leading-relaxed text-white/60">
+                            {product.description}
+                        </p>
+                    ) : (
+                        <p className="text-sm italic text-white/25">
+                            Belum ada deskripsi untuk menu ini.
+                        </p>
+                    )}
+
+                    <div className="flex items-baseline gap-2 border-t border-white/10 pt-4">
+                        <span className="text-2xl font-black text-white">
+                            {fmtIDR(displayPrice)}
+                        </span>
+                        {isDiscounted && (
+                            <span className="text-sm text-white/35 line-through">
+                                {fmtIDR(parseFloat(product.price))}
+                            </span>
+                        )}
+                        <span className="ml-auto text-xs text-white/30">
+                            per {product.unit}
+                        </span>
+                    </div>
+
+                    <a
+                        href={orderHref}
+                        className={`flex h-12 w-full items-center justify-center gap-2 rounded-2xl text-sm font-black transition-colors ${
+                            product.isAvailable
+                                ? "bg-amber-500 text-black hover:bg-amber-400"
+                                : "pointer-events-none bg-white/10 text-white/30"
+                        }`}
+                    >
+                        {product.isAvailable ? "Pesan Sekarang" : "Sedang Habis"}
+                        {product.isAvailable && <ArrowRight className="h-4 w-4" />}
+                    </a>
+                </div>
+            </motion.div>
+        </>
+    );
+}
+
 export function MenuClient({ outlet, products }: Props) {
-    const [activeCategory, setActiveCategory] = useState("All");
+    const [detailProduct, setDetailProduct] = useState<Product | null>(null);
     const [shareOpen, setShareOpen] = useState(false);
     const [copied, setCopied] = useState(false);
     const [menuUrl, setMenuUrl] = useState("");
@@ -202,8 +384,26 @@ export function MenuClient({ outlet, products }: Props) {
         setMenuUrl(window.location.href);
     }, []);
 
-    const categories = ["All", ...Array.from(new Set(products.map((p) => p.category))).sort()];
-    const filtered = activeCategory === "All" ? products : products.filter((p) => p.category === activeCategory);
+    // Sections come from the owner's menu groups, in the order they arranged
+    // them. Products with no group fall back to their platform `category`, so an
+    // outlet that has never touched the feature still gets a sensible menu
+    // instead of one undifferentiated wall of items.
+    //
+    // Fallback sections sort after real groups (Infinity) and are labelled with
+    // the raw category; ties break alphabetically so the order is stable.
+    const sections = (() => {
+        const bucket = new Map<string, { label: string; order: number; items: Product[] }>();
+        for (const p of products) {
+            const label = p.menu_group ?? p.category;
+            const order = p.menu_group ? (p.menu_group_order ?? 0) : Number.POSITIVE_INFINITY;
+            const existing = bucket.get(label);
+            if (existing) existing.items.push(p);
+            else bucket.set(label, { label, order, items: [p] });
+        }
+        return [...bucket.values()].sort(
+            (a, b) => a.order - b.order || a.label.localeCompare(b.label),
+        );
+    })();
     const rating = parseFloat(outlet.ratings);
     const avatarSrc = getImageSrc(outlet.avatar);
     const mapsUrl =
@@ -326,47 +526,67 @@ export function MenuClient({ outlet, products }: Props) {
                 <div className="absolute -top-20 left-1/2 -translate-x-1/2 h-40 w-full max-w-150 rounded-full bg-amber-500/8 blur-[80px]" />
             </div>
 
-            {/* ── Category tabs ── */}
-            <div className="sticky top-0 z-20 border-b border-white/8 bg-[#111114]/85 backdrop-blur-xl">
-                <div className="mx-auto max-w-4xl px-4 md:px-8">
-                    <div className="flex gap-1 overflow-x-auto py-3" style={{ scrollbarWidth: "none" }}>
-                        {categories.map((cat) => (
-                            <button key={cat} onClick={() => setActiveCategory(cat)}
-                                className={`relative flex-shrink-0 rounded-full px-4 py-1.5 text-xs font-bold transition-colors ${activeCategory === cat ? "text-white" : "text-white/40 hover:text-white/70"}`}>
-                                {activeCategory === cat && (
-                                    <motion.span layoutId="cat-pill"
-                                        className="absolute inset-0 rounded-full bg-amber-500/90"
-                                        transition={{ type: "spring", stiffness: 400, damping: 32 }} />
-                                )}
-                                <span className="relative z-10">{cat}</span>
-                            </button>
-                        ))}
+            {/* ── Section jump bar ──
+                Chips scroll to a section rather than filtering, so the whole
+                menu stays in the DOM: better for a customer scanning it top to
+                bottom, and it keeps every item indexable for per-outlet SEO
+                (which is the point of this page — see generateMetadata). */}
+            {sections.length > 1 && (
+                <div className="sticky top-0 z-20 border-b border-white/8 bg-[#111114]/85 backdrop-blur-xl">
+                    <div className="mx-auto max-w-4xl px-4 md:px-8">
+                        <div className="flex gap-1 overflow-x-auto py-3" style={{ scrollbarWidth: "none" }}>
+                            {sections.map((s) => (
+                                <a
+                                    key={s.label}
+                                    href={`#section-${slugify(s.label)}`}
+                                    className="shrink-0 rounded-full px-4 py-1.5 text-xs font-bold text-white/40 transition-colors hover:bg-white/5 hover:text-white/80"
+                                >
+                                    {s.label}
+                                </a>
+                            ))}
+                        </div>
                     </div>
                 </div>
-            </div>
+            )}
 
-            {/* ── Product grid ── */}
+            {/* ── Menu sections ── */}
             <div className="mx-auto max-w-4xl px-4 py-8 md:px-8">
-                <AnimatePresence mode="wait">
-                    <motion.div
-                        key={activeCategory}
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        transition={{ duration: 0.18 }}
-                        className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:gap-5 lg:grid-cols-4"
-                    >
-                        {filtered.length === 0 ? (
-                            <div className="col-span-full py-16 text-center text-white/30">
-                                <p className="text-lg font-bold">Tidak ada menu di kategori ini</p>
-                            </div>
-                        ) : (
-                            filtered.map((product, i) => (
-                                <ProductCard key={product.id} product={product} index={i} />
-                            ))
-                        )}
-                    </motion.div>
-                </AnimatePresence>
+                {products.length === 0 ? (
+                    <div className="py-16 text-center text-white/30">
+                        <p className="text-lg font-bold">Belum ada menu</p>
+                    </div>
+                ) : (
+                    <div className="space-y-10">
+                        {sections.map((section) => (
+                            <section
+                                key={section.label}
+                                id={`section-${slugify(section.label)}`}
+                                // Clears the sticky jump bar when linked to.
+                                className="scroll-mt-20"
+                            >
+                                <div className="mb-4 flex items-baseline gap-3">
+                                    <h2 className="text-lg font-black uppercase tracking-wide text-white">
+                                        {section.label}
+                                    </h2>
+                                    <span className="text-xs font-bold text-white/25">
+                                        {section.items.length} menu
+                                    </span>
+                                    <span className="h-px flex-1 bg-white/10" />
+                                </div>
+                                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:gap-5 lg:grid-cols-4">
+                                    {section.items.map((product, i) => (
+                                        <ProductCard
+                                            key={product.id}
+                                            product={product}
+                                            index={i}
+                                            onOpen={setDetailProduct}
+                                        />
+                                    ))}
+                                </div>
+                            </section>
+                        ))}
+                    </div>
+                )}
             </div>
 
             {/* ── QR Share Section ── */}
@@ -407,6 +627,15 @@ export function MenuClient({ outlet, products }: Props) {
 
             {/* ── Share modal ── */}
             <AnimatePresence>
+                {detailProduct && (
+                    <ProductDetailSheet
+                        key={detailProduct.id}
+                        product={detailProduct}
+                        outletId={outlet.id}
+                        onClose={() => setDetailProduct(null)}
+                    />
+                )}
+
                 {shareOpen && (
                     <>
                         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}

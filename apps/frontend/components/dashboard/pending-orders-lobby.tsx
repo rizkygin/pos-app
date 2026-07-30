@@ -702,11 +702,21 @@ function QRScannerBar({
 
   const resolve = (raw: string) => {
     const trimmed = raw.trim();
+    if (!trimmed) return false;
+    const upper = trimmed.toUpperCase();
+
+    // Three accepted forms, in order: the courier's QR payload (see
+    // courier-lobby.tsx, `COURIER:<id>|ORDER:<orderId>`), a full order id, or
+    // the last 8 characters shown on the card.
+    //
+    // The QR clause used to be a bare template string with no comparison — a
+    // non-empty string is truthy, so find() returned orders[0] for ANY input
+    // and confirmed pickup on whichever order sorted first.
     const match = orders.find(
       (o) =>
-        `COURIER:${o.courierId}|ORDER:${o.orderId}`.toUpperCase() ||
+        `COURIER:${o.courierId}|ORDER:${o.orderId}`.toUpperCase() === upper ||
         o.orderId === trimmed ||
-        o.orderId.slice(-8).toUpperCase() === trimmed.toUpperCase(),
+        o.orderId.slice(-8).toUpperCase() === upper,
     );
     if (!match) {
       setError('Order tidak ditemukan di daftar siap.');

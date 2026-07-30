@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import {
   Plus,
   ArrowLeft,
@@ -9,6 +9,9 @@ import {
   Cookie,
   Package,
   Layers,
+  ChevronUp,
+  ChevronDown,
+  ChevronsUpDown,
   Tag,
   DollarSign,
   Loader2,
@@ -43,7 +46,12 @@ import { DashboardHeader } from '@/components/dashboard-header';
 import { RecipeEditor } from './recipe-editor';
 import { ORDER_FEATURES } from '@/lib/order-features';
 import { resolveProductImage, isBackendImage } from '@/lib/image-src';
+import { API_URL } from '@/lib/api-url';
 import { formatNumberInput, parseNumberInput } from '@/lib/utils/format';
+
+// Owner-defined sections for the public /menu page. Distinct from `category`,
+// which is the fixed platform list driving marketplace browse.
+type MenuGroup = { id: number; name: string; sort_order: number };
 
 type Product = {
   id: string;
@@ -63,6 +71,7 @@ type Product = {
   lowest_price?: string | null;
   highest_price?: string | null;
   barcode?: string | null;
+  menu_group_id?: number | null;
 };
 
 const rupiah = (v: number | string) =>
@@ -128,6 +137,90 @@ export const ProductsManager = ({
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
 
+  // ── Menu groups: owner-defined sections for the public /menu page ─────────
+  const [menuGroups, setMenuGroups] = useState<MenuGroup[]>([]);
+  const [selectedMenuGroupId, setSelectedMenuGroupId] = useState<number | null>(null);
+  const [groupManagerOpen, setGroupManagerOpen] = useState(false);
+  const [newGroupName, setNewGroupName] = useState('');
+  const [groupError, setGroupError] = useState<string | null>(null);
+
+  const loadMenuGroups = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/menu-groups`, { credentials: 'include' });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.success) setMenuGroups(data.groups ?? []);
+    } catch {
+      /* non-fatal: the picker just stays empty */
+    }
+  }, []);
+
+  useEffect(() => {
+    loadMenuGroups();
+  }, [loadMenuGroups]);
+
+  const createMenuGroup = async () => {
+    const name = newGroupName.trim();
+    if (!name) return;
+    setGroupError(null);
+    const res = await fetch(`${API_URL}/api/menu-groups`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      setGroupError(data?.error ?? 'Gagal membuat grup');
+      return;
+    }
+    setNewGroupName('');
+    await loadMenuGroups();
+    // Auto-select: if the form is open, the owner made this group for it.
+    if (data?.group?.id && view === 'form') setSelectedMenuGroupId(data.group.id);
+  };
+
+  const renameMenuGroup = async (id: number, name: string) => {
+    setGroupError(null);
+    const res = await fetch(`${API_URL}/api/menu-groups/${id}`, {
+      method: 'PATCH',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      setGroupError(data?.error ?? 'Gagal mengubah nama grup');
+    }
+    await loadMenuGroups();
+  };
+
+  const deleteMenuGroup = async (id: number) => {
+    // Products are NOT deleted: the FK is ON DELETE SET NULL, so they simply
+    // become ungrouped and fall back to their category on the menu page.
+    if (!window.confirm('Hapus grup ini? Produk di dalamnya tidak ikut terhapus, hanya jadi tanpa grup.')) return;
+    await fetch(`${API_URL}/api/menu-groups/${id}`, { method: 'DELETE', credentials: 'include' });
+    if (selectedMenuGroupId === id) setSelectedMenuGroupId(null);
+    await loadMenuGroups();
+    router.refresh();
+  };
+
+  const moveMenuGroup = async (id: number, direction: -1 | 1) => {
+    const index = menuGroups.findIndex((g) => g.id === id);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= menuGroups.length) return;
+    const next = [...menuGroups];
+    [next[index], next[target]] = [next[target], next[index]];
+    setMenuGroups(next); // optimistic — the arrows should feel instant
+    await fetch(`${API_URL}/api/menu-groups/reorder`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: next.map((g) => g.id) }),
+    });
+    await loadMenuGroups();
+  };
+
   const productCategories = useMemo(
     () =>
       Array.from(
@@ -135,18 +228,48 @@ export const ProductsManager = ({
       ),
     [initialProducts],
   );
-  const filteredProducts = useMemo(
-    () =>
-      initialProducts.filter((p) => {
-        const matchesSearch = p.product_name
-          .toLowerCase()
-          .includes(search.toLowerCase());
-        const matchesCategory =
-          categoryFilter === 'all' || p.category === categoryFilter;
-        return matchesSearch && matchesCategory;
-      }),
-    [initialProducts, search, categoryFilter],
-  );
+  // Column sorting for the inventory table. Click a header to sort, click again
+  // to flip direction. Applied after search/category filtering.
+  type SortKey = 'name' | 'price' | 'stock';
+  const [sortBy, setSortBy] = useState<SortKey>('name');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+
+  const toggleSort = (key: SortKey) => {
+    if (sortBy === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortBy(key);
+      // Names read naturally A-Z; numbers are almost always wanted biggest-first.
+      setSortDir(key === 'name' ? 'asc' : 'desc');
+    }
+  };
+
+  // A service product's headline figure is its range floor, not `price` — the
+  // backend mirrors price = lowest_price, but read it explicitly so sorting
+  // stays correct if that ever changes.
+  const sortPrice = (p: Product) =>
+    Number(p.lowest_price && p.lowest_price !== '0' ? p.lowest_price : p.price) || 0;
+
+  const filteredProducts = useMemo(() => {
+    const rows = initialProducts.filter((p) => {
+      const matchesSearch = p.product_name
+        .toLowerCase()
+        .includes(search.toLowerCase());
+      const matchesCategory =
+        categoryFilter === 'all' || p.category === categoryFilter;
+      return matchesSearch && matchesCategory;
+    });
+
+    const dir = sortDir === 'asc' ? 1 : -1;
+    return [...rows].sort((a, b) => {
+      if (sortBy === 'name') {
+        // localeCompare so "Ayam" vs "ayam" and accented names order sensibly.
+        return a.product_name.localeCompare(b.product_name, 'id') * dir;
+      }
+      if (sortBy === 'price') return (sortPrice(a) - sortPrice(b)) * dir;
+      return ((Number(a.stock) || 0) - (Number(b.stock) || 0)) * dir;
+    });
+  }, [initialProducts, search, categoryFilter, sortBy, sortDir]);
 
   // Ingredient candidates for the recipe editor: the outlet's stock-tracked
   // products (a menu item can't be its own ingredient).
@@ -161,6 +284,125 @@ export const ProductsManager = ({
           stock: p.stock,
         })),
     [initialProducts, editingProductId],
+  );
+
+  // Sortable column header. Shows the arrow only on the active column so the
+  // header row doesn't turn into a wall of icons.
+  const SortHeader = ({
+    label,
+    sortKey,
+    align = 'left',
+  }: {
+    label: string;
+    sortKey: SortKey;
+    align?: 'left' | 'right';
+  }) => {
+    const active = sortBy === sortKey;
+    return (
+      <button
+        type="button"
+        onClick={() => toggleSort(sortKey)}
+        aria-label={`Urutkan berdasarkan ${label}`}
+        className={`flex w-full items-center gap-1 uppercase tracking-wide transition-colors hover:text-foreground ${
+          align === 'right' ? 'justify-end' : ''
+        } ${active ? 'text-foreground' : ''}`}
+      >
+        {label}
+        {active ? (
+          sortDir === 'asc' ? (
+            <ChevronUp className="h-3 w-3" />
+          ) : (
+            <ChevronDown className="h-3 w-3" />
+          )
+        ) : (
+          <ChevronsUpDown className="h-3 w-3 opacity-30" />
+        )}
+      </button>
+    );
+  };
+
+  // Rendered in BOTH the product list header and the product form. A plain
+  // function rather than a component: an inline component gets a fresh identity
+  // every render, which would remount these inputs and drop focus mid-typing.
+  const renderMenuGroupManager = () => (
+    <div className="rounded-xl border bg-muted/30 p-3 space-y-3">
+      <div className="flex gap-2">
+        <input
+          value={newGroupName}
+          onChange={(e) => setNewGroupName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              createMenuGroup();
+            }
+          }}
+          placeholder="Nama grup baru, misal: Nasi"
+          maxLength={60}
+          className="flex-1 h-10 rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+        />
+        <button
+          type="button"
+          onClick={createMenuGroup}
+          className="h-10 rounded-lg bg-blue-600 px-4 text-xs font-bold text-white hover:bg-blue-700"
+        >
+          Tambah
+        </button>
+      </div>
+
+      {groupError && <p className="text-xs font-medium text-rose-500">{groupError}</p>}
+
+      {menuGroups.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          Belum ada grup. Tambah grup untuk menata menu publik.
+        </p>
+      ) : (
+        <ul className="space-y-1.5">
+          {menuGroups.map((g, i) => (
+            <li key={g.id} className="flex items-center gap-2">
+              <div className="flex flex-col">
+                <button
+                  type="button"
+                  onClick={() => moveMenuGroup(g.id, -1)}
+                  disabled={i === 0}
+                  aria-label="Naikkan"
+                  className="text-muted-foreground hover:text-foreground disabled:opacity-25"
+                >
+                  <ChevronUp className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => moveMenuGroup(g.id, 1)}
+                  disabled={i === menuGroups.length - 1}
+                  aria-label="Turunkan"
+                  className="text-muted-foreground hover:text-foreground disabled:opacity-25"
+                >
+                  <ChevronDown className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <input
+                key={g.name}
+                defaultValue={g.name}
+                maxLength={60}
+                onBlur={(e) => {
+                  const next = e.target.value.trim();
+                  if (next && next !== g.name) renameMenuGroup(g.id, next);
+                  else e.target.value = g.name;
+                }}
+                className="h-9 flex-1 rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              />
+              <button
+                type="button"
+                onClick={() => deleteMenuGroup(g.id)}
+                aria-label="Hapus grup"
+                className="p-1.5 text-muted-foreground hover:text-rose-500"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 
   // Form State
@@ -182,6 +424,7 @@ export const ProductsManager = ({
 
   const handleCategorySelect = (category: string) => {
     setSelectedCategory(category);
+    setSelectedMenuGroupId(null);
     setIsForSale(false);
     // Ingredients exist to be counted: default them to tracked stock.
     setTrackStock(category === 'bahan');
@@ -216,6 +459,7 @@ export const ProductsManager = ({
       result = await updateProductAction(editingProductId, {
         ...formData,
         category: selectedCategory,
+        menu_group_id: selectedMenuGroupId,
         image: imageUrl,
         features: selectedFeatures,
         is_for_sale: isForSale,
@@ -225,6 +469,7 @@ export const ProductsManager = ({
       result = await addProductAction({
         ...formData,
         category: selectedCategory,
+        menu_group_id: selectedMenuGroupId,
         outlet_id: outletId,
         image: imageUrl,
         features: selectedFeatures,
@@ -284,6 +529,7 @@ export const ProductsManager = ({
     setTrackStock(product.track_stock ?? true);
     setEditingProductId(product.id);
     setSelectedCategory(product.category);
+    setSelectedMenuGroupId(product.menu_group_id ?? null);
     setFormData({
       product_name: product.product_name,
       price: product.price,
@@ -388,6 +634,22 @@ export const ProductsManager = ({
               </p>
             </div>
             <div className="flex items-center gap-2">
+              {/* Reachable without opening a product: an owner organising their
+                  menu shouldn't have to edit an item to create a section, and
+                  an outlet with no products yet had no path to it at all. */}
+              <Button
+                variant="outline"
+                onClick={() => setGroupManagerOpen((v) => !v)}
+                className="rounded-xl border-border hover:bg-muted/50 transition-colors"
+              >
+                <Layers className="mr-2 h-4 w-4" />
+                Grup Menu
+                {menuGroups.length > 0 && (
+                  <span className="ml-2 rounded-full bg-muted px-1.5 text-[10px] font-bold">
+                    {menuGroups.length}
+                  </span>
+                )}
+              </Button>
               <Button
                 variant="outline"
                 onClick={() => setShareOpen(true)}
@@ -421,6 +683,19 @@ export const ProductsManager = ({
               </Button>
             </div>
           </div>
+
+          {groupManagerOpen && (
+            <div className="mb-4 md:mb-6 space-y-2">
+              <p className="text-sm font-bold flex items-center gap-2">
+                <Layers className="h-4 w-4 text-muted-foreground" />
+                Grup Menu
+                <span className="text-xs font-normal text-muted-foreground">
+                  — judul &amp; urutan bagian di halaman menu publik
+                </span>
+              </p>
+              {renderMenuGroupManager()}
+            </div>
+          )}
 
           {initialProducts.length === 0 ? (
             <div className="flex flex-col items-center justify-center p-12 border-2 border-dashed rounded-3xl bg-muted/10">
@@ -474,9 +749,15 @@ export const ProductsManager = ({
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b bg-muted/30 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-                        <th className="px-3 py-2.5 font-semibold">Produk</th>
-                        <th className="px-3 py-2.5 text-right font-semibold">Harga</th>
-                        <th className="px-3 py-2.5 text-right font-semibold">Stok</th>
+                        <th className="px-3 py-2.5 font-semibold">
+                          <SortHeader label="Produk" sortKey="name" />
+                        </th>
+                        <th className="px-3 py-2.5 text-right font-semibold">
+                          <SortHeader label="Harga" sortKey="price" align="right" />
+                        </th>
+                        <th className="px-3 py-2.5 text-right font-semibold">
+                          <SortHeader label="Stok" sortKey="stock" align="right" />
+                        </th>
                         <th className="hidden md:table-cell px-3 py-2.5 font-semibold">Status</th>
                         <th className="px-3 py-2.5 text-right font-semibold">Aksi</th>
                       </tr>
@@ -761,6 +1042,46 @@ export const ProductsManager = ({
                       <option value={selectedCategory}>{selectedCategory}</option>
                     )}
                 </select>
+              </div>
+
+              {/* ── Grup Menu ──
+                  Not the same thing as Kategori above: that one is the fixed
+                  platform list that drives marketplace browse, this is purely
+                  how THIS outlet's public menu is laid out. Optional — an
+                  unset product falls back to its category on the menu page. */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-sm font-bold flex items-center gap-2">
+                    <Layers className="h-4 w-4 text-muted-foreground" />
+                    Grup Menu
+                    <span className="text-xs font-normal text-muted-foreground">(opsional)</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setGroupManagerOpen((v) => !v)}
+                    className="text-xs font-bold text-blue-600 hover:text-blue-700"
+                  >
+                    {groupManagerOpen ? 'Tutup' : 'Kelola grup'}
+                  </button>
+                </div>
+                <select
+                  value={selectedMenuGroupId ?? ''}
+                  onChange={(e) =>
+                    setSelectedMenuGroupId(e.target.value ? Number(e.target.value) : null)
+                  }
+                  className="flex h-12 w-full rounded-xl border border-input bg-background px-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                >
+                  <option value="">— Tanpa grup —</option>
+                  {menuGroups.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-muted-foreground">
+                  Menentukan judul &amp; urutan bagian di halaman menu publik.
+                </p>
+                {groupManagerOpen && renderMenuGroupManager()}
               </div>
 
               <div className="grid grid-cols-2 gap-4 md:gap-6">

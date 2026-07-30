@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import path from "node:path";
 import fs from "node:fs/promises";
@@ -14,6 +14,7 @@ import {
   stockMovementsTable,
   ratingsTable,
   productAdsTable,
+  menuGroupsTable,
 } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
@@ -30,6 +31,8 @@ type AddProductInput = {
   buying_price: string;
   outlet_id: number;
   category: string;
+  // Owner's menu section for the public /menu page; null clears it.
+  menu_group_id?: number | null;
   description?: string;
   unit?: string;
   image?: string;
@@ -144,6 +147,7 @@ export async function productRoutes(app: FastifyInstance) {
           // Pinned to the caller's outlet — body.outlet_id is ignored.
           outlet_id: access.outlet.id,
           category: data.category,
+          menu_group_id: data.menu_group_id ?? null,
           description: data.description || "",
           unit: data.unit || "pcs",
           image: data.image || "avatar.png",
@@ -350,6 +354,7 @@ export async function productRoutes(app: FastifyInstance) {
             price_mark_down: service?.price_mark_down ?? data.price_mark_down,
             buying_price: data.buying_price,
             category: data.category,
+            ...(data.menu_group_id !== undefined && { menu_group_id: data.menu_group_id }),
             description: data.description,
             unit: data.unit,
             ...(data.image && { image: data.image }),
@@ -468,6 +473,119 @@ export async function productRoutes(app: FastifyInstance) {
       }
     });
 
+    return reply.send({ success: true });
+  });
+
+  // ── Menu groups: owner-defined sections for the public /menu page ────────
+  // Separate from products.category on purpose — see menuGroupsTable in
+  // db/schema.ts. Same "products" permission as the product routes above.
+
+  app.get("/api/menu-groups", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, "products");
+    if (!access) return;
+
+    const groups = await db
+      .select({
+        id: menuGroupsTable.id,
+        name: menuGroupsTable.name,
+        sort_order: menuGroupsTable.sort_order,
+      })
+      .from(menuGroupsTable)
+      .where(
+        and(
+          eq(menuGroupsTable.outlet_id, access.outlet.id),
+          isNull(menuGroupsTable.deletedAt),
+        ),
+      )
+      .orderBy(menuGroupsTable.sort_order, menuGroupsTable.name);
+
+    return reply.send({ success: true, groups });
+  });
+
+  app.post("/api/menu-groups", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, "products");
+    if (!access) return;
+
+    const name = String((request.body as { name?: string })?.name ?? "").trim();
+    if (!name) return reply.status(400).send({ success: false, error: "Nama grup wajib diisi" });
+    if (name.length > 60) return reply.status(400).send({ success: false, error: "Nama grup maksimal 60 karakter" });
+
+    // New groups land at the end rather than the top: appending is what an
+    // owner adding a section to an existing menu expects.
+    const [last] = await db
+      .select({ max: sql<number>`coalesce(max(${menuGroupsTable.sort_order}), -1)` })
+      .from(menuGroupsTable)
+      .where(eq(menuGroupsTable.outlet_id, access.outlet.id));
+
+    try {
+      const [created] = await db
+        .insert(menuGroupsTable)
+        .values({ outlet_id: access.outlet.id, name, sort_order: Number(last?.max ?? -1) + 1 })
+        .returning({ id: menuGroupsTable.id, name: menuGroupsTable.name, sort_order: menuGroupsTable.sort_order });
+      return reply.send({ success: true, group: created });
+    } catch {
+      // Unique (outlet_id, name) — the picker relies on distinct names.
+      return reply.status(409).send({ success: false, error: "Grup dengan nama itu sudah ada" });
+    }
+  });
+
+  app.patch("/api/menu-groups/:id", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, "products");
+    if (!access) return;
+
+    const id = Number((request.params as { id?: string }).id);
+    const name = String((request.body as { name?: string })?.name ?? "").trim();
+    if (!id || !name) return reply.status(400).send({ success: false, error: "id dan nama wajib diisi" });
+
+    try {
+      const updated = await db
+        .update(menuGroupsTable)
+        .set({ name, updatedAt: new Date() })
+        // Scoped to the caller's outlet so an id from another outlet can't be renamed.
+        .where(and(eq(menuGroupsTable.id, id), eq(menuGroupsTable.outlet_id, access.outlet.id)))
+        .returning({ id: menuGroupsTable.id });
+      if (updated.length === 0) return reply.status(404).send({ success: false, error: "Grup tidak ditemukan" });
+      return reply.send({ success: true });
+    } catch {
+      return reply.status(409).send({ success: false, error: "Grup dengan nama itu sudah ada" });
+    }
+  });
+
+  // Bulk reorder: the client sends ids in their new display order.
+  app.post("/api/menu-groups/reorder", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, "products");
+    if (!access) return;
+
+    const ids = (request.body as { ids?: number[] })?.ids;
+    if (!Array.isArray(ids)) return reply.status(400).send({ success: false, error: "ids wajib berupa array" });
+
+    await db.transaction(async (tx) => {
+      for (const [index, id] of ids.entries()) {
+        await tx
+          .update(menuGroupsTable)
+          .set({ sort_order: index, updatedAt: new Date() })
+          .where(and(eq(menuGroupsTable.id, Number(id)), eq(menuGroupsTable.outlet_id, access.outlet.id)));
+      }
+    });
+
+    return reply.send({ success: true });
+  });
+
+  app.delete("/api/menu-groups/:id", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, "products");
+    if (!access) return;
+
+    const id = Number((request.params as { id?: string }).id);
+    if (!id) return reply.status(400).send({ success: false, error: "id wajib diisi" });
+
+    // Hard delete: products.menu_group_id is ON DELETE SET NULL, so the products
+    // survive and simply become ungrouped.
+    const deleted = await db
+      .delete(menuGroupsTable)
+      .where(and(eq(menuGroupsTable.id, id), eq(menuGroupsTable.outlet_id, access.outlet.id)))
+      .returning({ id: menuGroupsTable.id });
+
+    if (deleted.length === 0) return reply.status(404).send({ success: false, error: "Grup tidak ditemukan" });
     return reply.send({ success: true });
   });
 }

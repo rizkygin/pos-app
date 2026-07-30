@@ -18,6 +18,8 @@ export type AddProductInput = {
   highest_price?: string;
   // Optional — mainly for retail/mart items. Unique per outlet on the backend.
   barcode?: string;
+  // Owner's menu section for the public /menu page; null clears it.
+  menu_group_id?: number | null;
 };
 
 type ActionResult = { success: boolean; message?: string };

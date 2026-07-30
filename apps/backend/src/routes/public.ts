@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, isNull, desc, sql, like, ilike, or, gte, lte } from "drizzle-orm";
 import { db } from "../db";
-import { outletsTable, productsTable, productAdsTable, productAdsSchedule, scheduleProductAdsTable } from "../db/schema";
+import { outletsTable, productsTable, productAdsTable, productAdsSchedule, scheduleProductAdsTable, menuGroupsTable } from "../db/schema";
 import { getCurrentAdSlot } from "../lib/utils/ad-schedule";
 
 type JoinRow = {
@@ -89,8 +89,17 @@ export async function publicRoutes(app: FastifyInstance) {
         is_recommended: productsTable.is_recommended,
         isAvailable: productsTable.isAvailable,
         discount_percent: productsTable.discount_percent,
+        // Owner-defined menu section. Left join: ungrouped products keep a null
+        // here and the page falls back to grouping them by `category`.
+        menu_group: menuGroupsTable.name,
+        menu_group_order: menuGroupsTable.sort_order,
+        // Drives the "Pesan" deep link on the menu detail sheet: an outlet can
+        // offer several features, so the product's OWN feature decides which
+        // /dashboard/order/[feature] page to open (same rule as "Order Lagi").
+        features: productsTable.features,
       })
       .from(productsTable)
+      .leftJoin(menuGroupsTable, eq(productsTable.menu_group_id, menuGroupsTable.id))
       .where(
         and(
           eq(productsTable.outlet_id, id),

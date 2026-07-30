@@ -10,6 +10,7 @@ import {
   index,
   uniqueIndex,
   numeric,
+  type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { timestamps } from './columns.helper';
 
@@ -178,6 +179,16 @@ export const productsTable = pgTable(
     image: varchar('image', { length: 255 }).notNull().default('avatar.png'),
     category: varchar('category', { length: 255 })
       .notNull(),
+    // Owner's own menu section for the public /menu page (see menuGroupsTable).
+    // NOT a replacement for `category` above: that one is a fixed platform list
+    // driving the marketplace feature browse. Null = ungrouped, which the menu
+    // page falls back to rendering under the product's category.
+    // onDelete: set null — deleting a section must ungroup its products, never
+    // delete them. Lazy thunk because menuGroupsTable is declared further down.
+    menu_group_id: integer('menu_group_id').references(
+      (): AnyPgColumn => menuGroupsTable.id,
+      { onDelete: 'set null' },
+    ),
     isAvailable: boolean('is_available').default(true).notNull(),
     // false = inventory-only item: tracked in stock and usable on invoices, but
     // hidden from the customer ordering flow (customers can't pick it).
@@ -1067,4 +1078,32 @@ export const pushSubscriptionsTable = pgTable(
       .notNull(),
   },
   (t) => [index('push_subscriptions_user_idx').on(t.user_id)],
+);
+
+// Owner-defined menu sections for the public /menu/[outlet_id] page, e.g.
+// "Nasi", "Mie", "Minuman Dingin". Deliberately SEPARATE from products.category:
+// category is a fixed platform list wired to the marketplace feature browse
+// (see FEATURE_CATEGORY in routes/public.ts) and must not become free text.
+// This is display-only grouping owned by the outlet.
+//
+// A real table rather than a string on the product so a rename or a reorder is
+// one row instead of an edit per product, and so the owner picks from a list
+// (no "Kopi" / "kopi" / "KOPI" drift).
+export const menuGroupsTable = pgTable(
+  'menu_groups',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    outlet_id: integer('outlet_id')
+      .notNull()
+      .references(() => outletsTable.id, { onDelete: 'cascade' }),
+    name: varchar('name', { length: 60 }).notNull(),
+    // Owner-controlled display order; ties fall back to name.
+    sort_order: integer('sort_order').default(0).notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    index('menu_groups_outlet_idx').on(t.outlet_id, t.sort_order),
+    // One group name per outlet — the picker relies on names being distinct.
+    uniqueIndex('menu_groups_outlet_name_uq').on(t.outlet_id, t.name),
+  ],
 );
