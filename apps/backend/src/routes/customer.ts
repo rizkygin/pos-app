@@ -152,6 +152,11 @@ export async function customerRoutes(app: FastifyInstance) {
 
     if (!customer) return reply.status(403).send({ success: false });
 
+    // 'cancelled' is included (unlike other terminal-status filtering elsewhere)
+    // so a customer whose pending order the owner just rejected still sees it as
+    // their "active" order — activeorder/page.tsx renders the rejection reason
+    // instead of redirecting them away. It naturally stops being "active" the
+    // moment they place a new order, since this only ever returns the latest one.
     const [order] = await db
       .select({
         id: ordersTable.id,
@@ -161,10 +166,12 @@ export async function customerRoutes(app: FastifyInstance) {
         createdAt: ordersTable.createdAt,
         fulfillment: ordersTable.fulfillment,
         scheduledAt: ordersTable.scheduled_at,
+        rejectedBy: ordersTable.rejected_by,
+        rejectedReason: ordersTable.rejected_reason,
       })
       .from(ordersTable)
       .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))
-      .where(and(eq(ordersTable.customer_id, customer.id), notInArray(ordersTable.status, ["cancelled"])))
+      .where(eq(ordersTable.customer_id, customer.id))
       .orderBy(desc(ordersTable.createdAt))
       .limit(1);
 

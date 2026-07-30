@@ -22,8 +22,8 @@ function playChime(ctx: AudioContext) {
     // Ramp instead of a hard start/stop — a square-edged gate produces an
     // audible click on most speakers.
     gain.gain.setValueAtTime(0.0001, at);
-    gain.gain.exponentialRampToValueAtTime(0.35, at + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.5);
+    gain.gain.exponentialRampToValueAtTime(2, at + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, at + 0.5);
     osc.connect(gain).connect(ctx.destination);
     osc.start(at);
     osc.stop(at + 0.55);

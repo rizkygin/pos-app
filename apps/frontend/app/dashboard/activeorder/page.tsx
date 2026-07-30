@@ -37,8 +37,7 @@ export default async function ActiveOrderPage() {
   const activeOrder = data?.success ? data.order : null;
 
   if (!activeOrder) redirect('/dashboard/order');
-  console.log(activeOrder);
-  if(activeOrder.fulfillment === 'service') redirect ('/dashboard/order');
+  if (activeOrder.fulfillment === 'service') redirect('/dashboard/order');
   if (activeOrder.status === 'delivered')
     redirect(
       activeOrder.fulfillment === 'service'
@@ -50,11 +49,12 @@ export default async function ActiveOrderPage() {
     <main className="px-4 pb-12">
       <ActiveOrderAnimation
         orderId={activeOrder.id}
-        status={activeOrder.status as 'pending' | 'confirmed' | 'preparing' | 'ready' | 'on_delivery' | 'delivered'}
+        status={activeOrder.status as 'pending' | 'confirmed' | 'preparing' | 'ready' | 'on_delivery' | 'delivered' | 'cancelled'}
         orderRef={activeOrder.id.slice(-8).toUpperCase()}
         outletName={activeOrder.outletName}
         statusSince={activeOrder.updatedAt ?? activeOrder.createdAt}
         fulfillment={activeOrder.fulfillment}
+        rejectedReason={activeOrder.rejectedReason ?? null}
       />
     </main>
   );

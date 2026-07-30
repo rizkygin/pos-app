@@ -47,6 +47,11 @@ type CreateOrderBody = {
   fulfillment?: "delivery" | "service";
 };
 
+// Grace window before a customer can cancel their own order — gives the owner
+// a few minutes to start acting on it first. Mirrors the lock in
+// active-order-animation.tsx (CANCEL_LOCK_SECONDS).
+const CUSTOMER_CANCEL_LOCK_MS = 5 * 60 * 1000;
+
 //SEARCH:: distance pricelist
 function deliveryFeeFromDistance(km: number): number {
   if (km > 30) throw new Error("Jarak pengiriman melebihi batas maksimum (30 km)");
@@ -231,16 +236,39 @@ export async function orderRoutes(app: FastifyInstance) {
 
     if (!customer) return reply.status(403).send({ success: false, error: "Customer not found" });
 
-    await db
+    const [order] = await db
+      .select({
+        status: ordersTable.status,
+        updatedAt: ordersTable.updatedAt,
+        createdAt: ordersTable.createdAt,
+      })
+      .from(ordersTable)
+      .where(and(eq(ordersTable.id, orderId), eq(ordersTable.customer_id, customer.id)))
+      .limit(1);
+
+    if (!order) return reply.status(404).send({ success: false, error: "Order tidak ditemukan" });
+    if (order.status !== "pending" && order.status !== "confirmed") {
+      return reply.status(400).send({ success: false, error: "Order tidak dapat dibatalkan" });
+    }
+
+    const since = (order.updatedAt ?? order.createdAt).getTime();
+    if (Date.now() - since < CUSTOMER_CANCEL_LOCK_MS) {
+      return reply.status(400).send({ success: false, error: "Pesanan baru bisa dibatalkan setelah 5 menit" });
+    }
+
+    const res = await db
       .update(ordersTable)
       .set({ status: "cancelled", rejected_by: "customer", updatedAt: new Date() })
       .where(
         and(
           eq(ordersTable.id, orderId),
           eq(ordersTable.customer_id, customer.id),
+          eq(ordersTable.status, order.status),
         ),
-      );
+      )
+      .returning({ id: ordersTable.id });
 
+    if (res.length === 0) return reply.status(400).send({ success: false, error: "Order tidak dapat dibatalkan" });
     return reply.send({ success: true });
   });
 
@@ -267,6 +295,40 @@ export async function orderRoutes(app: FastifyInstance) {
         ),
       );
 
+    return reply.send({ success: true });
+  });
+
+  // Owner rejects a still-pending order, recording why.
+  app.post("/api/orders/reject-by-owner", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
+
+    const { orderId, reason } = (request.body as { orderId?: string; reason?: string }) ?? {};
+    if (!orderId) return reply.status(400).send({ success: false, error: "orderId wajib diisi" });
+    const trimmedReason = reason?.trim();
+    if (!trimmedReason) return reply.status(400).send({ success: false, error: "Alasan penolakan wajib diisi" });
+
+    const outlet = await outletForOrders(session.user.id, request);
+    if (!outlet) return reply.status(403).send({ success: false, error: "Not an owner" });
+
+    const res = await db
+      .update(ordersTable)
+      .set({
+        status: "cancelled",
+        rejected_by: "owner",
+        rejected_reason: trimmedReason.slice(0, 255),
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(ordersTable.id, orderId),
+          eq(ordersTable.outlet_id, outlet.id),
+          eq(ordersTable.status, "pending"),
+        ),
+      )
+      .returning({ id: ordersTable.id });
+
+    if (res.length === 0) return reply.status(400).send({ success: false, error: "Order tidak dapat ditolak" });
     return reply.send({ success: true });
   });
 

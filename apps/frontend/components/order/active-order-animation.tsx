@@ -17,7 +17,8 @@ type OrderStatus =
   | 'preparing'
   | 'ready'
   | 'on_delivery'
-  | 'delivered';
+  | 'delivered'
+  | 'cancelled';
 
 const STATUS_CONFIG: Record<
   OrderStatus,
@@ -77,6 +78,14 @@ const STATUS_CONFIG: Record<
     bg: 'bg-emerald-50 dark:bg-emerald-950/30',
     ring: 'bg-emerald-400',
     emoji: '🎊',
+  },
+  cancelled: {
+    label: 'Pesanan Ditolak',
+    sublabel: 'Maaf, outlet tidak bisa memproses pesananmu.',
+    color: 'text-rose-600',
+    bg: 'bg-rose-50 dark:bg-rose-950/30',
+    ring: 'bg-rose-400',
+    emoji: '✕',
   },
 };
 
@@ -270,6 +279,27 @@ function DeliveredAnimation() {
   );
 }
 
+function CancelledAnimation() {
+  return (
+    <div className="relative flex items-center justify-center w-32 h-32">
+      <motion.div
+        className="absolute inset-0 rounded-full bg-rose-100 dark:bg-rose-900/40"
+        initial={{ scale: 0.8, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        transition={{ duration: 0.4, ease: 'easeOut' }}
+      />
+      <motion.span
+        className="text-5xl select-none z-10"
+        initial={{ scale: 0, rotate: -45 }}
+        animate={{ scale: 1, rotate: 0 }}
+        transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+      >
+        ✕
+      </motion.span>
+    </div>
+  );
+}
+
 const ANIMATION_MAP: Record<OrderStatus, React.ReactNode> = {
   pending: <PendingAnimation />,
   confirmed: <ConfirmedAnimation />,
@@ -277,8 +307,12 @@ const ANIMATION_MAP: Record<OrderStatus, React.ReactNode> = {
   ready: <ReadyAnimation />,
   on_delivery: <OnDeliveryAnimation />,
   delivered: <DeliveredAnimation />,
+  cancelled: <CancelledAnimation />,
 };
 
+// 'cancelled' is a terminal exception, not a step in the pipeline, so it's
+// deliberately left out of STEPS — ProgressStepper is skipped entirely for it
+// (see the `liveStatus !== 'cancelled'` guard below).
 const STEPS: { key: OrderStatus; label: string }[] = [
   { key: 'pending', label: 'Konfirmasi' },
   { key: 'confirmed', label: 'Cari Kurir' },
@@ -415,10 +449,13 @@ function useStatusTimer(statusSince: string) {
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   const s = seconds % 60;
-  if (h > 0) return `${h}j ${m}m ${s}d`;
-  if (m > 0) return `${m}m ${s}d`;
-  return `${s}d`;
+  const formatted = h > 0 ? `${h}j ${m}m ${s}d` : m > 0 ? `${m}m ${s}d` : `${s}d`;
+  return { formatted, seconds };
 }
+
+// Grace window before a customer can back out — gives the owner a few minutes
+// to start acting on the order before a cancel can undo it.
+const CANCEL_LOCK_SECONDS = 5 * 60;
 
 export function ActiveOrderAnimation({
   orderId,
@@ -427,6 +464,7 @@ export function ActiveOrderAnimation({
   outletName,
   statusSince,
   fulfillment,
+  rejectedReason,
 }: {
   orderId: string;
   status: OrderStatus;
@@ -434,17 +472,24 @@ export function ActiveOrderAnimation({
   outletName: string;
   statusSince: string;
   fulfillment?: 'delivery' | 'service';
+  rejectedReason?: string | null;
 }) {
   const router = useRouter();
   const isService = fulfillment === 'service';
   const [liveStatus, setLiveStatus] = useState<OrderStatus>(status);
   const [liveStatusSince, setLiveStatusSince] = useState(statusSince);
+  const [liveRejectedReason, setLiveRejectedReason] = useState(rejectedReason ?? null);
   const cfg = STATUS_CONFIG[liveStatus];
   const [pending, startTransition] = useTransition();
   const [qrOpen, setQrOpen] = useState(false);
-  const elapsed = useStatusTimer(liveStatusSince);
+  const { formatted: elapsed, seconds: elapsedSeconds } = useStatusTimer(liveStatusSince);
+  const cancelUnlockedIn = CANCEL_LOCK_SECONDS - elapsedSeconds;
 
   const poll = useCallback(async () => {
+    // Once the owner has rejected the order, there's nothing left to poll for —
+    // the reason is already on screen, and further polling would just refetch
+    // the same 'cancelled' order forever.
+    if (liveStatus === 'cancelled') return;
     try {
       const res = await fetch(`${API_URL}/api/get-active-order`, {
         cache: 'no-store',
@@ -457,6 +502,7 @@ export function ActiveOrderAnimation({
         setLiveStatus(next);
         const since = data.order.updatedAt ?? data.order.createdAt;
         if (since) setLiveStatusSince(since);
+        if (next === 'cancelled') setLiveRejectedReason(data.order.rejectedReason ?? null);
       }
       if (next === 'delivered')
         router.push(
@@ -519,6 +565,18 @@ export function ActiveOrderAnimation({
           </p>
         </div>
 
+        {/* Rejection reason — the whole point of this screen for a cancelled order */}
+        {liveStatus === 'cancelled' && liveRejectedReason && (
+          <div className="w-full rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/40 px-4 py-3">
+            <p className="text-[10px] font-bold text-rose-500 uppercase tracking-wider mb-1">
+              Alasan Penolakan
+            </p>
+            <p className="text-sm text-rose-700 dark:text-rose-300 leading-snug">
+              {liveRejectedReason}
+            </p>
+          </div>
+        )}
+
         {/* Order meta */}
         <div className="w-full rounded-xl bg-background/60 border border-border/40 px-4 py-3 space-y-1 text-xs text-muted-foreground">
           <div className="flex justify-between">
@@ -546,7 +604,9 @@ export function ActiveOrderAnimation({
           </div>
         </div>
 
-        {/* Cancel button — only on pending/confirmed */}
+        {/* Cancel button — only on pending/confirmed, and only once the
+            5-minute grace window has passed (gives the owner time to start
+            acting on the order before a cancel can undo it). */}
         {(liveStatus === 'pending' || liveStatus === 'confirmed') && (
           <motion.form
             action={() =>
@@ -563,12 +623,34 @@ export function ActiveOrderAnimation({
           >
             <button
               type="submit"
-              disabled={pending}
+              disabled={pending || cancelUnlockedIn > 0}
+              title={
+                cancelUnlockedIn > 0
+                  ? `Bisa dibatalkan dalam ${Math.ceil(cancelUnlockedIn / 60)} menit`
+                  : undefined
+              }
               className="w-full py-2.5 rounded-xl border border-red-300 text-red-600 text-sm font-bold hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {pending ? 'Membatalkan...' : 'Batalkan Pesanan'}
+              {pending
+                ? 'Membatalkan...'
+                : cancelUnlockedIn > 0
+                  ? `Bisa Dibatalkan dalam ${Math.ceil(cancelUnlockedIn / 60)}m`
+                  : 'Batalkan Pesanan'}
             </button>
           </motion.form>
+        )}
+
+        {/* Rejected: only way forward is placing a new order */}
+        {liveStatus === 'cancelled' && (
+          <motion.button
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.3 }}
+            onClick={() => router.push('/dashboard/order')}
+            className="w-full py-2.5 rounded-xl bg-rose-600 text-white text-sm font-bold hover:bg-rose-700 transition-colors"
+          >
+            Kembali ke Menu
+          </motion.button>
         )}
 
         {/* QR button — courier delivery: shown when courier is on the way */}
@@ -605,15 +687,17 @@ export function ActiveOrderAnimation({
         )}
       </motion.div>
 
-      {/* Stepper */}
-      <motion.div
-        initial={{ opacity: 0, y: 16 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5, delay: 0.2 }}
-        className="w-full max-w-sm"
-      >
-        <ProgressStepper current={liveStatus} elapsed={elapsed} />
-      </motion.div>
+      {/* Stepper — skipped for 'cancelled', a terminal exception rather than a step */}
+      {liveStatus !== 'cancelled' && (
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, delay: 0.2 }}
+          className="w-full max-w-sm"
+        >
+          <ProgressStepper current={liveStatus} elapsed={elapsed} />
+        </motion.div>
+      )}
 
       {qrOpen && (
         <CustomerQrModal orderId={orderId} onClose={() => setQrOpen(false)} />

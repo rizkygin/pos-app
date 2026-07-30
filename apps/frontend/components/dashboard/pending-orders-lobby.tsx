@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import {
   confirmOrder,
+  rejectOrderByOwner,
   markOrderReady,
   confirmPickup,
   closeServiceOrder,
@@ -218,19 +219,104 @@ function EmptyState({ tab }: { tab: Tab }) {
   );
 }
 
+// Owner rejects a pending order: a reason is required, since it's what the
+// customer (and the admin audit trail, see rejected_by/rejected_reason) will
+// see for why the order never got confirmed.
+function RejectOrderModal({
+  orderId,
+  onClose,
+  onDone,
+}: {
+  orderId: string;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [reason, setReason] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async () => {
+    const trimmed = reason.trim();
+    if (!trimmed) {
+      setError('Tuliskan alasan penolakan.');
+      return;
+    }
+    setError('');
+    setSubmitting(true);
+    try {
+      await rejectOrderByOwner(orderId, trimmed);
+      onDone();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Gagal menolak order');
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-0 sm:p-4">
+      <div className="w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl bg-background p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-red-100 dark:bg-red-950/40 text-red-600 dark:text-red-400">
+              <X className="h-4 w-4" />
+            </span>
+            <p className="font-black text-sm">Tolak Pesanan</p>
+          </div>
+          <button
+            onClick={onClose}
+            className="h-8 w-8 rounded-lg hover:bg-muted flex items-center justify-center"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="space-y-2">
+          <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+            Alasan Penolakan
+          </label>
+          <textarea
+            value={reason}
+            onChange={(e) => {
+              setReason(e.target.value);
+              setError('');
+            }}
+            placeholder="Contoh: Stok habis, di luar area pengiriman, dll."
+            rows={3}
+            autoFocus
+            className="w-full rounded-xl border border-input bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none"
+          />
+        </div>
+
+        {error && <p className="text-xs font-medium text-rose-600">{error}</p>}
+
+        <button
+          onClick={submit}
+          disabled={submitting}
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-red-600 py-3 text-sm font-black text-white hover:bg-red-700 disabled:opacity-60"
+        >
+          {submitting ? 'Memproses...' : 'Tolak Pesanan'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function PendingOrderCard({
   order,
   index,
   onConfirm,
+  onReject,
   onServiceDone,
 }: {
   order: Order;
   index: number;
   onConfirm: (id: string) => void;
+  onReject: (id: string) => void;
   onServiceDone: (id: string) => void;
 }) {
   const [isPending, startTransition] = useTransition();
   const [serviceModal, setServiceModal] = useState(false);
+  const [rejectModal, setRejectModal] = useState(false);
   const isService = order.fulfillment === 'service';
   const svcItem = order.items[0];
   const svcLowest = Number(svcItem?.lowestPrice ?? svcItem?.summaryPrice ?? 0);
@@ -318,9 +404,9 @@ function PendingOrderCard({
             ) : (
               <>
                 <button
-                  disabled
-                  title="Segera hadir"
-                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-200 text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  disabled={isPending}
+                  onClick={() => setRejectModal(true)}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-200 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <X className="h-3 w-3" />
                   Tolak
@@ -348,6 +434,16 @@ function PendingOrderCard({
           onDone={() => {
             setServiceModal(false);
             onServiceDone(order.orderId);
+          }}
+        />
+      )}
+      {rejectModal && (
+        <RejectOrderModal
+          orderId={order.orderId}
+          onClose={() => setRejectModal(false)}
+          onDone={() => {
+            setRejectModal(false);
+            onReject(order.orderId);
           }}
         />
       )}
@@ -1079,6 +1175,15 @@ export function PendingOrdersLobby(outlet: OutletInfo) {
     [pending],
   );
 
+  // RejectOrderModal already ran the reject-by-owner request; just drop it
+  // from the pending list.
+  const handleReject = useCallback(
+    (orderId: string) => {
+      pending.setOrders((prev) => prev.filter((o) => o.orderId !== orderId));
+    },
+    [pending],
+  );
+
   const handleMarkReady = useCallback(
     async (orderId: string) => {
       preparing.setOrders((prev) => prev.filter((o) => o.orderId !== orderId));
@@ -1273,6 +1378,7 @@ export function PendingOrdersLobby(outlet: OutletInfo) {
                     order={order}
                     index={i}
                     onConfirm={handleConfirm}
+                    onReject={handleReject}
                     onServiceDone={handleServiceDone}
                   />
                 ))}

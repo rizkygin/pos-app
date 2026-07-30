@@ -24,6 +24,20 @@ export async function confirmOrder(orderId: string) {
   await postOrderAction('/api/orders/confirm', orderId, 'Gagal mengonfirmasi order');
 }
 
+// Owner rejects a still-pending order, recording why.
+export async function rejectOrderByOwner(orderId: string, reason: string) {
+  const res = await fetch(`${API_URL}/api/orders/reject-by-owner`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ orderId, reason }),
+  });
+  if (!res.ok) {
+    const json = await res.json().catch(() => null);
+    throw new Error(json?.error ?? 'Gagal menolak order');
+  }
+}
+
 export async function confirmPickup(orderId: string) {
   await postOrderAction('/api/orders/confirm-pickup', orderId, 'Gagal mengonfirmasi pickup');
 }

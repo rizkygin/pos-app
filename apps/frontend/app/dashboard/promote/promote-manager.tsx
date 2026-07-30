@@ -104,6 +104,10 @@ function formatScheduleDays(days: string[]): string {
 }
 
 export const PromoteManager = ({ products, ads }: PromoteManagerProps) => {
+  // `ads` is a one-time server-rendered prop — without this local mirror,
+  // toggling/deleting would call the backend correctly but the switch/card
+  // would never visually update until a full page reload.
+  const [adItems, setAdItems] = useState(ads);
   const [productId, setProductId] = useState('');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -188,8 +192,11 @@ export const PromoteManager = ({ products, ads }: PromoteManagerProps) => {
   };
 
   const handleToggleActive = async (ad: Ad, value: boolean) => {
+    setAdItems((prev) => prev.map((a) => (a.id === ad.id ? { ...a, is_active: value } : a)));
     const result = await toggleAdActiveAction(ad.id, value);
     if (!result.success) {
+      // Revert — the backend rejected it, so the switch shouldn't have moved.
+      setAdItems((prev) => prev.map((a) => (a.id === ad.id ? { ...a, is_active: !value } : a)));
       alert(result.message);
     }
   };
@@ -199,7 +206,9 @@ export const PromoteManager = ({ products, ads }: PromoteManagerProps) => {
     const result = await deleteAdAction(ad.id);
     if (!result.success) {
       alert(result.message);
+      return;
     }
+    setAdItems((prev) => prev.filter((a) => a.id !== ad.id));
   };
 
   const startTour = () => {
@@ -486,13 +495,13 @@ export const PromoteManager = ({ products, ads }: PromoteManagerProps) => {
 
       <div className="space-y-4">
         <h3 className="text-xl font-bold tracking-tight">Iklan Pian</h3>
-        {ads.length === 0 ? (
+        {adItems.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-12 border-2 border-dashed rounded-3xl bg-muted/10 text-center">
             <p className="text-muted-foreground">Belum ada iklan yang diajukan.</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {ads.map((ad) => (
+            {adItems.map((ad) => (
               <div key={ad.id} className="rounded-2xl border bg-background overflow-hidden">
                 <div className="relative w-full aspect-[12/5]">
                   <Image src={getBannerSrc(ad.banner_image)} unoptimized={isBackendImage(ad.banner_image)} fill className="object-cover" alt={ad.title} />
