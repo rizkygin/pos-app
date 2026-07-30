@@ -125,6 +125,20 @@ export async function orderRoutes(app: FastifyInstance) {
     const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
     if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
 
+    // Backstop for the frontend gate (dashboard/layout.tsx renders
+    // EmailVerificationGate instead of any page content for an unverified
+    // customer). Enforced here too since a customer could hit this endpoint
+    // directly and skip that screen. There is no WhatsApp/phone verification in
+    // this app, so a verified email is the only identity check before money
+    // changes hands.
+    if (!session.user.emailVerified) {
+      return reply.status(403).send({
+        success: false,
+        error: "Verifikasi email kamu terlebih dahulu sebelum membuat pesanan.",
+        code: "EMAIL_NOT_VERIFIED",
+      });
+    }
+
     const data = request.body as CreateOrderBody;
     const orderId = crypto.randomUUID();
     const isService = data.fulfillment === "service";

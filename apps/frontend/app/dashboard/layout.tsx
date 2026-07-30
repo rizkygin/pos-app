@@ -13,6 +13,7 @@ import { AppSidebarHeader } from "@/components/app-sidebar-header"
 import { SubscriptionWarningBanner } from "@/components/subscription-warning-banner"
 import { IncomingOrderAlarm } from "@/components/dashboard/incoming-order-alarm"
 import { PushNotificationNudge } from "@/components/dashboard/push-notification-nudge"
+import { EmailVerificationGate } from "@/components/dashboard/email-verification-gate"
 
 // Private, authenticated area — never index. robots.ts also disallows
 // crawling it, but noindex here is the real guarantee (a disallowed page can
@@ -37,6 +38,16 @@ const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
     const employeePermissions: Record<string, boolean> =
         isEmployee ? ((role.data?.permissions as Record<string, boolean>) ?? {}) : {};
     const isCustomer = !isOwner && !isCourier && !isAdmin && !isEmployee;
+
+    // Email is the only identity check a customer goes through — there's no
+    // WhatsApp/phone verification — so an unverified address blocks the whole
+    // dashboard until confirmed. Checked against role.role === 'customer', NOT
+    // the `isCustomer` fallback above: isCustomer is also true for a brand-new
+    // user with no role row yet, and that person must still be able to reach
+    // RegisterRolePage (rendered by app/dashboard/page.tsx) to pick a role.
+    // /api/orders/create enforces the same rule server-side as a backstop.
+    const emailUnverified =
+        !!role && role.role === "customer" && !session.user.emailVerified;
 
     return (
         <>
@@ -65,8 +76,12 @@ const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
                         the alarm above only rings while a tab is open. */}
                     {isOwner && <PushNotificationNudge />}
 
-                    {children}
-                    
+                    {emailUnverified ? (
+                        <EmailVerificationGate email={session.user.email} />
+                    ) : (
+                        children
+                    )}
+
                     {/* <div className="hidden md:block"><MessageChatComponent /></div> */}
                 </AppContent>
             </AppShell>

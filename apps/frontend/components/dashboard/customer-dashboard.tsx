@@ -12,6 +12,9 @@ import {
     Star,
     ChevronLeft,
     ChevronRight,
+    Compass,
+    Wallet,
+    ArrowRight,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { Button } from "@/components/ui/button";
@@ -109,8 +112,8 @@ export const CustomerDashboard = ({ lastOrders = [], recommend = [], ads = [], h
         <main className="px-4 mx-2 md:mx-6 pb-12 space-y-8">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <DashboardHeader
-                    title="Honda pesan apa?"
-                    description="What would you like to order today?"
+                    title="Handak pesan apa?"
+                    description="Pilih kategori di bawah buat mulai pesan."
                 />
 
                 {/* <div className="flex items-center gap-2 text-sm font-bold text-muted-foreground bg-muted/30 px-4 py-2 rounded-full border border-border/50">
@@ -224,6 +227,71 @@ export const CustomerDashboard = ({ lastOrders = [], recommend = [], ads = [], h
                     );
                 })}
             </div>
+
+            {/* First-order guide — replaces the dead space a brand-new customer
+                used to land on: "Pesan Lagi" has nothing to show them (no
+                history yet), so this fills that exact spot instead of leaving
+                a gap between the category grid and Rekomendasi. Only shown
+                once real order history exists is there anything to repeat, so
+                this naturally disappears after a first completed order. */}
+            {lastOrders.length === 0 && (
+                <div className="rounded-[2rem] border border-dashed border-rose-200 bg-rose-50/40 p-6 md:p-8 dark:border-rose-900/40 dark:bg-rose-950/10">
+                    <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
+                        <div className="space-y-1.5">
+                            <h3 className="text-xl font-black tracking-tight md:text-2xl">
+                                Belum ada pesanan — yuk, mulai yang pertama!
+                            </h3>
+                            <p className="max-w-md text-sm font-medium text-muted-foreground">
+                                Pilih kategori di atas, cari outlet favorit, lalu bayar tunai
+                                waktu pesanan sampai. Gampang, kada ribet.
+                            </p>
+                        </div>
+                        <Button
+                            asChild
+                            size="lg"
+                            className="w-fit shrink-0 rounded-2xl bg-rose-600 font-black hover:bg-rose-700"
+                        >
+                            <Link href={!hasLocation ? "/dashboard/users/locations/setting" : "/dashboard/order/food"}>
+                                {!hasLocation ? "Atur Lokasi Dulu" : "Mulai Pesan"}
+                                <ArrowRight className="ml-1.5 h-4 w-4" />
+                            </Link>
+                        </Button>
+                    </div>
+
+                    {/* 3-step explainer for someone who has never used the app
+                        before — no assumptions about prior GoFood/GrabFood
+                        familiarity. */}
+                    <div className="mt-6 grid grid-cols-1 gap-4 border-t border-rose-200/60 pt-6 sm:grid-cols-3 dark:border-rose-900/30">
+                        {[
+                            {
+                                icon: Compass,
+                                title: "1. Pilih Kategori",
+                                desc: "Makanan, minuman, mart, atau jasa — pilih yang pian handaki.",
+                            },
+                            {
+                                icon: ShoppingBag,
+                                title: "2. Pilih Outlet & Menu",
+                                desc: "Cari outlet terdekat, lihat menu, masukkan ke keranjang.",
+                            },
+                            {
+                                icon: Wallet,
+                                title: "3. Bayar Tunai di Tempat",
+                                desc: "Bayar langsung ke kurir waktu pesanan sampai di rumah.",
+                            },
+                        ].map((step, i) => (
+                            <div key={i} className="flex items-start gap-3">
+                                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-rose-100 text-rose-600 dark:bg-rose-500/10 dark:text-rose-400">
+                                    <step.icon className="h-4 w-4" />
+                                </div>
+                                <div>
+                                    <p className="text-xs font-black uppercase tracking-wide">{step.title}</p>
+                                    <p className="mt-0.5 text-xs font-medium text-muted-foreground">{step.desc}</p>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
 
             {/* Last Orders / Repeat Order Section */}
             {lastOrders.length > 0 && (

@@ -46,12 +46,6 @@ function CustomerIllustration() {
             <line x1="103" y1="149" x2="89"  y2="146" stroke="#1C1C1C" strokeWidth="3.5" strokeLinecap="round" />
             <line x1="217" y1="149" x2="231" y2="146" stroke="#1C1C1C" strokeWidth="3.5" strokeLinecap="round" />
 
-            {/* Nose dots */}
-            <circle cx="152" cy="173" r="3" fill="#C28040" />
-            <circle cx="168" cy="173" r="3" fill="#C28040" />
-
-            {/* Smile */}
-            <path d="M143 187 Q160 200 177 187" fill="none" stroke="#9B5B2E" strokeWidth="3" strokeLinecap="round" />
 
             {/* Arms */}
             <path d="M78 240 Q56 280 64 316 Q70 330 85 323 Q80 296 86 265" fill="#C026D3" />
@@ -120,15 +114,8 @@ function OwnerIllustration() {
             <line x1="103" y1="151" x2="89"  y2="148" stroke="#1C1C1C" strokeWidth="3.5" strokeLinecap="round" />
             <line x1="217" y1="151" x2="231" y2="148" stroke="#1C1C1C" strokeWidth="3.5" strokeLinecap="round" />
 
-            {/* Nose dots */}
-            <circle cx="152" cy="175" r="3" fill="#C28040" />
-            <circle cx="168" cy="175" r="3" fill="#C28040" />
-
             {/* Beard — modest lower-face stubble/beard shape */}
             <path d="M108 185 Q108 215 160 218 Q212 215 212 185 Q195 198 160 200 Q125 198 108 185Z" fill="#8B5E3C" />
-
-            {/* Smile (visible between nose and beard) */}
-            <path d="M142 185 Q160 194 178 185" fill="none" stroke="#7A4A25" strokeWidth="2.5" strokeLinecap="round" />
 
             {/* Arms */}
             <path d="M80 244 Q58 284 66 318 Q72 332 87 326 Q82 300 88 268" fill="#1E3A5F" />
@@ -138,10 +125,7 @@ function OwnerIllustration() {
             <ellipse cx="70"  cy="322" rx="14" ry="11" fill="#FCD5AE" />
             <ellipse cx="250" cy="322" rx="14" ry="11" fill="#FCD5AE" />
 
-            {/* Spatula / ladle in right hand */}
-            <line x1="250" y1="322" x2="278" y2="270" stroke="#CBD5E1" strokeWidth="7" strokeLinecap="round" />
-            {/* Spatula head */}
-            <ellipse cx="282" cy="263" rx="14" ry="10" fill="#94A3B8" />
+            
         </svg>
     );
 }
@@ -199,13 +183,6 @@ function CourierIllustration() {
             <line x1="106" y1="166" x2="95"  y2="163" stroke="#1C1C1C" strokeWidth="3.5" strokeLinecap="round" />
             <line x1="214" y1="166" x2="225" y2="163" stroke="#1C1C1C" strokeWidth="3.5" strokeLinecap="round" />
 
-            {/* Nose dots */}
-            <circle cx="153" cy="182" r="2.8" fill="#C28040" />
-            <circle cx="167" cy="182" r="2.8" fill="#C28040" />
-
-            {/* Smile */}
-            <path d="M145 191 Q160 201 175 191" fill="none" stroke="#9B5B2E" strokeWidth="3" strokeLinecap="round" />
-
             {/* Arms */}
             <path d="M78 248 Q56 288 64 322 Q70 336 85 330 Q80 304 86 272" fill="#F97316" />
             <path d="M242 248 Q264 288 256 322 Q250 336 235 330 Q240 304 234 272" fill="#F97316" />
@@ -239,7 +216,6 @@ const roles: Role[] = [
         title: "Customer",
         description: "Belanja barang barang favorite di area sekitar mu.",
         illustration: <CustomerIllustration />,
-        disabled: true,
     },
     {
         id: "owner",
