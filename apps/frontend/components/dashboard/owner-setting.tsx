@@ -11,9 +11,15 @@ import { FEATURES } from "@/lib/feature-categories";
 import { ORDER_FEATURES } from "@/lib/order-features";
 import { API_URL } from "@/lib/api-url";
 import { resolveOutletImage, isBackendImage } from "@/lib/image-src";
+import { parseCoord, isValidCoord } from "@/lib/coords";
+import { getCurrentPosition, geolocationMessage, GEOLOCATION_OPTIONS } from "@/lib/geolocation";
 import { PushNotificationCard } from "@/components/dashboard/push-notification-card";
 
 const FEATURE_META = ORDER_FEATURES.filter((f) => f.isAvailable);
+
+// Map centre before the outlet's own coordinates load.
+const DEFAULT_LAT = -6.2088;
+const DEFAULT_LON = 106.8456;
 
 const BG_IMAGES = [
     "https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?w=1920&q=80&auto=format&fit=crop",
@@ -58,9 +64,10 @@ export function OwnerSetting() {
     const [name, setName] = useState("");
     const [phone, setPhone] = useState("");
     const [address, setAddress] = useState("");
-    const [lat, setLat] = useState(-6.2088);
-    const [lon, setLon] = useState(106.8456);
+    const [lat, setLat] = useState(DEFAULT_LAT);
+    const [lon, setLon] = useState(DEFAULT_LON);
     const [avatar, setAvatar] = useState("avatar.png");
+    // Read-only: written by the backend from the outlet's products.
     const [features, setFeatures] = useState<string[]>([]);
     const [tags, setTags] = useState<string[]>([]);
     const [tagInput, setTagInput] = useState("");
@@ -80,8 +87,10 @@ export function OwnerSetting() {
                 setName(outlet.name);
                 setPhone(outlet.phone);
                 setAddress(outlet.address);
-                setLat(parseFloat(outlet.lat));
-                setLon(parseFloat(outlet.lon));
+                // Keep the Jakarta default when the stored value isn't a real
+                // coordinate — parseFloat('') is NaN, which crashed the picker.
+                setLat(parseCoord(outlet.lat) ?? DEFAULT_LAT);
+                setLon(parseCoord(outlet.lon) ?? DEFAULT_LON);
                 setAvatar(outlet.avatar);
                 setFeatures(outlet.features);
                 setTags(outlet.tags);
@@ -93,16 +102,17 @@ export function OwnerSetting() {
 
     function handleGetLocation() {
         setLocating(true);
-        navigator.geolocation.getCurrentPosition(
+        getCurrentPosition(
             (pos) => {
                 setLat(pos.coords.latitude);
                 setLon(pos.coords.longitude);
                 setLocating(false);
             },
-            () => {
-                alert("Gagal mendapatkan lokasi. Pastikan izin lokasi diaktifkan.");
+            (err) => {
+                setMessage({ ok: false, text: geolocationMessage(err) });
                 setLocating(false);
-            }
+            },
+            GEOLOCATION_OPTIONS,
         );
     }
 
@@ -130,6 +140,15 @@ export function OwnerSetting() {
 
     function handleSave() {
         setMessage(null);
+        // Refuse to write a coordinate the map can't read back. String(NaN) is
+        // the text "NaN", which persists and breaks the picker on every reopen.
+        if (!isValidCoord(lat, lon)) {
+            setMessage({
+                ok: false,
+                text: "Titik lokasi outlet belum valid. Pakai 'Lokasi Saya' atau geser pin di peta.",
+            });
+            return;
+        }
         startTransition(async () => {
             const res = await fetch(`${API_URL}/api/outlet/me`, {
                 method: "PATCH",
@@ -142,7 +161,8 @@ export function OwnerSetting() {
                     lat: String(lat),
                     lon: String(lon),
                     is_open: isOpen,
-                    features,
+                    // features is derived server-side from products — see the
+                    // Kategori Layanan card below; the API ignores it now.
                     tags,
                     avatar,
                 }),
@@ -314,47 +334,47 @@ export function OwnerSetting() {
                     )}
                 </div>
 
-                {/* ── Features ─────────────────────────────────────────── */}
+                {/* ── Features (read-only) ─────────────────────────────────
+                    Derived from the outlet's products by the backend, not
+                    chosen here. The old checklist drifted from reality in both
+                    directions: an outlet kept advertising a category after it
+                    stopped selling it (customers tapped in to an empty outlet),
+                    or sold products in a category it had never ticked (those
+                    products never showed in browse at all). Shown for
+                    transparency so the owner understands where they appear. */}
                 <div className="p-5 rounded-2xl border border-border/60 bg-card shadow-sm space-y-4">
                     <div>
                         <p className="font-black flex items-center gap-2">
                             <Store className="h-4 w-4 text-rose-500" /> Kategori Layanan
                         </p>
-                        <p className="text-xs text-muted-foreground mt-1">Pilih layanan yang outlet kamu tawarkan.</p>
-                    </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                        {FEATURE_META.map((f) => {
-                            const meta = f;
-                            const Icon = f.icon ?? Store;
-                            const active = features.includes(f.slug);
-                            return (
-                                <button
-                                    key={f.slug}
-                                    type="button"
-                                    onClick={() => setFeatures((prev) =>
-                                        prev.includes(f.slug)
-                                            ? prev.filter((s) => s !== f.slug)
-                                            : [...prev, f.slug]
-                                    )}
-                                    className={`flex items-center gap-2.5 px-3 py-2.5 rounded-2xl border-2 text-left transition-all duration-150 ${active
-                                        ? "border-rose-400 bg-rose-50 shadow-sm"
-                                        : "border-border/60 bg-background hover:border-rose-200 hover:bg-rose-50/40"
-                                        }`}
-                                >
-                                    <div className={`h-8 w-8 rounded-xl flex items-center justify-center flex-shrink-0 ${active ? meta?.gradient ?? "bg-rose-100" : "bg-muted"}`}>
-                                        <Icon className={`h-4 w-4 ${active ? meta?.color ?? "text-rose-600" : "text-muted-foreground"}`} />
-                                    </div>
-                                    <span className={`text-xs font-bold leading-tight ${active ? "text-rose-700" : "text-muted-foreground"}`}>
-                                        {meta?.label ?? f}
-                                    </span>
-                                </button>
-                            );
-                        })}
-                    </div>
-                    {features.length > 0 && (
-                        <p className="text-xs text-muted-foreground">
-                            {features.length} kategori dipilih
+                        <p className="text-xs text-muted-foreground mt-1">
+                            Otomatis mengikuti produk yang pian jual. Tambah produk di kategori
+                            tertentu, outlet langsung muncul di kategori itu.
                         </p>
+                    </div>
+                    {features.length === 0 ? (
+                        <p className="text-xs text-muted-foreground rounded-xl bg-muted/40 px-4 py-3">
+                            Belum ada kategori. Outlet pian belum muncul di pencarian pelanggan —
+                            tambahkan produk dulu di menu Produk.
+                        </p>
+                    ) : (
+                        <div className="flex flex-wrap gap-2">
+                            {features.map((slug) => {
+                                const meta = FEATURE_META.find((f) => f.slug === slug);
+                                const Icon = meta?.icon ?? Store;
+                                return (
+                                    <span
+                                        key={slug}
+                                        className="flex items-center gap-2 px-3 py-2 rounded-2xl border-2 border-rose-400 bg-rose-50"
+                                    >
+                                        <Icon className="h-4 w-4 text-rose-600" />
+                                        <span className="text-xs font-bold text-rose-700">
+                                            {meta?.label ?? slug}
+                                        </span>
+                                    </span>
+                                );
+                            })}
+                        </div>
                     )}
                 </div>
 

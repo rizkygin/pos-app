@@ -1,25 +1,76 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, isNull, desc, sql, like, ilike, or, gte, lte } from "drizzle-orm";
 import { db } from "../db";
-import { outletsTable, productsTable, productAdsTable, productAdsSchedule, scheduleProductAdsTable, menuGroupsTable } from "../db/schema";
+import { outletsTable, productsTable, productAdsTable, productAdsSchedule, scheduleProductAdsTable, menuGroupsTable, locationsTable } from "../db/schema";
 import { getCurrentAdSlot } from "../lib/utils/ad-schedule";
+import { auth } from "../auth";
+import { toWebHeaders } from "../lib/web-headers";
+import { haversineKm } from "../lib/utils/geo";
+import { parseCoordPair } from "../lib/utils/coords";
+import { roadTable } from "../lib/utils/road-distance";
+// Scopes get-all-product?feature=... to that feature's own products. Shared with
+// recalcOutletFeatures so the outlet gate (outlets.features) and the product
+// gate (products.category) below are derived from one identical map — the local
+// copy that used to live here is what let "bahan bangunan" go missing and drop
+// out of browse while its outlets still advertised the feature.
+import { FEATURE_CATEGORY } from "../lib/outlet-features";
+
+// Must not exceed the delivery cap in deliveryFeeFromDistance (orders.ts) —
+// listing an outlet nobody can actually order from is worse than omitting it.
+const MAX_DELIVERY_KM = 50;
+
+// How many nearest outlets get real routing. One /table call either way, so this
+// is about response size and OSRM's max-table-size, not request count. Well
+// above the page size so ranking has room to reorder.
+const ROUTING_CANDIDATES = 25;
+const OUTLET_PAGE_SIZE = 10;
+
+// Baseline preparation + courier-pickup allowance, on top of the outlet -> door
+// drive. The drive alone would badly under-promise: nothing is cooked, packed or
+// collected in zero minutes. A guess, but a stated one — the value it replaces
+// was a flat "~15 min" shown for every outlet at every distance.
+const PREP_MINUTES = 15;
+
+function formatEta(driveMinutes: number | null): string | null {
+  // No routing, no honest estimate. Null so the UI can omit the chip entirely
+  // rather than print a fabricated number.
+  if (driveMinutes === null) return null;
+  const total = Math.round(PREP_MINUTES + driveMinutes);
+  // Rounded to 5 so it reads as the estimate it is, not false precision.
+  return `~${Math.max(5, Math.round(total / 5) * 5)} min`;
+}
+
+/**
+ * The signed-in customer's saved delivery address, or null.
+ *
+ * This endpoint is public — anonymous browsing has to keep working — so the
+ * session is read opportunistically and every failure just means "no location".
+ * Uses the same default-address rule as computeDeliveryFee, so the outlet a
+ * customer sees ranked nearest is measured from the address they'll be charged
+ * against.
+ */
+async function customerHomeCoords(request: any): Promise<{ lat: number; lon: number } | null> {
+  try {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return null;
+
+    const [loc] = await db
+      .select({ lat: locationsTable.lat, lon: locationsTable.lon })
+      .from(locationsTable)
+      .where(and(eq(locationsTable.user_id, session.user.id), eq(locationsTable.is_default, true)))
+      .limit(1);
+
+    return loc ? parseCoordPair(loc.lat, loc.lon) : null;
+  } catch {
+    return null;
+  }
+}
 
 type JoinRow = {
   products: typeof productsTable.$inferSelect;
   outlets: typeof outletsTable.$inferSelect;
-};
-
-// Order feature slug -> product category (mirrors frontend lib/order-features.ts).
-// Used to scope get-all-product?feature=... to that feature's own products.
-const FEATURE_CATEGORY: Record<string, string> = {
-  food: "makanan",
-  drink: "minuman",
-  service: "jasa",
-  mart: "mart",
-  delivery: "antar",
-  beauty: "kecantikan",
-  ride: "sewa kendaraan",
-  entertainment: "hiburan",
+  // Left-joined, so null for products the owner hasn't put in a section.
+  menu_groups?: typeof menuGroupsTable.$inferSelect | null;
 };
 
 function mapProductRow(row: JoinRow) {
@@ -38,6 +89,15 @@ function mapProductRow(row: JoinRow) {
     ratings: Number(row.products.ratings),
     unit: row.products.unit,
     isRecommended: row.products.is_recommended,
+    // Whether a courier can carry it — the cart/checkout reads this to pick the
+    // order's fulfillment; it is not a customer-facing choice.
+    courierDeliverable: row.products.courier_deliverable,
+    // The owner's own section name ("Besi & Baja", "Semen"), which the browse
+    // tabs prefer over the raw platform category — "bahan bangunan" is a
+    // marketplace filing term, not something a shop would put on a shelf.
+    // Null when ungrouped; the tabs fall back to `category` for those.
+    menuGroup: row.menu_groups?.name ?? null,
+    menuGroupOrder: row.menu_groups?.sort_order ?? null,
     discountPercent: row.products.discount_percent ?? undefined,
     outlet: row.outlets.name,
     outleid: row.outlets.id,
@@ -129,6 +189,10 @@ export async function publicRoutes(app: FastifyInstance) {
   app.get("/api/get-all-outlet", async (request) => {
     const { search } = request.query as { search?: string };
 
+    // Coordinates come along now: the list is ranked by how far away each outlet
+    // actually is, not just by rating. Rating-only ordering with a hard limit of
+    // 10 meant a shop 2 km away could be invisible behind ten better-rated ones
+    // 25 km away — unorderable in practice, since delivery is capped at 50 km.
     const rows = await db
       .select({
         id: outletsTable.id,
@@ -142,21 +206,67 @@ export async function publicRoutes(app: FastifyInstance) {
         features: outletsTable.features,
         isOpen: outletsTable.is_open,
         ratings: sql<number>`COALESCE(${outletsTable.ratings}::numeric, 0)`,
+        lat: outletsTable.lat,
+        lon: outletsTable.lon,
       })
       .from(outletsTable)
       .where(and(
         isNull(outletsTable.deletedAt),
         search ? like(outletsTable.name, `%${search}%`) : sql`true`,
       ))
-      .orderBy(desc(outletsTable.is_open), desc(sql`${outletsTable.ratings}::numeric`))
-      .limit(10);
+      .orderBy(desc(outletsTable.is_open), desc(sql`${outletsTable.ratings}::numeric`));
 
-    const data = rows.map((r) => ({
-      ...r,
-      estimatedTime: r.isOpen ? "~15 min" : "Tutup",
-    }));
+    const here = await customerHomeCoords(request);
 
-    return { data };
+    // Signed-out visitors, or a customer who hasn't saved an address yet, keep
+    // the old rating-ordered list — there is nothing to measure distance from.
+    if (!here) {
+      return {
+        data: rows.slice(0, OUTLET_PAGE_SIZE).map(({ lat, lon, ...r }) => ({
+          ...r,
+          distanceKm: null,
+          estimatedTime: r.isOpen ? null : "Tutup",
+        })),
+      };
+    }
+
+    // Straight-line first, as a filter rather than a ranking. Road distance is
+    // always >= straight-line, so anything beyond the delivery cap in a straight
+    // line is certainly beyond it by road — safe to drop before paying for
+    // routing. Then route only the nearest handful.
+    const reachable = rows
+      .map((r) => {
+        const coords = parseCoordPair(r.lat, r.lon);
+        return coords ? { row: r, coords, crow: haversineKm(here.lat, here.lon, coords.lat, coords.lon) } : null;
+      })
+      .filter((c): c is NonNullable<typeof c> => c !== null && c.crow <= MAX_DELIVERY_KM)
+      .sort((a, b) => a.crow - b.crow)
+      .slice(0, ROUTING_CANDIDATES);
+
+    const table = await roadTable(here, reachable.map((c) => c.coords));
+
+    return {
+      data: reachable
+        .map((c, i) => ({ c, d: table[i] }))
+        .sort((a, b) => {
+          // Open outlets first — a closer shop that's shut is not a better
+          // answer than an open one slightly further away.
+          if (a.c.row.isOpen !== b.c.row.isOpen) return a.c.row.isOpen ? -1 : 1;
+          // Then by travel time where routing gave us one, distance otherwise.
+          const at = a.d.minutes ?? a.d.km;
+          const bt = b.d.minutes ?? b.d.km;
+          return at - bt;
+        })
+        .slice(0, OUTLET_PAGE_SIZE)
+        .map(({ c, d }) => {
+          const { lat, lon, ...r } = c.row;
+          return {
+            ...r,
+            distanceKm: Math.round(d.km * 10) / 10,
+            estimatedTime: r.isOpen ? formatEta(d.minutes) : "Tutup",
+          };
+        }),
+    };
   });
 
   app.get("/api/get-all-product", async (request) => {
@@ -193,12 +303,14 @@ export async function publicRoutes(app: FastifyInstance) {
     if (!isNaN(outletId) && outletId > 0) {
       const rows = await db.select().from(productsTable)
         .innerJoin(outletsTable, eq(productsTable.outlet_id, outletsTable.id))
+        .leftJoin(menuGroupsTable, eq(productsTable.menu_group_id, menuGroupsTable.id))
         .where(and(baseWhere, eq(productsTable.outlet_id, outletId)));
       return { data: rows.map(mapProductRow) };
     }
 
     const rows = await db.select().from(productsTable)
       .innerJoin(outletsTable, eq(productsTable.outlet_id, outletsTable.id))
+      .leftJoin(menuGroupsTable, eq(productsTable.menu_group_id, menuGroupsTable.id))
       .where(baseWhere)
       .orderBy(desc(productsTable.ratings))
       .limit(25);
@@ -223,6 +335,8 @@ export async function publicRoutes(app: FastifyInstance) {
         features: outletsTable.features,
         isOpen: outletsTable.is_open,
         ratings: sql<number>`COALESCE(${outletsTable.ratings}::numeric, 0)`,
+        lat: outletsTable.lat,
+        lon: outletsTable.lon,
       })
       .from(outletsTable)
       .where(eq(outletsTable.id, Number(outletId)))
@@ -230,7 +344,23 @@ export async function publicRoutes(app: FastifyInstance) {
 
     if (!rows[0]) return reply.status(404).send({ error: "Outlet not found" });
 
-    return { data: { ...rows[0], estimatedTime: rows[0].isOpen ? "~15 min" : "Tutup" } };
+    const { lat, lon, ...outlet } = rows[0];
+
+    // Same real ETA as the browse list. This header used to read "~15 min" for
+    // every outlet regardless of distance — the customer's first and most
+    // prominent time signal, and it was the same number 500 m away or 25 km away.
+    const here = await customerHomeCoords(request);
+    const there = parseCoordPair(lat, lon);
+    const distance =
+      here && there ? (await roadTable(here, [there]))[0] : null;
+
+    return {
+      data: {
+        ...outlet,
+        distanceKm: distance ? Math.round(distance.km * 10) / 10 : null,
+        estimatedTime: outlet.isOpen ? formatEta(distance?.minutes ?? null) : "Tutup",
+      },
+    };
   });
 
   app.get("/api/get-outlet-ads", async (request, reply) => {

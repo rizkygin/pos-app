@@ -1,0 +1,1 @@
+ALTER TABLE "products" ADD COLUMN "courier_deliverable" boolean DEFAULT true NOT NULL;

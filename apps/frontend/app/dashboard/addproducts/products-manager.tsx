@@ -27,6 +27,7 @@ import {
   Search,
   AlertTriangle,
   Barcode,
+  Truck,
 } from 'lucide-react';
 import QRCode from 'react-qr-code';
 import { Button } from '@/components/ui/button';
@@ -67,6 +68,7 @@ type Product = {
   features: string[];
   is_for_sale: boolean;
   track_stock: boolean;
+  courier_deliverable: boolean;
   stock: string;
   lowest_price?: string | null;
   highest_price?: string | null;
@@ -131,11 +133,15 @@ export const ProductsManager = ({
   const [selectedFeatures, setSelectedFeatures] = useState<string[]>([]);
   const [isForSale, setIsForSale] = useState(false);
   const [trackStock, setTrackStock] = useState(false);
+  // Can a courier carry it? Default yes — only bulky goods (besi, keramik,
+  // kulkas) get switched off, and that sends the order down the no-courier flow.
+  const [courierDeliverable, setCourierDeliverable] = useState(true);
   const [shareOpen, setShareOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   // Inventory list filters
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
+  // If the products is not deliverable the price must be shape on range value
 
   // ── Menu groups: owner-defined sections for the public /menu page ─────────
   const [menuGroups, setMenuGroups] = useState<MenuGroup[]>([]);
@@ -271,8 +277,9 @@ export const ProductsManager = ({
     });
   }, [initialProducts, search, categoryFilter, sortBy, sortDir]);
 
-  // Ingredient candidates for the recipe editor: the outlet's stock-tracked
-  // products (a menu item can't be its own ingredient).
+  // Source candidates for the composition editor: the outlet's stock-tracked
+  // products. Self-exclusion matters more than it looks — a "Batako 10 pcs"
+  // bundle sits right next to plain "Batako" in this list.
   const recipeIngredientOptions = useMemo(
     () =>
       initialProducts
@@ -422,12 +429,31 @@ export const ProductsManager = ({
   // of a fixed selling price + discount.
   const isServiceCategory = selectedCategory === 'jasa';
 
+  // Only these categories can plausibly contain something a courier can't
+  // carry, so only these are asked. A warung adding nasi goreng should never
+  // have to think about kurir at all — food, drink and jasa are always
+  // deliverable (jasa never involves a courier in the first place), and asking
+  // anyway was three extra seconds of doubt on every single product.
+  const asksCourierQuestion =
+    selectedCategory === 'mart' || selectedCategory === 'bahan bangunan';
+
+  // Bulky goods the outlet hauls itself are priced as a band, not a single
+  // number: the floor is the goods, and the room above it is what the owner may
+  // charge for the haul once they've seen the address. Same two inputs as jasa,
+  // a different meaning — for jasa the range IS the price, here it's the ongkir
+  // ceiling. Stock keeps working either way; besi is counted in batang.
+  const isMaterialsProduct = isForSale && asksCourierQuestion && !courierDeliverable;
+
+  // Both range-priced kinds share the two price inputs below.
+  const usesPriceRange = isServiceCategory || isMaterialsProduct;
+
   const handleCategorySelect = (category: string) => {
     setSelectedCategory(category);
     setSelectedMenuGroupId(null);
     setIsForSale(false);
     // Ingredients exist to be counted: default them to tracked stock.
     setTrackStock(category === 'bahan');
+    setCourierDeliverable(true);
     setView('form');
   };
 
@@ -454,20 +480,39 @@ export const ProductsManager = ({
       outletId: outletId, // Correctly using outletId
     } as any;
 
+    // Categories that don't ask are always deliverable. Forced here rather than
+    // trusting the state: an owner can set this on a bahan-bangunan product,
+    // switch the category to makanan, and the toggle disappears while still
+    // holding false — which would silently push their food order down the
+    // no-courier flow with nothing on screen explaining why.
+    const courierDeliverableToSave = asksCourierQuestion ? courierDeliverable : true;
+
+    // Same hazard on the price fields: type a band on a bulky product, flip it
+    // back to courier-deliverable, and the inputs disappear while formData still
+    // holds the numbers. The backend treats any non-empty lowest_price as
+    // range-priced, so leaving them in would price a fixed-price product as a
+    // band — and, for jasa, force its stock off.
+    const priceRangeToSave = usesPriceRange
+      ? { lowest_price: formData.lowest_price, highest_price: formData.highest_price }
+      : { lowest_price: '', highest_price: '' };
+
     let result;
     if (editingProductId) {
       result = await updateProductAction(editingProductId, {
         ...formData,
+        ...priceRangeToSave,
         category: selectedCategory,
         menu_group_id: selectedMenuGroupId,
         image: imageUrl,
         features: selectedFeatures,
         is_for_sale: isForSale,
         track_stock: trackStock,
+        courier_deliverable: courierDeliverableToSave,
       });
     } else {
       result = await addProductAction({
         ...formData,
+        ...priceRangeToSave,
         category: selectedCategory,
         menu_group_id: selectedMenuGroupId,
         outlet_id: outletId,
@@ -475,6 +520,7 @@ export const ProductsManager = ({
         features: selectedFeatures,
         is_for_sale: isForSale,
         track_stock: trackStock,
+        courier_deliverable: courierDeliverableToSave,
       });
     }
 
@@ -527,6 +573,7 @@ export const ProductsManager = ({
     setSelectedFeatures(product.features ?? []);
     setIsForSale(product.is_for_sale ?? true);
     setTrackStock(product.track_stock ?? true);
+    setCourierDeliverable(product.courier_deliverable ?? true);
     setEditingProductId(product.id);
     setSelectedCategory(product.category);
     setSelectedMenuGroupId(product.menu_group_id ?? null);
@@ -802,6 +849,13 @@ export const ProductsManager = ({
                                     {product.category || '—'}
                                     {!product.is_for_sale && ' · inventaris'}
                                   </span>
+                                  {product.is_for_sale &&
+                                    product.courier_deliverable === false && (
+                                      <span className="flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-500 mt-0.5">
+                                        <Truck className="h-3 w-3 shrink-0" />
+                                        Tanpa kurir
+                                      </span>
+                                    )}
                                   {product.barcode && (
                                     <span className="flex items-center gap-1 text-[11px] text-muted-foreground font-mono truncate mt-0.5">
                                       <Barcode className="h-3 w-3 shrink-0" />
@@ -1084,13 +1138,101 @@ export const ProductsManager = ({
                 {groupManagerOpen && renderMenuGroupManager()}
               </div>
 
+              {/* Both toggles sit ABOVE the price fields deliberately: together
+                  they decide whether this product is priced with one number or a
+                  band (see isMaterialsProduct). Below the prices, flipping one
+                  would reshape a section the owner had already filled in and
+                  scrolled past. */}
+              <div className="space-y-2">
+                <label className="text-sm font-bold flex items-center gap-2">
+                  <Layers className="h-4 w-4 text-muted-foreground" />
+                  Jual ke pelanggan online?
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setIsForSale((v) => !v)}
+                  className={`flex w-full items-center justify-between rounded-xl border-2 px-4 py-3 text-left transition-colors ${
+                    isForSale
+                      ? 'border-teal-500 bg-teal-50 dark:bg-teal-950/30'
+                      : 'border-border bg-muted/30'
+                  }`}
+                >
+                  <span>
+                    <span className="block text-sm font-semibold">
+                      {isForSale ? 'Dijual ke pelanggan' : 'Hanya inventaris'}
+                    </span>
+                    <span className="block text-xs text-muted-foreground">
+                      {isForSale
+                        ? 'Produk tampil di menu pelanggan.'
+                        : 'Disembunyikan dari menu pelanggan; hanya untuk stok & faktur.'}
+                    </span>
+                  </span>
+                  <span
+                    className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                      isForSale ? 'bg-teal-600' : 'bg-zinc-300 dark:bg-zinc-700'
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-0.5 size-5 rounded-full bg-white shadow transition-all ${
+                        isForSale ? 'left-[22px]' : 'left-0.5'
+                      }`}
+                    />
+                  </span>
+                </button>
+              </div>
+
+              {/* Asked only for mart & bahan bangunan — see asksCourierQuestion. */}
+              {isForSale && asksCourierQuestion && (
+                <div className="space-y-2">
+                  <label className="text-sm font-bold flex items-center gap-2">
+                    <Truck className="h-4 w-4 text-muted-foreground" />
+                    Apakah produk ini bisa diantar kurir?
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setCourierDeliverable((v) => !v)}
+                    className={`flex w-full items-center justify-between rounded-xl border-2 px-4 py-3 text-left transition-colors ${
+                      courierDeliverable
+                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/30'
+                        : 'border-amber-500 bg-amber-50 dark:bg-amber-950/30'
+                    }`}
+                  >
+                    <span>
+                      <span className="block text-sm font-semibold">
+                        {courierDeliverable
+                          ? 'Bisa diantar kurir'
+                          : 'Tidak bisa diantar kurir'}
+                      </span>
+                      <span className="block text-xs text-muted-foreground">
+                        {courierDeliverable
+                          ? 'Cukup ringan buat dibawa kurir (sembako, obat, cat, paku).'
+                          : 'Barang berat/besar (besi, keramik, wastafel, kulkas) — pesanan diantar sendiri oleh outlet, tanpa kurir.'}
+                      </span>
+                    </span>
+                    <span
+                      className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                        courierDeliverable
+                          ? 'bg-blue-600'
+                          : 'bg-zinc-300 dark:bg-zinc-700'
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-0.5 size-5 rounded-full bg-white shadow transition-all ${
+                          courierDeliverable ? 'left-[22px]' : 'left-0.5'
+                        }`}
+                      />
+                    </span>
+                  </button>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-4 md:gap-6">
-                {isServiceCategory ? (
+                {usesPriceRange ? (
                   <>
                     <div className="space-y-2">
                       <label className="text-sm font-bold flex items-center gap-2">
                         <DollarSign className="h-4 w-4 text-muted-foreground" />
-                        Harga Terendah
+                        {isMaterialsProduct ? 'Harga Barang' : 'Harga Terendah'}
                       </label>
                       <div className="relative">
                         <span className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground font-medium text-sm">
@@ -1110,7 +1252,7 @@ export const ProductsManager = ({
                     <div className="space-y-2">
                       <label className="text-sm font-bold flex items-center gap-2">
                         <DollarSign className="h-4 w-4 text-muted-foreground" />
-                        Harga Tertinggi
+                        {isMaterialsProduct ? 'Harga + Diantar' : 'Harga Tertinggi'}
                       </label>
                       <div className="relative">
                         <span className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground font-medium text-sm">
@@ -1128,9 +1270,20 @@ export const ProductsManager = ({
                       </div>
                     </div>
                     <p className="col-span-2 -mt-1 text-xs text-muted-foreground">
-                      Layanan jasa memakai rentang harga. Nanti pian pilih harga
-                      pasti (di antara terendah &amp; tertinggi) saat menerima
-                      order.
+                      {isMaterialsProduct ? (
+                        <>
+                          Pelanggan bayar <strong>Harga Barang</strong>. Selisih ke{' '}
+                          <strong>Harga + Diantar</strong> jadi jatah ongkos angkut —
+                          pian tetapkan angka pastinya setelah lihat alamat, dan
+                          tidak boleh lebih dari selisih itu.
+                        </>
+                      ) : (
+                        <>
+                          Layanan jasa memakai rentang harga. Nanti pian pilih harga
+                          pasti (di antara terendah &amp; tertinggi) saat menerima
+                          order.
+                        </>
+                      )}
                     </p>
                   </>
                 ) : (
@@ -1175,7 +1328,10 @@ export const ProductsManager = ({
                   </div>
                 </div>
                 <div
-                  className={`col-span-2 space-y-3 ${isServiceCategory ? 'hidden' : ''}`}
+                  // Hidden for both range-priced kinds: the backend mirrors
+                  // price_mark_down to the range floor, so a discount entered
+                  // here would be silently discarded.
+                  className={`col-span-2 space-y-3 ${usesPriceRange ? 'hidden' : ''}`}
                 >
                   <label className="flex items-center justify-between cursor-pointer">
                     <span className="text-sm font-bold text-muted-foreground">
@@ -1283,43 +1439,6 @@ export const ProductsManager = ({
                 />
               </div>
 
-              <div className="space-y-2">
-                <label className="text-sm font-bold flex items-center gap-2">
-                  <Layers className="h-4 w-4 text-muted-foreground" />
-                  Jual ke pelanggan online?
-                </label>
-                <button
-                  type="button"
-                  onClick={() => setIsForSale((v) => !v)}
-                  className={`flex w-full items-center justify-between rounded-xl border-2 px-4 py-3 text-left transition-colors ${
-                    isForSale
-                      ? 'border-teal-500 bg-teal-50 dark:bg-teal-950/30'
-                      : 'border-border bg-muted/30'
-                  }`}
-                >
-                  <span>
-                    <span className="block text-sm font-semibold">
-                      {isForSale ? 'Dijual ke pelanggan' : 'Hanya inventaris'}
-                    </span>
-                    <span className="block text-xs text-muted-foreground">
-                      {isForSale
-                        ? 'Produk tampil di menu pelanggan.'
-                        : 'Disembunyikan dari menu pelanggan; hanya untuk stok & faktur.'}
-                    </span>
-                  </span>
-                  <span
-                    className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
-                      isForSale ? 'bg-teal-600' : 'bg-zinc-300 dark:bg-zinc-700'
-                    }`}
-                  >
-                    <span
-                      className={`absolute top-0.5 size-5 rounded-full bg-white shadow transition-all ${
-                        isForSale ? 'left-[22px]' : 'left-0.5'
-                      }`}
-                    />
-                  </span>
-                </button>
-              </div>
               {isForSale && (
                 <div className="space-y-3">
                   <label className="text-sm font-bold flex items-center gap-2">
@@ -1366,6 +1485,7 @@ export const ProductsManager = ({
                 </div>
               )}
 
+
               <div className="space-y-2">
                 <label className="text-sm font-bold flex items-center gap-2">
                   <Layers className="h-4 w-4 text-muted-foreground" />
@@ -1384,12 +1504,12 @@ export const ProductsManager = ({
                     <span className="block text-sm font-semibold">
                       {trackStock
                         ? 'Punya stok sendiri'
-                        : 'Tanpa stok (resep/jasa)'}
+                        : 'Ambil dari stok produk lain'}
                     </span>
                     <span className="block text-xs text-muted-foreground">
                       {trackStock
                         ? 'Stok bertambah/berkurang lewat kasir, faktur & opname.'
-                        : 'Produk olahan dari bahan, atau jasa — tidak dihitung stoknya.'}
+                        : 'Produk olahan, paket/eceran, atau jasa — stoknya dipotong dari produk lain (atau tidak dihitung sama sekali).'}
                     </span>
                   </span>
                   <span
@@ -1408,9 +1528,11 @@ export const ProductsManager = ({
                 </button>
               </div>
 
-              {/* Recipe editor: only for saved products without own stock, and
-                  only when the outlet has stock-tracked products to use as
-                  ingredients. Absence of a recipe is a valid permanent state,
+              {/* Composition editor: only for saved products without own stock,
+                  and only when the outlet has stock-tracked products to draw
+                  from. Serves food (nasi goreng -> beras) and non-food alike
+                  ("Batako 10 pcs" -> 10 batako) — the decrement never looks at
+                  category. Absence of a composition is a valid permanent state,
                   so nothing is shown or nagged otherwise. */}
               {!trackStock &&
                 editingProductId &&

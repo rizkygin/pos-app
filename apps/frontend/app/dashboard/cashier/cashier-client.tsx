@@ -36,6 +36,10 @@ type Product = {
   description: string | null;
   unit: string;
   barcode?: string | null;
+  // Owner's menu section, preferred over `category` for the POS tabs — the same
+  // arrangement customers see. Null when the product isn't in a section.
+  menu_group?: string | null;
+  menu_group_order?: number | null;
 };
 
 type CartItem = {
@@ -305,18 +309,36 @@ export const CashierClient = ({
     persistTabs(next, target.id);
   }, [applyTab, persistTabs]);
 
-  // Tabs come straight from the products the cashier already has (the customer
-  // menu uses /api/get-categories instead, is_for_sale only). 'bahan' gets no
-  // tab: raw ingredients are stock material, not something rung up at the POS.
+  // Tabs come straight from the products the cashier already has, and prefer
+  // the owner's own menu sections over the raw platform category — same
+  // arrangement the customer sees on /dashboard/order, so staff and customers
+  // are talking about the same shelves. Ungrouped products fall back to
+  // `category`, so an outlet that never touched Grup Menu is unaffected.
+  //
+  // 'bahan' gets no tab regardless of grouping: raw ingredients are stock
+  // material, not something rung up at the POS.
   const categories = useMemo(() => {
-    const distinct = Array.from(
-      new Set(initialProducts.map((p) => p.category).filter(Boolean)),
-    ).filter((category) => category !== 'bahan');
+    const groups = new Map<string, number>(); // section name -> sort_order
+    const loose = new Set<string>();
+
+    for (const p of initialProducts) {
+      if (p.category === 'bahan') continue;
+      if (p.menu_group) groups.set(p.menu_group, p.menu_group_order ?? 0);
+      else if (p.category) loose.add(p.category);
+    }
+
+    const ordered = [
+      ...[...groups.entries()]
+        .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0], 'id'))
+        .map(([name]) => name),
+      ...[...loose].sort((a, b) => a.localeCompare(b, 'id')),
+    ];
+
     return [
       ...INITIAL_CATEGORIES,
-      ...distinct.map((category) => ({
-        id: category,
-        label: category,
+      ...ordered.map((label) => ({
+        id: label,
+        label,
         icon: LayoutGrid,
         color: 'text-black-500 m-2',
         bg: 'bg-green-50',
@@ -325,14 +347,19 @@ export const CashierClient = ({
     ];
   }, [initialProducts]);
 
+  // What a product files under in the tabs above — its section if it has one.
+  const tabKeyOf = (p: Product) => p.menu_group ?? p.category;
+
   const filteredProducts = useMemo(() => {
     return initialProducts.filter((product) => {
       // 'bahan' products never appear at the POS (no tab either — see the
       // categories memo): ingredients are consumed via recipes, not sold.
+      // Matched on the same key the tabs are built from, or selecting a section
+      // like "Besi" would compare against a value no product carries.
       const matchesCategory =
         selectedCategory === 'All'
           ? product.category !== 'bahan'
-          : product.category === selectedCategory;
+          : product.category !== 'bahan' && tabKeyOf(product) === selectedCategory;
       const matchesSearch = product.product_name
         .toLowerCase()
         .includes(searchQuery.toLowerCase());
@@ -674,7 +701,9 @@ export const CashierClient = ({
               <button
                 key={cat.id}
                 onClick={() => setSelectedCategory(cat.id)}
-                className={`flex items-center gap-1.5 md:gap-2 px-3 py-1.5 md:px-4 md:py-2.5 rounded-xl border-2 whitespace-nowrap transition-all duration-300 font-semibold text-xs md:text-sm ${
+                // capitalize: owner-typed section names already read properly,
+                // but the raw category fallback is stored lowercase.
+                className={`flex items-center gap-1.5 md:gap-2 px-3 py-1.5 md:px-4 md:py-2.5 rounded-xl border-2 whitespace-nowrap capitalize transition-all duration-300 font-semibold text-xs md:text-sm ${
                   selectedCategory === cat.id
                     ? `${cat.border} ${cat.bg} ${cat.color} shadow-sm ring-1 ring-current`
                     : 'border-transparent bg-background/60 hover:bg-muted text-muted-foreground hover:text-foreground hover:border-border'

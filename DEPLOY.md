@@ -24,10 +24,40 @@ only remaining step — no new build work.
 3. Decide branch strategy for `main` (develop is structurally ahead of
    origin/main — see the "main divergence" memory; do NOT `git merge origin/main`).
 
-## Railway services (3)
+## Railway services (3, +1 optional)
 1. **Postgres** — Railway managed Postgres plugin.
 2. **backend** — build from `apps/backend/Dockerfile` (build context = `apps/backend`).
 3. **frontend** — build from root `Dockerfile` (build context = repo root).
+4. **osrm** *(optional)* — build from `apps/osrm/Dockerfile` (build context = `apps/osrm`).
+   Road-distance routing. See below.
+
+## OSRM (road distance) — optional service
+
+Without it the app uses straight-line distance, which around these outlets reads
+about **40% short** (measured median detour factor 1.70x, range 1.12–2.45x).
+That under-pays couriers on essentially every trip.
+
+**Railway setup**
+- New service → same repo → set **Root Directory** `apps/osrm`, Dockerfile `Dockerfile`
+- No volume needed: the routing graph is baked into the image at build time, so
+  the container is stateless and restarts cold in seconds
+- **Do not expose it publicly.** Use Railway's private network only — it has no
+  auth of any kind. Leave "Generate Domain" off.
+- Set on **backend**: `OSRM_BASE_URL=http://osrm.railway.internal:5000`
+
+**Cost** — roughly `$0.17/month` per GB of RAM held (Railway bills ~$0.000231
+per GB-hour; verified against an actual invoice). Idle CPU is negligible.
+
+**Refreshing map data** — OSM changes; the image pins whatever was current at
+build time. Redeploy to pick up new roads. Quarterly is plenty.
+
+**Widening coverage** — the build defaults to Kalimantan (~147 MB). For all of
+Indonesia (1.73 GB, much heavier to preprocess) override the build arg:
+`REGION_URL=https://download.geofabrik.de/asia/indonesia-latest.osm.pbf`
+
+**Attribution is a licence condition**, not a nicety: OSM data is ODbL, and the
+demo-server policy also requires crediting OSRM. The materials quote modal
+carries it; any new surface showing routed distance must too.
 
 ## Environment variables
 

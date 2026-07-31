@@ -4,12 +4,15 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   cancelOrderbyCustomer,
   acceptServiceOrder,
+  acceptMaterialsOrder,
 } from '@/app/dashboard/activeorder/actions';
 import { useTransition, useState, useEffect, useCallback } from 'react';
 import QRCode from 'react-qr-code';
 import { QrCode, X, Lock, MapPin } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { API_URL } from '@/lib/api-url';
+import { fmtIDR } from '@/lib/utils/format';
+import { DeliveryTrackingMapClient } from '@/components/order/delivery-tracking-map-client';
 
 type OrderStatus =
   | 'pending'
@@ -465,25 +468,53 @@ export function ActiveOrderAnimation({
   statusSince,
   fulfillment,
   rejectedReason,
+  deliveryFee,
+  goodsTotal,
 }: {
   orderId: string;
   status: OrderStatus;
   orderRef: string;
   outletName: string;
   statusSince: string;
-  fulfillment?: 'delivery' | 'service';
+  fulfillment?: 'delivery' | 'service' | 'materials';
   rejectedReason?: string | null;
+  deliveryFee?: string | null;
+  goodsTotal?: number | null;
 }) {
   const router = useRouter();
   const isService = fulfillment === 'service';
+  // Bulky goods brought by the outlet's own driver. No courier, so no QR
+  // handover — the customer confirms arrival themselves, like a service order.
+  const isMaterials = fulfillment === 'materials';
+  const noCourier = isService || isMaterials;
   const [liveStatus, setLiveStatus] = useState<OrderStatus>(status);
   const [liveStatusSince, setLiveStatusSince] = useState(statusSince);
   const [liveRejectedReason, setLiveRejectedReason] = useState(rejectedReason ?? null);
+  // Polled, not just seeded: the owner sets this minutes after the customer
+  // lands on the page, so it has to arrive without a reload.
+  const [liveFee, setLiveFee] = useState<string | null>(deliveryFee ?? null);
+  const [liveGoods, setLiveGoods] = useState<number | null>(goodsTotal ?? null);
+  // Arrival estimate, refreshed by the same poll as the status. 'courier' means
+  // it's routed from where the rider actually is and will shrink as they ride;
+  // 'outlet' means they haven't reported a fresh position and this is the
+  // journey still to come, not their progress along it.
+  const [etaMinutes, setEtaMinutes] = useState<number | null>(null);
+  const [etaSource, setEtaSource] = useState<'courier' | 'outlet' | null>(null);
+  // Both come from the backend only when the courier's position is fresh AND the
+  // order is out for delivery, so the map appearing is itself the signal that
+  // someone is genuinely on the way.
+  const [courierPos, setCourierPos] = useState<{ lat: number; lon: number } | null>(null);
+  const [destination, setDestination] = useState<{ lat: number; lon: number } | null>(null);
   const cfg = STATUS_CONFIG[liveStatus];
   const [pending, startTransition] = useTransition();
   const [qrOpen, setQrOpen] = useState(false);
   const { formatted: elapsed, seconds: elapsedSeconds } = useStatusTimer(liveStatusSince);
   const cancelUnlockedIn = CANCEL_LOCK_SECONDS - elapsedSeconds;
+
+  const quotedFee = liveFee == null || liveFee === '' ? null : Number(liveFee);
+  // Mirrors the backend exemption in cancel-by-customer: refusing a price the
+  // customer is seeing for the first time can't sit behind a grace timer.
+  const respondingToQuote = isMaterials && liveStatus === 'confirmed';
 
   const poll = useCallback(async () => {
     // Once the owner has rejected the order, there's nothing left to poll for —
@@ -497,6 +528,15 @@ export function ActiveOrderAnimation({
       });
       const data = await res.json();
       if (!data.success) return;
+      // Always refreshed, regardless of status change: the quote lands while the
+      // order is already sitting at 'confirmed', so a status-gated update would
+      // never pick it up.
+      setLiveFee(data.order.deliveryFee ?? null);
+      if (data.order.goodsTotal != null) setLiveGoods(Number(data.order.goodsTotal));
+      setEtaMinutes(data.order.etaMinutes ?? null);
+      setEtaSource(data.order.etaSource ?? null);
+      setCourierPos(data.order.courierPosition ?? null);
+      setDestination(data.order.destination ?? null);
       const next = data.order.status as OrderStatus;
       if (next !== liveStatus) {
         setLiveStatus(next);
@@ -506,14 +546,14 @@ export function ActiveOrderAnimation({
       }
       if (next === 'delivered')
         router.push(
-          isService
+          noCourier
             ? `/dashboard/ratings/submit/service/${data.order.id}`
             : `/dashboard/ratings/submit/customer/${data.order.id}`,
         );
     } catch {
       /* silently retry */
     }
-  }, [liveStatus, router, isService]);
+  }, [liveStatus, router, noCourier]);
 
   useEffect(() => {
     const id = setInterval(poll, 2000);
@@ -577,6 +617,51 @@ export function ActiveOrderAnimation({
           </div>
         )}
 
+        {/* Live courier map. Rendered only when the backend hands over a fresh
+            position, so its presence means someone really is en route — it never
+            shows a stale dot sitting still and implying otherwise. */}
+        {courierPos && destination && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.97 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.4 }}
+            className="w-full h-56 sm:h-64"
+          >
+            <DeliveryTrackingMapClient
+              courier={courierPos}
+              destination={destination}
+              className="h-full w-full overflow-hidden rounded-2xl border-2 border-cyan-400"
+            />
+          </motion.div>
+        )}
+
+        {/* Arrival estimate. The headline number on this screen once something is
+            actually moving — "how long until my food gets here" is the only
+            question the customer is really asking. Absent rather than guessed
+            when there's nothing to route from. */}
+        {etaMinutes !== null && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="w-full rounded-2xl border-2 border-cyan-400 bg-cyan-50 dark:bg-cyan-950/30 px-4 py-3 flex items-center justify-between gap-3"
+          >
+            <div className="min-w-0">
+              <p className="text-[10px] font-black uppercase tracking-widest text-cyan-700 dark:text-cyan-400">
+                Perkiraan tiba
+              </p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                {etaSource === 'courier'
+                  ? 'Dihitung dari posisi kurir sekarang.'
+                  : 'Dihitung dari outlet — posisi kurir belum terkirim.'}
+              </p>
+            </div>
+            <p className="shrink-0 text-2xl font-black tabular-nums text-cyan-700 dark:text-cyan-400">
+              {etaMinutes}
+              <span className="text-xs font-bold"> min</span>
+            </p>
+          </motion.div>
+        )}
+
         {/* Order meta */}
         <div className="w-full rounded-xl bg-background/60 border border-border/40 px-4 py-3 space-y-1 text-xs text-muted-foreground">
           <div className="flex justify-between">
@@ -604,9 +689,50 @@ export function ActiveOrderAnimation({
           </div>
         </div>
 
+        {/* The quote. At checkout a materials customer only agreed to a ceiling
+            ("maks Rp X") — this is where they finally see what the outlet is
+            actually charging to haul it, and get to refuse before anything
+            moves. Without this panel the figure never reaches them at all. */}
+        {isMaterials && liveStatus === 'confirmed' && quotedFee !== null && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.15 }}
+            className="w-full rounded-2xl border-2 border-amber-400 bg-amber-50 dark:bg-amber-950/30 p-4 space-y-2"
+          >
+            <p className="text-[10px] font-black uppercase tracking-widest text-amber-700 dark:text-amber-400">
+              Ongkos angkut sudah ditetapkan penjual
+            </p>
+            <div className="space-y-1 text-sm">
+              <div className="flex justify-between text-muted-foreground">
+                <span>Barang</span>
+                <span className="tabular-nums">{fmtIDR(liveGoods ?? 0)}</span>
+              </div>
+              <div className="flex justify-between text-muted-foreground">
+                <span>Ongkos angkut</span>
+                <span className="tabular-nums font-semibold text-amber-700 dark:text-amber-400">
+                  {fmtIDR(quotedFee)}
+                </span>
+              </div>
+              <div className="flex justify-between pt-1 border-t border-amber-300/60 font-black">
+                <span>Total dibayar</span>
+                <span className="tabular-nums text-rose-600">
+                  {fmtIDR((liveGoods ?? 0) + quotedFee)}
+                </span>
+              </div>
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              Kalau pian tidak setuju dengan ongkosnya, batalkan sekarang — sebelum
+              sopir berangkat.
+            </p>
+          </motion.div>
+        )}
+
         {/* Cancel button — only on pending/confirmed, and only once the
             5-minute grace window has passed (gives the owner time to start
-            acting on the order before a cancel can undo it). */}
+            acting on the order before a cancel can undo it). A materials order
+            responding to a fresh quote is exempt, mirroring the backend: the
+            owner just named a price, so refusing it can't be rate-limited. */}
         {(liveStatus === 'pending' || liveStatus === 'confirmed') && (
           <motion.form
             action={() =>
@@ -623,9 +749,9 @@ export function ActiveOrderAnimation({
           >
             <button
               type="submit"
-              disabled={pending || cancelUnlockedIn > 0}
+              disabled={pending || (cancelUnlockedIn > 0 && !respondingToQuote)}
               title={
-                cancelUnlockedIn > 0
+                cancelUnlockedIn > 0 && !respondingToQuote
                   ? `Bisa dibatalkan dalam ${Math.ceil(cancelUnlockedIn / 60)} menit`
                   : undefined
               }
@@ -633,9 +759,11 @@ export function ActiveOrderAnimation({
             >
               {pending
                 ? 'Membatalkan...'
-                : cancelUnlockedIn > 0
-                  ? `Bisa Dibatalkan dalam ${Math.ceil(cancelUnlockedIn / 60)}m`
-                  : 'Batalkan Pesanan'}
+                : respondingToQuote
+                  ? 'Tolak Ongkos & Batalkan'
+                  : cancelUnlockedIn > 0
+                    ? `Bisa Dibatalkan dalam ${Math.ceil(cancelUnlockedIn / 60)}m`
+                    : 'Batalkan Pesanan'}
             </button>
           </motion.form>
         )}
@@ -654,7 +782,7 @@ export function ActiveOrderAnimation({
         )}
 
         {/* QR button — courier delivery: shown when courier is on the way */}
-        {liveStatus === 'on_delivery' && !isService && (
+        {liveStatus === 'on_delivery' && !noCourier && (
           <motion.button
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -683,6 +811,27 @@ export function ActiveOrderAnimation({
             className="w-full py-2.5 rounded-xl bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-60"
           >
             {pending ? 'Memproses...' : 'Terima & Selesaikan Layanan'}
+          </motion.button>
+        )}
+
+        {/* Materials: the outlet's driver hands the load over, so the customer
+            confirms arrival here. Booking the outlet's cash-in happens on the
+            back of this, which is why it isn't the owner's to press. */}
+        {liveStatus === 'on_delivery' && isMaterials && (
+          <motion.button
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.3 }}
+            disabled={pending}
+            onClick={() =>
+              startTransition(async () => {
+                await acceptMaterialsOrder(orderId);
+                router.push(`/dashboard/ratings/submit/service/${orderId}`);
+              })
+            }
+            className="w-full py-2.5 rounded-xl bg-amber-600 text-white text-sm font-bold hover:bg-amber-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-60"
+          >
+            {pending ? 'Memproses...' : 'Barang Sudah Sampai'}
           </motion.button>
         )}
       </motion.div>

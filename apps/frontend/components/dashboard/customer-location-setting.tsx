@@ -15,6 +15,8 @@ import {
     type UserLocation,
     type LocationFormData,
 } from "@/app/dashboard/users/locations/setting/actions";
+import { parseCoord, isValidCoord } from "@/lib/coords";
+import { getCurrentPosition, geolocationMessage } from "@/lib/geolocation";
 
 const LocationPicker = dynamic(
     () => import("./location-picker").then((m) => m.LocationPicker),
@@ -30,8 +32,8 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     );
 }
 
-const DEFAULT_LAT = -6.208800;
-const DEFAULT_LON = 106.845600;
+const DEFAULT_LAT = -2.7075537;
+const DEFAULT_LON = 111.6476211;
 
 function resetForm() {
     return { label: "Rumah", address: "", lat: DEFAULT_LAT, lon: DEFAULT_LON, note: "" };
@@ -108,8 +110,11 @@ export function CustomerLocationSetting({ locations }: { locations: UserLocation
         setEditingId(loc.id);
         setLabel(loc.label);
         setAddress(loc.address);
-        setLat(parseFloat(loc.lat));
-        setLon(parseFloat(loc.lon));
+        // Fall back to the default centre for rows saved before coordinates
+        // were validated — parseFloat('') and parseFloat('NaN') both give NaN,
+        // which Leaflet rejects outright.
+        setLat(parseCoord(loc.lat) ?? DEFAULT_LAT);
+        setLon(parseCoord(loc.lon) ?? DEFAULT_LON);
         setNote(loc.note ?? "");
         setMessage(null);
         setShowForm(true);
@@ -136,7 +141,7 @@ export function CustomerLocationSetting({ locations }: { locations: UserLocation
         }
 
         setLocating(true);
-        navigator.geolocation.getCurrentPosition(
+        getCurrentPosition(
             (pos) => {
                 setLat(pos.coords.latitude);
                 setLon(pos.coords.longitude);
@@ -144,13 +149,7 @@ export function CustomerLocationSetting({ locations }: { locations: UserLocation
                 setMessage(null);
             },
             (err) => {
-                const msg =
-                    err.code === err.PERMISSION_DENIED
-                        ? "Izin lokasi ditolak. Klik ikon kunci di address bar untuk mengizinkan."
-                        : err.code === err.POSITION_UNAVAILABLE
-                            ? "Lokasi tidak tersedia. Pastikan GPS aktif."
-                            : "Permintaan lokasi timeout. Coba lagi.";
-                alert(msg);
+                setMessage({ ok: false, text: geolocationMessage(err) });
                 setLocating(false);
             },
         );
@@ -159,6 +158,16 @@ export function CustomerLocationSetting({ locations }: { locations: UserLocation
     function handleSave() {
         if (!label.trim() || !address.trim()) {
             setMessage({ ok: false, text: "Label dan alamat wajib diisi." });
+            return;
+        }
+        // A delivery address without usable coordinates is worthless to a
+        // courier, and String(NaN) would persist the text "NaN" — which is how
+        // saved addresses started crashing the map picker on reopen.
+        if (!isValidCoord(lat, lon)) {
+            setMessage({
+                ok: false,
+                text: "Titik lokasi belum valid. Pakai 'Lokasi Saya' atau geser pin di peta.",
+            });
             return;
         }
         const data: LocationFormData = {

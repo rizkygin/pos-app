@@ -116,14 +116,16 @@ const navMain: NavItem[] = [
   
 ];
 
-const userSubItems = [
-  { name: 'User Setting', url: '/dashboard/user', icon: UserCog },
-  {
-    name: 'Locations Setting',
-    url: '/dashboard/users/locations/setting',
-    icon: MapPin,
-  },
-];
+const userSettingItem = { name: 'User Setting', url: '/dashboard/user', icon: UserCog };
+
+// Saved addresses are where a customer's order gets DELIVERED. A courier has no
+// use for one — they're the person doing the delivering, and their own live
+// position comes from GPS while on a job, not from a saved address.
+const locationSettingItem = {
+  name: 'Locations Setting',
+  url: '/dashboard/users/locations/setting',
+  icon: MapPin,
+};
 
 const navManagement: NavItem[] = [
   {
@@ -619,7 +621,9 @@ export function AppSidebar({
                     icon={IdCard}
                     iconBg="bg-amber-100 dark:bg-amber-950"
                     iconColor="text-amber-600 dark:text-amber-400"
-                    items={userSubItems}
+                    items={
+                      isCourier ? [userSettingItem] : [userSettingItem, locationSettingItem]
+                    }
                     currentUrl={currentUrl}
                   />
                 )}

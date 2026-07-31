@@ -326,7 +326,9 @@ export async function ratingRoutes(app: FastifyInstance) {
         and(
           eq(ordersTable.id, orderId),
           eq(ordersTable.customer_id, customer.id),
-          eq(ordersTable.fulfillment, "service"),
+          // Both courier-less lanes rate the outlet here: there is no courier
+          // to rate, so the service rating page is the only path they have.
+          inArray(ordersTable.fulfillment, ["service", "materials"]),
           eq(ordersTable.status, "delivered"),
         ),
       )
@@ -404,7 +406,9 @@ export async function ratingRoutes(app: FastifyInstance) {
         and(
           eq(ordersTable.id, orderId),
           eq(ordersTable.customer_id, customer.id),
-          eq(ordersTable.fulfillment, "service"),
+          // Both courier-less lanes rate the outlet here: there is no courier
+          // to rate, so the service rating page is the only path they have.
+          inArray(ordersTable.fulfillment, ["service", "materials"]),
           eq(ordersTable.status, "delivered"),
         ),
       )

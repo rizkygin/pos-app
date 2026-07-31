@@ -19,6 +19,7 @@ import {
   Receipt,
   ArrowRight,
   MapPin,
+  Truck,
 } from 'lucide-react';
 import { API_URL } from '@/lib/api-url';
 
@@ -48,7 +49,7 @@ type HistoryOrder = {
   status: string;
   createdAt: string;
   outletName: string;
-  fulfillment: 'delivery' | 'service';
+  fulfillment: 'delivery' | 'service' | 'materials';
   items: { name: string; quantity: number }[];
   itemCount: number;
   totalAmount: number;
@@ -92,7 +93,9 @@ function HistoryCard({ order, index }: { order: HistoryOrder; index: number }) {
   const meta = STATUS_META[order.status] ?? STATUS_META.pending;
   const StatusIcon = meta.icon;
   const isService = order.fulfillment === 'service';
-  const LeadIcon = isService ? Wrench : ShoppingBag;
+  // Bulky goods read as goods, not a service — but the truck says at a glance
+  // that the shop brought it, which is the part a customer remembers.
+  const LeadIcon = isService ? Wrench : order.fulfillment === 'materials' ? Truck : ShoppingBag;
   const date = order.createdAt
     ? format(new Date(order.createdAt), 'd MMM yyyy • HH:mm', { locale: idLocale })
     : '-';

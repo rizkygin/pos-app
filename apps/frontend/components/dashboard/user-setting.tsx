@@ -1,11 +1,14 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, useEffect } from "react";
 import {
     updateUserNameAction,
     changePasswordAction,
     sendVerificationEmailAction,
     requestPasswordResetAction,
+    getPhoneStateAction,
+    updatePhoneAction,
+    type PhoneState,
 } from "@/app/dashboard/user/actions";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -22,6 +25,7 @@ import {
     KeyRound,
     Trash2,
     ChevronRight,
+    Phone,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -112,6 +116,50 @@ export function UserSetting({ user }: { user: UserProps }) {
     // Email verification state
     const [verificationSent, setVerificationSent] = useState(false);
     const [verificationPending, startVerificationTransition] = useTransition();
+
+    // WhatsApp state. Fetched rather than passed as a prop: whether the monthly
+    // change is available depends on server time, so it can't be baked into the
+    // page render and still be right an hour later.
+    const [phone, setPhone] = useState("");
+    const [phoneState, setPhoneState] = useState<PhoneState | null>(null);
+    const [phoneAlert, setPhoneAlert] = useState<{ type: "success" | "error"; message: string } | null>(null);
+    const [phonePending, startPhoneTransition] = useTransition();
+
+    useEffect(() => {
+        let cancelled = false;
+        getPhoneStateAction().then((state) => {
+            if (cancelled || !state) return;
+            setPhoneState(state);
+            setPhone(state.phoneDisplay ?? "");
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    function handleSavePhone() {
+        setPhoneAlert(null);
+        startPhoneTransition(async () => {
+            const res = await updatePhoneAction(phone);
+            setPhoneAlert({ type: res.success ? "success" : "error", message: res.message });
+            if (res.success) {
+                // Re-read from the response so the field shows the canonical
+                // form the server actually stored, not the punctuation typed in.
+                setPhone(res.phoneDisplay ?? phone);
+                setPhoneState({
+                    phoneDisplay: res.phoneDisplay ?? phone,
+                    canChange: false,
+                    nextChangeAt: res.nextChangeAt,
+                });
+            } else if (res.nextChangeAt) {
+                // Lost a race, or another tab already used the change. Reflect
+                // the lock immediately instead of leaving the button live.
+                setPhoneState((prev) =>
+                    prev ? { ...prev, canChange: false, nextChangeAt: res.nextChangeAt } : prev,
+                );
+            }
+        });
+    }
 
     function handleSaveProfile() {
         setProfileAlert(null);
@@ -241,6 +289,69 @@ export function UserSetting({ user }: { user: UserProps }) {
                                     </div>
                                 </div>
                                 <p className="text-xs text-muted-foreground">Email cannot be changed here. Contact support if needed.</p>
+                            </div>
+
+                            {/* WhatsApp — rate-limited to one change a month. The
+                                limit is stated up front rather than sprung as an
+                                error after someone has already typed a new number. */}
+                            <div className="space-y-2">
+                                <label className="text-xs font-bold text-muted-foreground uppercase tracking-wide">
+                                    Nomor WhatsApp
+                                </label>
+                                <div className="relative">
+                                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                                    <Input
+                                        type="tel"
+                                        inputMode="numeric"
+                                        value={phone}
+                                        onChange={(e) => setPhone(e.target.value)}
+                                        readOnly={phoneState !== null && !phoneState.canChange}
+                                        placeholder="08123456789"
+                                        className={`rounded-xl pl-10 ${
+                                            phoneState && !phoneState.canChange
+                                                ? "bg-muted/40 text-muted-foreground cursor-not-allowed"
+                                                : ""
+                                        }`}
+                                    />
+                                </div>
+                                {phoneState && !phoneState.canChange && phoneState.nextChangeAt ? (
+                                    <p className="flex items-start gap-1.5 text-xs text-amber-600">
+                                        <Lock className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                                        Nomor hanya bisa diubah sekali sebulan. Bisa diubah lagi{" "}
+                                        {new Date(phoneState.nextChangeAt).toLocaleDateString("id-ID", {
+                                            day: "numeric",
+                                            month: "long",
+                                            year: "numeric",
+                                        })}
+                                        .
+                                    </p>
+                                ) : (
+                                    <p className="text-xs text-muted-foreground">
+                                        Dipakai penjual &amp; kurir untuk menghubungi pian soal pesanan.
+                                        Hanya bisa diubah sekali sebulan.
+                                    </p>
+                                )}
+                                {phoneAlert && (
+                                    <p
+                                        className={`text-xs font-medium ${
+                                            phoneAlert.type === "success" ? "text-emerald-600" : "text-rose-600"
+                                        }`}
+                                    >
+                                        {phoneAlert.message}
+                                    </p>
+                                )}
+                                {phoneState?.canChange && (
+                                    <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="outline"
+                                        disabled={phonePending || !phone.trim()}
+                                        onClick={handleSavePhone}
+                                        className="rounded-xl"
+                                    >
+                                        {phonePending ? "Menyimpan..." : "Simpan Nomor"}
+                                    </Button>
+                                )}
                             </div>
 
                             <AnimatePresence>
@@ -438,6 +549,7 @@ export function UserSetting({ user }: { user: UserProps }) {
                                     { label: "Full Name", value: user.name },
                                     { label: "Email", value: user.email },
                                     { label: "Email Status", value: user.emailVerified ? "Verified" : "Not Verified" },
+                                    { label: "WhatsApp", value: phoneState?.phoneDisplay ?? "—" },
                                 ].map(({ label, value }) => (
                                     <div key={label} className="flex items-center justify-between py-2.5 border-b border-border/40 last:border-0">
                                         <span className="text-xs font-bold text-muted-foreground uppercase tracking-wide">{label}</span>

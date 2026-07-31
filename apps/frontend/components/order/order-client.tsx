@@ -40,7 +40,7 @@ import {
   SheetTrigger,
 } from '@/components/ui/sheet';
 import { useQuery } from '@tanstack/react-query';
-import { OutletSchema, ProductSchema, type Product } from '@/lib/types';
+import { OutletSchema, ProductSchema, isServiceProduct, type Product } from '@/lib/types';
 import { API_URL } from '@/lib/api-url';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
@@ -102,23 +102,18 @@ export function OrderClient({
     enabled: !!_outletId,
   });
 
-  const { data: categoriesData } = useQuery<string[]>({
-    queryKey: ['categories', _outletId],
-    queryFn: async () => {
-      const rest = await fetch(`${API_URL}/api/get-categories?outletId=${_outletId}`);
-      if (!rest.ok) throw new Error('Failed to fetch categories');
-      const json = await rest.json();
-
-      return json.data;
-    },
-    enabled: !!_outletId,
-  });
-
   const { data: outlet, error: errorFetchOutlet } = useQuery<Outlet>({
     queryKey: ['outlets', _outletId],
 
     queryFn: async () => {
-      const res = await fetch(`${API_URL}/api/get-outlet-id?outletId=` + _outletId);
+      // credentials: the endpoint is public, but it reads the session when one
+      // is present to measure distance and ETA from the customer's saved
+      // address. Cross-origin fetch sends no cookie by default, so without this
+      // the backend sees an anonymous caller and returns estimatedTime: null —
+      // the chip silently never appears.
+      const res = await fetch(`${API_URL}/api/get-outlet-id?outletId=` + _outletId, {
+        credentials: 'include',
+      });
       if (!res.ok) {
         throw new Error('Failed to fetch outlet');
       }
@@ -146,15 +141,6 @@ export function OrderClient({
     };
   }, []);
 
-  const categories = useMemo(() => {
-    const initialCategories = ['Semua'];
-    categoriesData
-      // "jasa" (services) can't be added to a basket — they live in the service
-      // flow, so never surface that category in the normal browsing tabs.
-      ?.filter((cat: any) => cat.category !== 'jasa')
-      .map((cat: any) => initialCategories.push(cat.category));
-    return initialCategories;
-  }, [categoriesData, _outletId]);
 
   const { data: products } = useQuery<Product[]>({
     queryKey: ['products', _outletId],
@@ -167,15 +153,54 @@ export function OrderClient({
     enabled: !!_outletId,
   });
 
+  // Browse tabs. Prefer the owner's own menu sections over the platform
+  // category: "bahan bangunan" is a marketplace filing term, not something a
+  // shop puts on a shelf — an outlet that has organised its menu shows "Besi &
+  // Baja" / "Semen" instead. Ungrouped products still fall back to `category`,
+  // so a shop that never touched Grup Menu is unaffected.
+  //
+  // Derived from the products already loaded rather than /api/get-categories,
+  // which returned raw categories and could list a tab with nothing behind it.
+  // Services are excluded via isServiceProduct — they can't go in a basket.
+  const categories = useMemo(() => {
+    if (!products) return ['Semua'];
+
+    const groups = new Map<string, number>(); // section name -> sort_order
+    const loose = new Set<string>();
+
+    for (const p of products) {
+      if (!p.isAvailable || isServiceProduct(p)) continue;
+      if (p.menuGroup) groups.set(p.menuGroup, p.menuGroupOrder ?? 0);
+      else if (p.category) loose.add(p.category);
+    }
+
+    const sections = [...groups.entries()]
+      // The owner's arrangement is the point, so sort_order wins; name is only
+      // a tiebreak so equal orders don't shuffle between renders.
+      .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0], 'id'))
+      .map(([name]) => name);
+
+    return [
+      'Semua',
+      ...sections,
+      ...[...loose].sort((a, b) => a.localeCompare(b, 'id')),
+    ];
+  }, [products]);
+
+  // What a product files under in the tabs above — its section if it has one.
+  const tabKeyOf = (p: Product) => p.menuGroup ?? p.category;
+
   const filteredProducts = useMemo(() => {
     if (!products) return [];
 
     const matchSearch: Product[] = products.filter(
       (p: Product) =>
         p.isAvailable &&
-        // Service view shows only service products; normal (food/drink/mart)
-        // view excludes them — services can't go in a basket.
-        (isService ? p.lowest_price != null : p.lowest_price == null) &&
+        // Service view shows only jasa; normal (food/drink/mart/materials) view
+        // excludes it — services can't go in a basket. Tested via
+        // isServiceProduct, not `lowest_price != null`: bulky materials are
+        // range-priced too and belong in the normal basket view.
+        (isService ? isServiceProduct(p) : !isServiceProduct(p)) &&
         (p.product_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
           (p.description ?? '')
             .toLowerCase()
@@ -186,20 +211,25 @@ export function OrderClient({
       return matchSearch;
     }
 
-    return matchSearch.filter((p: Product) => p.category === selectedCategory);
+    // Matched against the same key the tabs are built from, or picking "Besi &
+    // Baja" would filter on a value no product carries and show nothing.
+    return matchSearch.filter((p: Product) => tabKeyOf(p) === selectedCategory);
   }, [products, searchQuery, selectedCategory, isService]);
 
-  // ── Recommended per category ──
+  // ── Recommended per tab ──
   const recommendedByCategory = useMemo(() => {
     const map: Record<string, Product[]> = {};
     products?.forEach((p) => {
       if (p.isRecommended) {
-        if (!map[p.category]) map[p.category] = [];
-        map[p.category].push(p);
+        const key = tabKeyOf(p);
+        if (!map[key]) map[key] = [];
+        map[key].push(p);
       }
     });
     return map;
-  }, []);
+    // Was [] — the map stayed empty forever because it never re-ran once the
+    // products actually arrived.
+  }, [products]);
 
   // ── Cart actions ──
   const cartTotal = cart.reduce((acc, item) => acc + item.quantity, 0);
@@ -325,10 +355,18 @@ export function OrderClient({
                       ({fmtCount(outlet?.reviewCount ?? 0)} ulasan)
                     </span>
                   </div>
-                  <div className="flex items-center gap-1">
-                    <Clock className="h-3 w-3" />
-                    <span>{outlet?.estimatedTime}</span>
-                  </div>
+                  {outlet?.estimatedTime && (
+                    <div className="flex items-center gap-1">
+                      <Clock className="h-3 w-3" />
+                      <span>{outlet.estimatedTime}</span>
+                    </div>
+                  )}
+                  {outlet?.distanceKm != null && (
+                    <div className="flex items-center gap-1">
+                      <MapPin className="h-3 w-3" />
+                      <span>{outlet.distanceKm} km</span>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -353,8 +391,8 @@ export function OrderClient({
           <span className="font-medium">
             {products?.filter((p) =>
               isService
-                ? p.isAvailable && p.lowest_price != null
-                : p.isAvailable && p.lowest_price == null,
+                ? p.isAvailable && isServiceProduct(p)
+                : p.isAvailable && !isServiceProduct(p),
             )?.length}{' '}
             {isService ? 'layanan' : 'menu'} tersedia
           </span>
@@ -459,7 +497,10 @@ export function OrderClient({
             <button
               key={cat}
               onClick={() => setSelectedCategory(cat)}
-              className={`flex-shrink-0 px-5 py-2.5 rounded-full text-sm font-black transition-all duration-200 ${
+              // capitalize: owner-typed section names already read properly,
+              // but the raw category fallback is stored lowercase ("bahan
+              // bangunan") and looks unfinished as a tab label.
+              className={`flex-shrink-0 px-5 py-2.5 rounded-full text-sm font-black capitalize transition-all duration-200 ${
                 selectedCategory === cat
                   ? 'bg-rose-500 text-white shadow-md shadow-rose-200'
                   : 'bg-card border border-border/60 text-muted-foreground hover:border-rose-300 hover:text-rose-600'
@@ -478,7 +519,7 @@ export function OrderClient({
         {/* ── Products Grid ─────────────────────────────────────── */}
         <section className="space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="font-black text-lg">
+            <h2 className="font-black text-lg capitalize">
               {isService
                 ? 'Semua Layanan'
                 : selectedCategory === 'Semua'

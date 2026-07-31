@@ -21,6 +21,11 @@ type InvoiceDraft = {
     subtotal: number;
     promoDiscount: number;
     total: number;
+    // Own-driver lane (bulky goods): the haul isn't priced yet, so the customer
+    // sees a ceiling. Optional — drafts written before this existed lack them.
+    ownDriver?: boolean;
+    haulCap?: number;
+    maxTotal?: number;
 };
 
 type OrderLocations = {
@@ -93,6 +98,9 @@ export default function InvoicePage() {
     if (!draft) return null;
 
     const { cart, appliedPromo, deliveryFee, subtotal, promoDiscount, total } = draft;
+    const ownDriver = draft.ownDriver === true;
+    const haulCap = draft.haulCap ?? 0;
+    const maxTotal = draft.maxTotal ?? total;
 
     return (
         <div className="min-h-screen bg-background">
@@ -162,17 +170,30 @@ export default function InvoicePage() {
 
                     <div className="flex justify-between text-muted-foreground">
                         <span className="flex items-center gap-1.5">
-                            <Truck className="h-3.5 w-3.5" /> Ongkos kirim
+                            <Truck className="h-3.5 w-3.5" />
+                            {ownDriver ? "Ongkos angkut toko" : "Ongkos kirim"}
                         </span>
-                        <span className="font-semibold">{fmtIDR(deliveryFee)}</span>
+                        <span className={`font-semibold ${ownDriver ? "text-amber-600" : ""}`}>
+                            {ownDriver ? `maks ${fmtIDR(haulCap)}` : fmtIDR(deliveryFee)}
+                        </span>
                     </div>
 
                     <Separator />
 
                     <div className="flex justify-between font-black text-base">
                         <span>Total yang harus dibayar</span>
-                        <span className="text-rose-600">{fmtIDR(total)}</span>
+                        <span className="text-rose-600">
+                            {ownDriver ? `${fmtIDR(total)} – ${fmtIDR(maxTotal)}` : fmtIDR(total)}
+                        </span>
                     </div>
+
+                    {ownDriver && (
+                        <p className="text-xs text-muted-foreground pt-1">
+                            Barang berat diantar sopir toko, bukan kurir. Penjual menetapkan
+                            ongkos angkut pastinya setelah lihat alamat — maksimal{" "}
+                            {fmtIDR(haulCap)}. Pian bisa batalkan setelah lihat angka final.
+                        </p>
+                    )}
                 </div>
 
                 {/* Customer note */}

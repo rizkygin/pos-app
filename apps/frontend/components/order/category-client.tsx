@@ -149,7 +149,13 @@ export function CategoryClient({ feature }: { feature: string }) {
     const { data: all_outlets, isLoading: outletsLoading, isError: outletsError, error: outletsQueryError } = useQuery<Outlet[]>({
         queryKey: ["outlets", feature, outletSearch],
         queryFn: async () => {
-            const res = await fetch(`${API_URL}/api/get-all-outlet?search=${outletSearch}`);
+            // credentials: browsing works signed-out, but the session is what
+            // lets the backend rank outlets by real travel time from the saved
+            // address. Omit it and every list silently falls back to rating
+            // order with no distance shown.
+            const res = await fetch(`${API_URL}/api/get-all-outlet?search=${outletSearch}`, {
+                credentials: 'include',
+            });
             if (!res.ok) throw new Error("Gagal memuat outlet");
             const { data } = await res.json();
             return OutletSchema.array().parse(data);

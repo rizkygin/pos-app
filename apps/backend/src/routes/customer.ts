@@ -17,6 +17,8 @@ import { toWebHeaders } from "../lib/web-headers";
 import { attachOrderItems } from "../lib/utils/order-items";
 import { getCourierAvailability } from "../lib/utils/courier-availability";
 import { getOutletByUserId } from "../lib/outlet-id";
+import { parseCoordPair } from "../lib/utils/coords";
+import { deliveryEta } from "../lib/utils/delivery-eta";
 
 export async function customerRoutes(app: FastifyInstance) {
   // The caller's full order history with per-order item count + total. Backs the
@@ -168,16 +170,50 @@ export async function customerRoutes(app: FastifyInstance) {
         scheduledAt: ordersTable.scheduled_at,
         rejectedBy: ordersTable.rejected_by,
         rejectedReason: ordersTable.rejected_reason,
+        // On the materials lane this is the haul price the owner quoted after
+        // seeing the address. The customer only agreed to a CEILING at checkout,
+        // so without this they never learn the figure they actually owe until
+        // the load turns up — the one number they might want to refuse.
+        deliveryFee: ordersTable.delivery_fee,
+        discountAmount: ordersTable.discount_amount,
+        // Route endpoints + the courier's last reported position, for the live
+        // arrival estimate below.
+        outletLat: outletsTable.lat,
+        outletLon: outletsTable.lon,
+        courierLat: couriersTable.last_lat,
+        courierLon: couriersTable.last_lon,
+        courierLocationAt: couriersTable.last_location_at,
       })
       .from(ordersTable)
       .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))
+      // leftJoin — most of an order's life has no courier attached.
+      .leftJoin(couriersTable, eq(ordersTable.courier_id, couriersTable.id))
       .where(eq(ordersTable.customer_id, customer.id))
       .orderBy(desc(ordersTable.createdAt))
       .limit(1);
 
     if (!order) return { success: false };
 
-    return { success: true, order };
+    const [{ sum: goodsTotal } = { sum: 0 }] = await db
+      .select({
+        sum: sql<number>`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric)), 0)`,
+      })
+      .from(orderDetailsTable)
+      .where(eq(orderDetailsTable.order_id, order.id));
+
+    const {
+      outletLat, outletLon, courierLat, courierLon, courierLocationAt, ...rest
+    } = order;
+
+    const eta = await deliveryEta({
+      status: order.status,
+      customerUserId: session.user.id,
+      outlet: parseCoordPair(outletLat, outletLon),
+      courier: parseCoordPair(courierLat, courierLon),
+      courierSeenAt: courierLocationAt,
+    });
+
+    return { success: true, order: { ...rest, goodsTotal: Number(goodsTotal), ...eta } };
   });
 
   app.get("/api/get-available-orders", async (request, reply) => {
@@ -224,7 +260,8 @@ export async function customerRoutes(app: FastifyInstance) {
         and(
           eq(ordersTable.status, "confirmed"),
           isNull(ordersTable.courier_id),
-          // Service orders are courier-less by design — never surface them here.
+          // Service and materials orders are courier-less by design — the
+          // outlet moves those itself, so they never reach the courier lobby.
           eq(ordersTable.fulfillment, "delivery"),
         ),
       )

@@ -10,6 +10,7 @@ import {
 } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { API_URL } from '@/lib/api-url';
 
 const iconBase = {
   iconSize: [25, 41] as [number, number],
@@ -53,19 +54,21 @@ export function RouteMap({ pickup, dropoff, className }: Props) {
   const [route, setRoute] = useState<[number, number][]>([]);
 
   useEffect(() => {
-    const url = `https://router.project-osrm.org/route/v1/driving/${pickup.lon},${pickup.lat};${dropoff.lon},${dropoff.lat}?geometries=geojson&overview=full`;
-
-    fetch(url)
+    // Routed server-side. The browser can't reach a self-hosted OSRM — it lives
+    // on the private network — and going direct also handed every pickup and
+    // drop-off coordinate to a third party from the customer's own device.
+    // The backend already returns [lat, lon] and falls back to a straight line,
+    // so there is no coordinate swap or error branch to get wrong here.
+    fetch(
+      `${API_URL}/api/route?from=${pickup.lat},${pickup.lon}&to=${dropoff.lat},${dropoff.lon}`,
+      { credentials: 'include' },
+    )
       .then((r) => r.json())
       .then((data) => {
-        const coords: [number, number][] =
-          data.routes?.[0]?.geometry?.coordinates?.map(
-            ([lon, lat]: [number, number]) => [lat, lon],
-          ) ?? [];
-        setRoute(coords);
+        if (data?.success && Array.isArray(data.geometry)) setRoute(data.geometry);
+        else throw new Error('no route');
       })
       .catch(() => {
-        // fallback: straight line if OSRM fails
         setRoute([
           [pickup.lat, pickup.lon],
           [dropoff.lat, dropoff.lon],

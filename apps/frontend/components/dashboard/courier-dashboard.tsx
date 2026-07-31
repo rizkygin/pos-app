@@ -25,6 +25,7 @@ import { Button } from '@/components/ui/button';
 import { DashboardHeader } from '@/components/dashboard-header';
 import { goOnline, goOffline } from '@/app/dashboard/courier-sessions/actions';
 import { API_URL } from '@/lib/api-url';
+import { useCourierLocationReporting } from '@/hooks/use-courier-location-reporting';
 
 type Props = {
   dashboardValue: {
@@ -117,6 +118,13 @@ export const CourierDashboard = ({
 }: Props) => {
   const [isOnline, setIsOnline] = useState(initialIsOnline);
   const [isPending, startTransition] = useTransition();
+
+  // Report position only while there is a delivery in flight — not merely while
+  // online. An idle courier waiting for an order gets nothing from being tracked
+  // and the customer gains nothing either, so the collection is scoped to the
+  // window where it actually powers someone's ETA. The hook clears the stored
+  // point as soon as this goes false.
+  useCourierLocationReporting(isOnline && currentPickUp?.status === 'on_delivery');
   // Today's accumulated online time. Ticks only while actually on shift —
   // previously it counted up regardless, so an offline courier's total kept
   // growing and was wrong the moment they came back online.

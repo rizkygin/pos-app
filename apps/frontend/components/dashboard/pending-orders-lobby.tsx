@@ -19,6 +19,8 @@ import {
   Star,
   Printer,
   Bike,
+  MapPin,
+  ExternalLink,
 } from 'lucide-react';
 import {
   confirmOrder,
@@ -26,8 +28,10 @@ import {
   markOrderReady,
   confirmPickup,
   closeServiceOrder,
+  dispatchMaterialsOrder,
 } from '@/app/dashboard/activeorder/actions';
 import { ServiceConfirmModal } from '@/components/dashboard/service-confirm-modal';
+import { MaterialsConfirmModal } from '@/components/dashboard/materials-confirm-modal';
 import { ReceiptModal, type ReceiptData } from '@/components/dashboard/receipt-modal';
 import { CalendarClock, Wrench } from 'lucide-react';
 import { API_URL } from '@/lib/api-url';
@@ -68,9 +72,14 @@ type Order = {
   courierId: number | null;
   items: OrderItem[];
   totalAmount: number;
-  fulfillment?: 'delivery' | 'service';
+  fulfillment?: 'delivery' | 'service' | 'materials';
   scheduledAt?: string | null;
   discountAmount?: string | null;
+  // Customer's default drop-off. Null when they have no saved address; only the
+  // materials lane reads it, to price the haul.
+  dropoffAddress?: string | null;
+  dropoffLat?: string | null;
+  dropoffLon?: string | null;
 };
 
 // 'searching' = confirmed by the owner, no courier has claimed it yet. It is a
@@ -316,8 +325,12 @@ function PendingOrderCard({
 }) {
   const [isPending, startTransition] = useTransition();
   const [serviceModal, setServiceModal] = useState(false);
+  const [materialsModal, setMaterialsModal] = useState(false);
   const [rejectModal, setRejectModal] = useState(false);
   const isService = order.fulfillment === 'service';
+  // Bulky goods the outlet hauls itself: accepting means quoting the haul, so it
+  // gets its own modal rather than the one-click Konfirmasi of a courier order.
+  const isMaterials = order.fulfillment === 'materials';
   const svcItem = order.items[0];
   const svcLowest = Number(svcItem?.lowestPrice ?? svcItem?.summaryPrice ?? 0);
   const svcHighest = Number(svcItem?.highestPrice ?? svcLowest);
@@ -381,14 +394,44 @@ function PendingOrderCard({
               </>
             ) : (
               <>
-                <p className="text-xs text-muted-foreground">Total</p>
+                <p className="text-xs text-muted-foreground">
+                  {isMaterials ? 'Barang' : 'Total'}
+                </p>
                 <p className="text-xl font-black tabular-nums">
                   {fmtIDR(order.totalAmount)}
                 </p>
-                {order.deliveryFee && parseInt(order.deliveryFee) > 0 && (
-                  <p className="text-xs text-muted-foreground">
-                    +{fmtIDR(parseInt(order.deliveryFee))} ongkir
-                  </p>
+                {isMaterials ? (
+                  <>
+                    <p className="text-xs text-amber-600 font-medium">
+                      + ongkos angkut, belum ditetapkan
+                    </p>
+                    {/* Destination on the card, not just inside the modal: it's
+                        what decides whether this order is worth taking at all,
+                        and it opens the driving route straight from here. */}
+                    {order.dropoffAddress &&
+                      (order.dropoffLat && order.dropoffLon ? (
+                        <span
+                          className="my-2 flex items-start gap-1 text-[11px] text-muted-foreground mt-0.5 max-w-[16rem] focus-visible:ring-2 focus-visible:ring-amber-500 rounded"
+                        >
+                          <MapPin className="h-3 w-3 mt-0.5 shrink-0 text-rose-500" />
+                          <span className="line-clamp-2 underline decoration-dotted underline-offset-2">
+                            {order.dropoffAddress}
+                          </span>
+                        </span>
+                      ) : (
+                        <p className="flex items-start gap-1 text-[11px] text-muted-foreground mt-0.5 max-w-[16rem]">
+                          <MapPin className="h-3 w-3 mt-0.5 shrink-0 text-rose-500" />
+                          <span className="line-clamp-2">{order.dropoffAddress}</span>
+                        </p>
+                      ))}
+                  </>
+                ) : (
+                  order.deliveryFee &&
+                  parseInt(order.deliveryFee) > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      +{fmtIDR(parseInt(order.deliveryFee))} ongkir
+                    </p>
+                  )
                 )}
               </>
             )}
@@ -411,14 +454,26 @@ function PendingOrderCard({
                   <X className="h-3 w-3" />
                   Tolak
                 </button>
-                <button
-                  disabled={isPending}
-                  onClick={() => startTransition(() => onConfirm(order.orderId))}
-                  className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-bold bg-emerald-500 text-white hover:bg-emerald-600 transition-colors shadow-sm shadow-emerald-200 disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  {isPending ? 'Memproses...' : 'Konfirmasi'}
-                  {!isPending && <ChevronRight className="h-3 w-3" />}
-                </button>
+                {/* A materials order can't be accepted in one click: the haul
+                    has to be priced first, and that needs the address. */}
+                {isMaterials ? (
+                  <button
+                    disabled={isPending}
+                    onClick={() => setMaterialsModal(true)}
+                    className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-bold bg-amber-600 text-white hover:bg-amber-700 transition-colors shadow-sm shadow-amber-200 disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    <Truck className="h-3 w-3" /> Tetapkan Ongkos
+                  </button>
+                ) : (
+                  <button
+                    disabled={isPending}
+                    onClick={() => startTransition(() => onConfirm(order.orderId))}
+                    className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-bold bg-emerald-500 text-white hover:bg-emerald-600 transition-colors shadow-sm shadow-emerald-200 disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {isPending ? 'Memproses...' : 'Konfirmasi'}
+                    {!isPending && <ChevronRight className="h-3 w-3" />}
+                  </button>
+                )}
               </>
             )}
           </div>
@@ -433,6 +488,19 @@ function PendingOrderCard({
           onClose={() => setServiceModal(false)}
           onDone={() => {
             setServiceModal(false);
+            onServiceDone(order.orderId);
+          }}
+        />
+      )}
+      {materialsModal && (
+        <MaterialsConfirmModal
+          orderId={order.orderId}
+          goodsTotal={order.totalAmount}
+          onClose={() => setMaterialsModal(false)}
+          onDone={() => {
+            setMaterialsModal(false);
+            // Same refresh path as a service accept: the order leaves the
+            // pending lane and reappears under confirmed.
             onServiceDone(order.orderId);
           }}
         />
@@ -543,9 +611,12 @@ function PreparingOrderCard({
   const rating = noteStr(order.note?.customer_ratings ?? '');
   const review_count = noteStr(String(order.note?.customer_review_count ?? ''));
   const isService = order.fulfillment === 'service';
-  // Service orders never have a courier, but the owner still drives them, so
-  // they're always "active" in the preparing lane.
-  const active = order.courierId != null || isService;
+  // Neither no-courier lane ever gets a courierId, but the owner is driving both
+  // forward, so they're always "active" in the preparing lane. Without materials
+  // here a bahan-bangunan order would sit there labelled "Menunggu Kurir"
+  // forever, waiting for someone who is never coming.
+  const active =
+    order.courierId != null || isService || order.fulfillment === 'materials';
 
   return (
     <motion.div
@@ -652,13 +723,16 @@ function ReadyOrderCard({
   order,
   index,
   onCloseService,
+  onDispatchMaterials,
 }: {
   order: Order;
   index: number;
   onCloseService: (id: string) => void;
+  onDispatchMaterials: (id: string) => void;
 }) {
   const [isPending, startTransition] = useTransition();
   const isService = order.fulfillment === 'service';
+  const isMaterials = order.fulfillment === 'materials';
   const note = noteStr(order.note?.customer_note ?? '');
   const rating = noteStr(order.note?.customer_ratings ?? '');
   const review_count = noteStr(String(order.note?.customer_review_count ?? ''));
@@ -727,6 +801,18 @@ function ReadyOrderCard({
             >
               {isPending ? 'Memproses...' : 'Selesai'}
               {!isPending && <CheckCheck className="h-3 w-3" />}
+            </button>
+          )}
+          {/* No courier will ever collect this one, so the ready lane needs its
+              own exit: the outlet's driver leaving is what moves it on. */}
+          {isMaterials && (
+            <button
+              disabled={isPending}
+              onClick={() => startTransition(() => onDispatchMaterials(order.orderId))}
+              className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-bold bg-amber-600 text-white hover:bg-amber-700 transition-colors shadow-sm shadow-amber-200 disabled:opacity-60"
+            >
+              {isPending ? 'Memproses...' : 'Sopir Berangkat'}
+              {!isPending && <Truck className="h-3 w-3" />}
             </button>
           )}
         </div>
@@ -1219,6 +1305,16 @@ export function PendingOrdersLobby(outlet: OutletInfo) {
     [ready],
   );
 
+  // Owner's driver leaves with a ready materials load (ready -> on_delivery),
+  // after which the customer confirms arrival.
+  const handleDispatchMaterials = useCallback(
+    async (orderId: string) => {
+      ready.setOrders((prev) => prev.filter((o) => o.orderId !== orderId));
+      await dispatchMaterialsOrder(orderId);
+    },
+    [ready],
+  );
+
   const current =
     activeTab === 'pending'
       ? pending
@@ -1352,7 +1448,11 @@ export function PendingOrdersLobby(outlet: OutletInfo) {
           ) : activeTab === 'ready' ? (
             <>
               <QRScannerBar
-                orders={ready.orders.filter((o) => o.fulfillment !== 'service')}
+                // Courier handover only. Both no-courier lanes are excluded —
+                // there is no courier to scan a materials order's QR.
+                orders={ready.orders.filter(
+                  (o) => o.fulfillment !== 'service' && o.fulfillment !== 'materials',
+                )}
                 onPickup={handlePickup}
                 outlet={outlet}
               />
@@ -1364,6 +1464,7 @@ export function PendingOrdersLobby(outlet: OutletInfo) {
                       order={order}
                       index={i}
                       onCloseService={handleCloseService}
+                      onDispatchMaterials={handleDispatchMaterials}
                     />
                   ))}
                 </div>

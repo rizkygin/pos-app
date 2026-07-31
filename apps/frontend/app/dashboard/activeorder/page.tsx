@@ -37,10 +37,15 @@ export default async function ActiveOrderPage() {
   const activeOrder = data?.success ? data.order : null;
 
   if (!activeOrder) redirect('/dashboard/order');
+  // Jasa has its own tracking surface. Materials does NOT — it has goods in
+  // transit and real statuses to watch, so it stays on this screen (the courier
+  // bits inside are already gated on fulfillment).
   if (activeOrder.fulfillment === 'service') redirect('/dashboard/order');
   if (activeOrder.status === 'delivered')
     redirect(
-      activeOrder.fulfillment === 'service'
+      // No courier means nobody to rate but the outlet, which is what the
+      // service ratings page does.
+      activeOrder.fulfillment === 'service' || activeOrder.fulfillment === 'materials'
         ? `/dashboard/ratings/submit/service/${activeOrder.id}`
         : `/dashboard/ratings/submit/customer/${activeOrder.id}`,
     );
@@ -55,6 +60,8 @@ export default async function ActiveOrderPage() {
         statusSince={activeOrder.updatedAt ?? activeOrder.createdAt}
         fulfillment={activeOrder.fulfillment}
         rejectedReason={activeOrder.rejectedReason ?? null}
+        deliveryFee={activeOrder.deliveryFee ?? null}
+        goodsTotal={activeOrder.goodsTotal ?? null}
       />
     </main>
   );

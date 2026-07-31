@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ChefHat, Loader2, Plus, Trash2 } from 'lucide-react';
+import { Boxes, Loader2, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { API_URL } from '@/lib/api-url';
 
@@ -18,8 +18,20 @@ type RecipeRow = {
 };
 
 // Optional bill-of-materials editor shown on track_stock=false products.
+//
+// Deliberately NOT food-specific, despite the "recipe" tables behind it.
+// applySaleStockOut() keys purely off track_stock + recipe rows and never looks
+// at category, so the same mechanism covers two shapes of product:
+//
+//   olahan   nasi goreng      -> 0.2 kg beras + 1 butir telur
+//   paket    Batako 10 pcs    -> 10 batako
+//
+// The second is why the copy says "komposisi" rather than "resep": an owner who
+// won't sell batako below ten at a time makes a bundle product that draws from
+// the loose stock, and "Resep / Bahan" reads as nonsense on a hardware shelf.
+//
 // Saved independently from the product form (replace-on-save PUT); a product
-// without a recipe is a valid permanent state, so this section never nags.
+// without a composition is a valid permanent state, so this section never nags.
 export function RecipeEditor({
   productId,
   ingredients,
@@ -79,11 +91,11 @@ export function RecipeEditor({
         body: JSON.stringify({ items }),
       });
       const json = await res.json();
-      if (!json.success) throw new Error(json.message || 'Gagal menyimpan resep');
+      if (!json.success) throw new Error(json.message || 'Gagal menyimpan komposisi');
       setSavedAt(Date.now());
       setTimeout(() => setSavedAt(null), 2500);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Gagal menyimpan resep');
+      setError(e instanceof Error ? e.message : 'Gagal menyimpan komposisi');
     } finally {
       setSaving(false);
     }
@@ -92,17 +104,33 @@ export function RecipeEditor({
   return (
     <div className="space-y-2 rounded-xl border-2 border-dashed border-border p-4">
       <label className="text-sm font-bold flex items-center gap-2">
-        <ChefHat className="h-4 w-4 text-muted-foreground" />
-        Resep / Bahan <span className="font-normal text-muted-foreground">(opsional)</span>
+        <Boxes className="h-4 w-4 text-muted-foreground" />
+        Komposisi Produk{' '}
+        <span className="font-normal text-muted-foreground">(opsional)</span>
       </label>
       <p className="text-xs text-muted-foreground">
-        Setiap 1 produk terjual otomatis memotong stok bahan di bawah. Kosongkan
-        jika tidak perlu — penjualan tetap jalan tanpa resep.
+        Produk ini diambil dari stok produk lain. Setiap 1 terjual, stok di bawah
+        otomatis berkurang sesuai jumlahnya.
+      </p>
+      {/* Two concrete examples, one food one not: without the second, owners
+          read this as a kitchen-only feature and never use it for bundles. */}
+      <ul className="text-xs text-muted-foreground space-y-0.5 pl-3">
+        <li>
+          • <span className="font-medium">Produk olahan</span> — Nasi Goreng
+          memotong beras &amp; telur.
+        </li>
+        <li>
+          • <span className="font-medium">Paket / eceran</span> — “Batako 10 pcs”
+          memotong 10 dari stok Batako.
+        </li>
+      </ul>
+      <p className="text-xs text-muted-foreground">
+        Kosongkan jika tidak perlu — penjualan tetap jalan tanpa komposisi.
       </p>
 
       {loading ? (
         <div className="flex items-center gap-2 py-3 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" /> Memuat resep…
+          <Loader2 className="h-4 w-4 animate-spin" /> Memuat komposisi…
         </div>
       ) : (
         <>
@@ -113,7 +141,7 @@ export function RecipeEditor({
                 onChange={(e) => setRow(i, { ingredient_id: e.target.value })}
                 className="h-10 min-w-0 flex-1 rounded-xl border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
-                <option value="">Pilih bahan…</option>
+                <option value="">Pilih produk…</option>
                 {ingredients.map((p) => (
                   <option
                     key={p.id}
@@ -140,7 +168,7 @@ export function RecipeEditor({
                 type="button"
                 onClick={() => setRows((prev) => prev.filter((_, idx) => idx !== i))}
                 className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-red-50 hover:text-red-600"
-                aria-label="Hapus bahan"
+                aria-label="Hapus item"
               >
                 <Trash2 className="h-4 w-4" />
               </button>
@@ -155,7 +183,7 @@ export function RecipeEditor({
               className="rounded-xl"
               onClick={() => setRows((prev) => [...prev, { ingredient_id: '', qty: '' }])}
             >
-              <Plus className="mr-1 h-3.5 w-3.5" /> Tambah Bahan
+              <Plus className="mr-1 h-3.5 w-3.5" /> Tambah Item
             </Button>
             <Button
               type="button"
@@ -167,7 +195,7 @@ export function RecipeEditor({
               {saving ? (
                 <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
               ) : null}
-              {savedAt ? 'Tersimpan ✓' : 'Simpan Resep'}
+              {savedAt ? 'Tersimpan ✓' : 'Simpan Komposisi'}
             </Button>
           </div>
           {error && <p className="text-xs font-medium text-red-600">{error}</p>}

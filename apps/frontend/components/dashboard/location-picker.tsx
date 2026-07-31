@@ -4,6 +4,14 @@ import { useEffect, useRef } from "react";
 import { MapContainer, TileLayer, Marker, useMapEvents, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import { isValidLat, isValidLon, isValidCoord } from "@/lib/coords";
+
+// Where the map sits when it has nothing valid to show — Banjarmasin, matching
+// the server-side fallback in outlet.ts. A stored coordinate can still be junk
+// (see lib/coords.ts), and Leaflet throws rather than degrading, so the picker
+// renders here instead of taking the whole settings page down with it.
+const FALLBACK_LAT = -3.3199;
+const FALLBACK_LON = 114.5907;
 
 // Fix default marker icon (webpack breaks leaflet's auto-detection)
 const icon = L.icon({
@@ -26,6 +34,9 @@ function ClickHandler({ onMove }: { onMove: (lat: number, lon: number) => void }
 function FlyTo({ lat, lon }: { lat: number; lon: number }) {
     const map = useMap();
     useEffect(() => {
+        // Never hand Leaflet a NaN — it throws "Invalid LatLng object" from
+        // inside this effect, which React surfaces as an unrecoverable error.
+        if (!isValidCoord(lat, lon)) return;
         map.flyTo([lat, lon], map.getZoom(), { animate: true, duration: 1.2 });
     }, [lat, lon, map]);
     return null;
@@ -42,9 +53,15 @@ export function LocationPicker({
 }) {
     const markerRef = useRef<L.Marker>(null);
 
+    // A caller can still pass NaN (an outlet saved before coordinates were
+    // validated, `parseFloat('')`, a half-filled form). Substitute the fallback
+    // rather than propagating it: every Leaflet entry point below throws on NaN.
+    const safeLat = isValidLat(lat) ? lat : FALLBACK_LAT;
+    const safeLon = isValidLon(lon) ? lon : FALLBACK_LON;
+
     return (
         <MapContainer
-            center={[lat, lon]}
+            center={[safeLat, safeLon]}
             zoom={15}
             style={{ height: "320px", width: "100%", borderRadius: "1rem", zIndex: 0 }}
         >
@@ -52,10 +69,10 @@ export function LocationPicker({
                 attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
             />
-            <FlyTo lat={lat} lon={lon} />
+            <FlyTo lat={safeLat} lon={safeLon} />
             <ClickHandler onMove={onChange} />
             <Marker
-                position={[lat, lon]}
+                position={[safeLat, safeLon]}
                 icon={icon}
                 draggable
                 ref={markerRef}

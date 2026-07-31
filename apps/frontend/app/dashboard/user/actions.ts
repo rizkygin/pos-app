@@ -1,5 +1,57 @@
 import { authClient } from "@/lib/auth-client";
 import { rateLimitMessage, readRetryAfter } from "@/lib/auth-email-cooldown";
+import { API_URL } from "@/lib/api-url";
+
+export type PhoneState = {
+    phoneDisplay: string | null;
+    canChange: boolean;
+    nextChangeAt: string | null;
+};
+
+// Current number + whether the once-a-month change is available. Eligibility is
+// decided by the backend, not recomputed here — the client shouldn't be the one
+// deciding whether a rate limit has expired.
+export async function getPhoneStateAction(): Promise<PhoneState | null> {
+    try {
+        const res = await fetch(`${API_URL}/api/me/phone`, { credentials: "include" });
+        const json = await res.json();
+        if (!res.ok || !json?.success) return null;
+        return {
+            phoneDisplay: json.phoneDisplay ?? null,
+            canChange: Boolean(json.canChange),
+            nextChangeAt: json.nextChangeAt ?? null,
+        };
+    } catch {
+        return null;
+    }
+}
+
+export async function updatePhoneAction(phone: string) {
+    try {
+        const res = await fetch(`${API_URL}/api/me/phone`, {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ phone }),
+        });
+        const json = await res.json().catch(() => null);
+        if (!res.ok || !json?.success) {
+            return {
+                success: false,
+                message: json?.error ?? "Gagal memperbarui nomor WhatsApp.",
+                nextChangeAt: json?.nextChangeAt ?? null,
+            };
+        }
+        return {
+            success: true,
+            message: "Nomor WhatsApp berhasil diperbarui.",
+            phoneDisplay: json.phoneDisplay as string,
+            nextChangeAt: json.nextChangeAt ?? null,
+        };
+    } catch {
+        return { success: false, message: "Gagal terhubung ke server.", nextChangeAt: null };
+    }
+}
 
 // These call the backend's better-auth endpoints via the shared auth client
 // (baseURL = NEXT_PUBLIC_API_URL, credentials included). The client returns

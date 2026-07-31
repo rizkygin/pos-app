@@ -4,7 +4,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { resolveOutletImage, isBackendImage } from "@/lib/image-src";
 import { motion } from "motion/react";
-import { Star, MapPin, Clock, ArrowRight, Phone } from "lucide-react";
+import { Star, MapPin, Clock, ArrowRight, Phone, Navigation } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { Outlet } from "@/lib/types";
 
@@ -60,6 +60,27 @@ export function OutletCard({ outlet, feature }: { outlet: Outlet; feature: strin
                         <Phone className="h-3 w-3" />
                         <span>{outlet.phone}</span>
                     </div>
+                    {/* The list is ordered by travel time now, so show the reason
+                        — an ordering the customer can't see reads as arbitrary.
+                        Both are null for signed-out visitors and anyone without a
+                        saved address, in which case the row disappears entirely
+                        rather than showing a placeholder. */}
+                    {(outlet.distanceKm != null || outlet.estimatedTime) && (
+                        <div className="flex items-center gap-3 shrink-0 font-semibold text-foreground/70">
+                            {outlet.distanceKm != null && (
+                                <span className="flex items-center gap-1">
+                                    <Navigation className="h-3 w-3 text-rose-500" />
+                                    {outlet.distanceKm} km
+                                </span>
+                            )}
+                            {outlet.estimatedTime && (
+                                <span className="flex items-center gap-1">
+                                    <Clock className="h-3 w-3 text-rose-500" />
+                                    {outlet.estimatedTime}
+                                </span>
+                            )}
+                        </div>
+                    )}
                 </div>
 
                 <Link href={`/dashboard/order/${feature}/${outlet.id}`}>

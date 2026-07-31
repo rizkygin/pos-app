@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useCallback } from "react";
+import { getCurrentPosition, geolocationMessage } from "@/lib/geolocation";
 
 interface Location {
     lat: number;
@@ -31,8 +32,10 @@ export function useLocation(): UseLocationReturn {
         setIsPending(true);
         setError(null);
 
-        navigator.geolocation.getCurrentPosition(
-            // Success
+        // Options and retry live in lib/geolocation.ts — this used to pass
+        // enableHighAccuracy + maximumAge: 0, the combination most likely to
+        // fail on a laptop, which has no GPS to be accurate with.
+        getCurrentPosition(
             (position: GeolocationPosition) => {
                 setLocation({
                     lat: position.coords.latitude,
@@ -41,29 +44,10 @@ export function useLocation(): UseLocationReturn {
                 });
                 setIsPending(false);
             },
-            // Error
             (err: GeolocationPositionError) => {
-                switch (err.code) {
-                    case err.PERMISSION_DENIED:
-                        setError("❌ User denied location access");
-                        break;
-                    case err.POSITION_UNAVAILABLE:
-                        setError("❌ Location information unavailable");
-                        break;
-                    case err.TIMEOUT:
-                        setError("❌ Location request timed out");
-                        break;
-                    default:
-                        setError("❌ An unknown error occurred");
-                }
+                setError(geolocationMessage(err));
                 setIsPending(false);
             },
-            // Options
-            {
-                enableHighAccuracy: true, // use GPS if available
-                timeout: 10000,           // 10 seconds
-                maximumAge: 0,            // don't use cached location
-            }
         );
     }, []);
 

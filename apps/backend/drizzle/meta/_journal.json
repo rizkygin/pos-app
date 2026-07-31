@@ -281,6 +281,48 @@
       "when": 1785336566676,
       "tag": "0039_mute_korg",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1785466326035,
+      "tag": "0040_product_courier_deliverable",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1785478681355,
+      "tag": "0041_derive_outlet_features",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1785481810281,
+      "tag": "0042_courier_deliverable_bulky_only",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1785498156512,
+      "tag": "0043_order_fulfillment_materials",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1785522980879,
+      "tag": "0044_courier_live_position",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1785524345242,
+      "tag": "0045_user_phone_change_cooldown",
+      "breakpoints": true
     }
   ]
 }

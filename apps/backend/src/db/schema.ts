@@ -28,9 +28,14 @@ export const ORDER_STATUS = pgEnum('order_status', [
 // delivery = courier-fulfilled order (food/drink/mart): goes through the courier
 // lobby + on_delivery leg. service = no courier: owner drives the whole flow and
 // the customer accepts at the end (see the service order endpoints).
+// materials = bulky goods (besi, keramik, kulkas) the outlet delivers with its
+// own driver. No courier either, but unlike service the goods have fixed prices
+// and real stock — what the owner quotes is the haul, into orders.delivery_fee,
+// capped by the products' [lowest_price, highest_price] band.
 export const ORDER_FULFILLMENT = pgEnum('order_fulfillment', [
   'delivery',
   'service',
+  'materials',
 ]);
 export const RECIEPENT = pgEnum('receipt', [
   'customer',
@@ -79,7 +84,14 @@ export const STOCK_MOVEMENT_REASON = pgEnum('stock_movement_reason', [
 export const usersTable = pgTable('users', {
   id: text('id').primaryKey(),
   name: varchar('name', { length: 255 }).notNull(),
+  // Canonical 628… form — see lib/utils/phone.ts. Everything that writes here
+  // must go through normalizeIndonesianPhone, or the column drifts back into
+  // holding six spellings of one number.
   phone: varchar('phone', { length: 255 }).default('082222222222'),
+  // When the user last CHANGED their number, gating the one-per-month limit.
+  // Null means never changed, so the first edit is free: a typo caught right
+  // after signup shouldn't cost someone a month of being uncontactable.
+  phone_changed_at: timestamp('phone_changed_at', { withTimezone: true }),
   email: varchar('email', { length: 255 }).notNull().unique(),
   address: varchar('address', { length: 255 }).default('Jl. Contoh'),
   emailVerified: boolean('email_verified').default(false).notNull(),
@@ -153,6 +165,19 @@ export const couriersTable = pgTable('couriers', {
   vehicle_type: VEHICLE_TYPE('vehicle_type').notNull(),
   ratings: numeric('ratings', { precision: 3, scale: 2 }).default('5'),
   review_count: integer('review_count').default(0).notNull(),
+  // Last reported position, for the customer's live delivery ETA. Only written
+  // while the courier has an order in flight — this is not a movement history,
+  // just "where are they now", overwritten in place.
+  //
+  // numeric, NOT varchar like outlets.lat/locations.lat. Those are strings, and
+  // a varchar happily stored '' and the literal text 'NaN', which is exactly how
+  // coordinates poisoned the map picker (see migration 0041). Postgres rejects
+  // both here.
+  last_lat: numeric('last_lat', { precision: 10, scale: 7 }),
+  last_lon: numeric('last_lon', { precision: 10, scale: 7 }),
+  // Staleness marker: a position from 40 minutes ago is not "live", and the ETA
+  // must fall back rather than quietly present it as current.
+  last_location_at: timestamp('last_location_at', { withTimezone: true }),
   ...timestamps,
 });
 
@@ -197,6 +222,14 @@ export const productsTable = pgTable(
     // made from ingredients, or a service). Invoice posting only moves stock for
     // track_stock products; the Stok page only lists them.
     track_stock: boolean('track_stock').default(true).notNull(),
+    // false = a courier can NOT carry this (besi, keramik, wastafel, a fridge).
+    // Set by the owner in the product form — they're the one who knows the
+    // goods. Building materials are deliberately NOT uniformly courier-less:
+    // semen/cat/paku ride a motorcycle fine. Read at checkout to decide the
+    // order's fulfillment (all items deliverable -> courier flow; any item not
+    // -> the no-courier flow), never by the customer. Default true so every
+    // existing product keeps its current behaviour.
+    courier_deliverable: boolean('courier_deliverable').default(true).notNull(),
     description: varchar('description', { length: 255 }).default(''),
     unit: varchar('unit', { length: 10 }).notNull().default('pcs'),
     // Optional — mainly for "mart"/retail goods, but available on any category

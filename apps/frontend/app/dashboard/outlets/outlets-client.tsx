@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { API_URL } from '@/lib/api-url';
 import { ORDER_FEATURES } from '@/lib/order-features';
+import { parseCoordPair } from '@/lib/coords';
+import { getCurrentPosition, geolocationMessage } from '@/lib/geolocation';
 
 type OutletRow = {
   id: number;
@@ -65,15 +67,24 @@ export function OutletsClient() {
   };
 
   const useMyLocation = () => {
-    if (!navigator.geolocation) return;
+    if (!navigator.geolocation) {
+      setError('Browser ini tidak mendukung geolokasi.');
+      return;
+    }
     setLocating(true);
-    navigator.geolocation.getCurrentPosition(
+    setError('');
+    getCurrentPosition(
       (pos) => {
         setLat(String(pos.coords.latitude));
         setLon(String(pos.coords.longitude));
         setLocating(false);
       },
-      () => setLocating(false),
+      // Previously swallowed entirely, so a failed fix looked like nothing had
+      // happened and the outlet got created with empty coordinates.
+      (err) => {
+        setError(geolocationMessage(err));
+        setLocating(false);
+      },
     );
   };
 
@@ -81,11 +92,16 @@ export function OutletsClient() {
     setSaving(true);
     setError('');
     try {
+      // Setting a location is optional here. Omit the pair entirely when it
+      // isn't a real coordinate so the backend's default applies — posting the
+      // empty strings this form starts with used to store '' in a notNull
+      // varchar, which came back as NaN and crashed the outlet map picker.
+      const coords = parseCoordPair(lat, lon);
       const res = await fetch(`${API_URL}/api/outlets`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, address, phone, email, lat, lon, features }),
+        body: JSON.stringify({ name, address, phone, email, features, ...coords }),
       });
       const json = await res.json();
       if (!json.success) {

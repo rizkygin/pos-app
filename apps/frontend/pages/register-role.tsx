@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ORDER_FEATURES } from "@/lib/order-features";
 import { API_URL } from "@/lib/api-url";
+import { getCurrentPosition, geolocationMessage } from "@/lib/geolocation";
 
 /* ─── Syariah-friendly SVG illustrations ────────────────────────────────────
    Each character has glasses frames but NO eyes drawn inside them.
@@ -253,7 +254,7 @@ const RegistrationForm = ({ role, onCancel }: { role: string; onCancel: () => vo
     const handleGetLocation = () => {
         if (!navigator.geolocation) return alert("Geolocation tidak didukung browser ini");
         setLocating(true);
-        navigator.geolocation.getCurrentPosition(
+        getCurrentPosition(
             (pos) => {
                 setFormData((prev) => ({
                     ...prev,
@@ -262,8 +263,8 @@ const RegistrationForm = ({ role, onCancel }: { role: string; onCancel: () => vo
                 }));
                 setLocating(false);
             },
-            () => {
-                alert("Gagal mendapatkan lokasi. Pastikan izin lokasi diaktifkan.");
+            (err) => {
+                alert(geolocationMessage(err));
                 setLocating(false);
             }
         );
@@ -426,8 +427,25 @@ const RegistrationForm = ({ role, onCancel }: { role: string; onCancel: () => vo
                 )}
 
                 {role === "customer" && (
-                    <div className="py-8 text-center space-y-4">
-                        <p className="text-muted-foreground">Tidak ada informasi tambahan yang diperlukan. Siap untuk mulai berbelanja?</p>
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">Nomor WhatsApp</label>
+                        <Input
+                            name="phone"
+                            type="tel"
+                            inputMode="numeric"
+                            onChange={handleChange}
+                            required
+                            placeholder="08123456789"
+                            className="rounded-xl"
+                        />
+                        {/* No input mask, and dashes/spaces are fine on purpose:
+                            the backend strips every separator and stores one
+                            canonical form, so fighting the user over punctuation
+                            they'd type naturally buys nothing. */}
+                        <p className="text-xs text-muted-foreground">
+                            Dipakai penjual &amp; kurir untuk menghubungi pian soal pesanan.
+                            Boleh diketik pakai spasi atau tanda hubung — minimal 11 angka.
+                        </p>
                     </div>
                 )}
 

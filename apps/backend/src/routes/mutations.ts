@@ -16,6 +16,7 @@ import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 import { requireOutletAccess } from "../lib/outlet-access";
 import { applySaleStockOut } from "../lib/stock";
+import { normalizeIndonesianPhone } from "../lib/utils/phone";
 
 // Transaction client type (drizzle's tx has the same query builder as `db`).
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -277,6 +278,24 @@ export async function mutationRoutes(app: FastifyInstance) {
           avatar: data.avatar || "avatar-courier.png",
         });
       } else if (role === "customer") {
+        // WhatsApp is how the outlet and courier reach this customer about a
+        // live order, so it's required rather than optional. Normalised here,
+        // not in the form: the browser is not the only caller, and one canonical
+        // shape in the column is worth more than a tidy input mask.
+        const phone = normalizeIndonesianPhone(data?.phone);
+        if (!phone) {
+          return reply.status(400).send({
+            error:
+              "Nomor WhatsApp tidak valid. Pakai nomor Indonesia, minimal 11 angka (contoh: 08123456789).",
+          });
+        }
+
+        // Lives on users, not customers: usersTable.phone is already the column
+        // the owner's order lobby reads for customer contact. A second phone
+        // field on customersTable would be a copy that immediately starts
+        // drifting from it.
+        await db.update(usersTable).set({ phone }).where(eq(usersTable.id, userId));
+
         await db.insert(customersTable).values({
           user_id: userId,
         });

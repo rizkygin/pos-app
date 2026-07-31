@@ -4,6 +4,7 @@ import { db } from "../db";
 import { locationsTable } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
+import { parseCoordPair } from "../lib/utils/coords";
 
 type LocationFormData = {
   label: string;
@@ -54,6 +55,15 @@ export async function locationRoutes(app: FastifyInstance) {
 
     try {
       const data = request.body as LocationFormData;
+      // A delivery address the courier can't navigate to is not worth storing.
+      // '' and the literal "NaN" both used to pass straight into the notNull
+      // varchar and come back as NaN, crashing the customer's map picker.
+      const coords = parseCoordPair(data.lat, data.lon);
+      if (!coords)
+        return reply
+          .status(400)
+          .send({ success: false, message: "Titik lokasi alamat tidak valid." });
+
       const existing = await db
         .select({ id: locationsTable.id })
         .from(locationsTable)
@@ -64,8 +74,8 @@ export async function locationRoutes(app: FastifyInstance) {
         user_id: session.user.id,
         label: data.label,
         address: data.address,
-        lat: data.lat,
-        lon: data.lon,
+        lat: String(coords.lat),
+        lon: String(coords.lon),
         note: data.note ?? "",
         is_default: existing.length === 0,
       });
@@ -82,13 +92,19 @@ export async function locationRoutes(app: FastifyInstance) {
 
     try {
       const { id, data } = request.body as { id: number; data: LocationFormData };
+      const coords = parseCoordPair(data.lat, data.lon);
+      if (!coords)
+        return reply
+          .status(400)
+          .send({ success: false, message: "Titik lokasi alamat tidak valid." });
+
       await db
         .update(locationsTable)
         .set({
           label: data.label,
           address: data.address,
-          lat: data.lat,
-          lon: data.lon,
+          lat: String(coords.lat),
+          lon: String(coords.lon),
           note: data.note ?? "",
         })
         .where(and(eq(locationsTable.id, id), eq(locationsTable.user_id, session.user.id)));

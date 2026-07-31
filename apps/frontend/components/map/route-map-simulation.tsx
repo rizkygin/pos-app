@@ -10,6 +10,7 @@ import {
 } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { API_URL } from '@/lib/api-url';
 
 const iconBase = {
   iconSize: [25, 41] as [number, number],
@@ -58,14 +59,17 @@ export function RouteMapSimulation({ pickup, dropoff, className }: Props) {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    const url = `https://router.project-osrm.org/route/v1/driving/${pickup.lon},${pickup.lat};${dropoff.lon},${dropoff.lat}?geometries=geojson&overview=full`;
-    fetch(url)
+    // Server-side, same as route-map.tsx: a self-hosted OSRM sits on the private
+    // network and is unreachable from a browser. The backend returns [lat, lon]
+    // already flipped and falls back to a straight line on failure.
+    fetch(
+      `${API_URL}/api/route?from=${pickup.lat},${pickup.lon}&to=${dropoff.lat},${dropoff.lon}`,
+      { credentials: 'include' },
+    )
       .then((r) => r.json())
       .then((data) => {
-        const coords: [number, number][] = (
-          data.routes?.[0]?.geometry?.coordinates ?? []
-        ).map(([lon, lat]: [number, number]) => [lat, lon]);
-        setRoute(coords);
+        if (!data?.success || !Array.isArray(data.geometry)) throw new Error('no route');
+        setRoute(data.geometry);
         setStep(0);
       })
       .catch(() => {

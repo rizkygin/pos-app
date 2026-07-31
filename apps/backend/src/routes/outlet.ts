@@ -8,6 +8,7 @@ import { outletsTable } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 import { parseActiveOutletId, getSubscriptionGate } from "../lib/outlet-access";
+import { parseCoordPair } from "../lib/utils/coords";
 import { and, sql } from "drizzle-orm";
 
 const UPLOADS_ROOT = path.join(process.cwd(), "uploads");
@@ -134,6 +135,12 @@ export async function outletRoutes(app: FastifyInstance) {
     if (taken)
       return reply.status(409).send({ success: false, error: "Email outlet sudah digunakan, silakan pakai email lain" });
 
+    // A location is optional at creation, but a *broken* one is not acceptable:
+    // `String(body.lat ?? default)` only defaulted on null/undefined, so the
+    // form's empty strings were stored verbatim in a notNull varchar and read
+    // back as NaN, crashing the map picker. Fall back to Banjarmasin instead.
+    const coords = parseCoordPair(body.lat, body.lon) ?? { lat: -3.3199, lon: 114.5907 };
+
     const [created] = await db
       .insert(outletsTable)
       .values({
@@ -143,9 +150,11 @@ export async function outletRoutes(app: FastifyInstance) {
         email,
         user_id: session.user.id,
         avatar: "avatar.png",
-        lat: String(body.lat ?? "-3.3199"),
-        lon: String(body.lon ?? "114.5907"),
-        features: Array.isArray(body.features) ? body.features : [],
+        lat: String(coords.lat),
+        lon: String(coords.lon),
+        // Starts empty and stays derived: a brand-new outlet has no products,
+        // so it is browsable under nothing until it adds some.
+        features: [],
         is_open: false,
       })
       .returning();
@@ -172,16 +181,27 @@ export async function outletRoutes(app: FastifyInstance) {
       const target = await activeOwnedOutlet(request, session.user.id);
       if (!target) return reply.status(403).send({ success: false, message: "Outlet tidak ditemukan." });
       const data = request.body as OutletFormData;
+      // Reject rather than silently defaulting: an owner editing their outlet
+      // is deliberately setting a pin, so a bad value here is a real error and
+      // quietly relocating their shop would be worse than saying no.
+      const coords = parseCoordPair(data.lat, data.lon);
+      if (!coords)
+        return reply
+          .status(400)
+          .send({ success: false, message: "Titik lokasi outlet tidak valid." });
       await db
         .update(outletsTable)
         .set({
           name: data.name,
           phone: data.phone,
           address: data.address,
-          lat: data.lat,
-          lon: data.lon,
+          lat: String(coords.lat),
+          lon: String(coords.lon),
           is_open: data.is_open,
-          features: data.features,
+          // `features` is deliberately NOT settable here. It is derived from the
+          // outlet's products by recalcOutletFeatures — an owner-maintained
+          // checklist drifted from reality and left outlets listed under
+          // categories they had no products for.
           tags: data.tags,
           ...(data.avatar && { avatar: data.avatar }),
         })

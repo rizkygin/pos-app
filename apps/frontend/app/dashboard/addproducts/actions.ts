@@ -13,6 +13,9 @@ export type AddProductInput = {
   features?: string[];
   is_for_sale?: boolean;
   track_stock?: boolean;
+  // false = too bulky for a courier (besi, keramik, kulkas) — the order then
+  // takes the no-courier flow. Owner's call, made in the product form.
+  courier_deliverable?: boolean;
   // Service products: negotiable price range (backend derives price = lowest).
   lowest_price?: string;
   highest_price?: string;

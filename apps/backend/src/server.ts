@@ -22,6 +22,7 @@ import { invoiceRoutes } from "./routes/invoices";
 import { subscriptionRoutes } from "./routes/subscriptions";
 import { employeeRoutes } from "./routes/employees";
 import { pushRoutes } from "./routes/push";
+import { routingRoutes } from "./routes/routing";
 
 const PORT = Number(process.env.PORT ?? 4000);
 // FRONTEND_ORIGIN accepts a comma-separated list so apex + www (and any extra
@@ -111,6 +112,7 @@ async function main() {
   await app.register(subscriptionRoutes);
   await app.register(employeeRoutes);
   await app.register(pushRoutes);
+  await app.register(routingRoutes);
 
   app.get("/health", async () => ({ ok: true }));
 

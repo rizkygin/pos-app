@@ -13,6 +13,7 @@ import { useTransition, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { getDeliveryFee } from "@/app/dashboard/order/[feature]/[outletId]/action";
 import { checkUserHasLocations } from "@/app/dashboard/users/locations/setting/actions";
+import { cartNeedsOwnDriver, cartHaulCap } from "@/lib/types";
 
 type Product = OrderProduct;
 type Promo = OutletPromo;
@@ -45,14 +46,21 @@ export function BasketSheetContent({
     const [feeError, setFeeError] = useState<string | null>(null);
     const router = useRouter();
 
+    // One bulky item and the outlet hauls the whole order itself. There is no
+    // distance fee to fetch in that case — the owner quotes the haul once they
+    // have seen the address, capped by the products' price bands.
+    const ownDriver = cartNeedsOwnDriver(cart);
+    const haulCap = ownDriver ? cartHaulCap(cart) : 0;
+
     useEffect(() => {
         setDeliveryFee(null);
         setFeeError(null);
+        if (ownDriver) return;
         getDeliveryFee(outlet_id).then((result) => {
             if ("error" in result) setFeeError(result.error);
             else setDeliveryFee(result.fee);
         });
-    }, [outlet_id]);
+    }, [outlet_id, ownDriver]);
 
     const subtotal = cart.reduce((acc, item) => {
         const price = discountedPrice(item.product.price, item.product.discountPercent);
@@ -64,7 +72,11 @@ export function BasketSheetContent({
             ? Math.floor(subtotal * (appliedPromo.discountPercent / 100))
             : 0;
 
-    const total = subtotal - promoDiscount + (deliveryFee ?? 0);
+    // On the own-driver lane the haul isn't known yet, so the customer agrees to
+    // a ceiling rather than a figure: goods are certain, the rest is bounded.
+    const goodsTotal = subtotal - promoDiscount;
+    const total = goodsTotal + (ownDriver ? 0 : deliveryFee ?? 0);
+    const maxTotal = goodsTotal + haulCap;
 
     const handleCheckout = () => {
         setTransition(async () => {
@@ -75,7 +87,14 @@ export function BasketSheetContent({
             }
             sessionStorage.setItem(
                 "pos_invoice_draft",
-                JSON.stringify({ outlet_id, cart, appliedPromo, deliveryFee, subtotal, promoDiscount, total })
+                JSON.stringify({
+                    outlet_id, cart, appliedPromo, subtotal, promoDiscount,
+                    // On the own-driver lane the fee is still unknown: the invoice
+                    // screen shows the ceiling instead, and the backend writes the
+                    // real figure when the owner confirms.
+                    deliveryFee: ownDriver ? 0 : deliveryFee,
+                    total, ownDriver, haulCap, maxTotal,
+                })
             );
             router.push("/dashboard/order/invoice");
         });
@@ -175,26 +194,54 @@ export function BasketSheetContent({
                             <span className="font-semibold">-{fmtIDR(promoDiscount)}</span>
                         </div>
                     )}
-                    <div className="flex justify-between text-muted-foreground">
-                        <span>Ongkos kirim</span>
-                        <span className={`font-semibold ${feeError ? "text-destructive" : ""}`}>
-                            {feeError
-                                ? feeError
-                                : deliveryFee === null
-                                ? "Menghitung..."
-                                : fmtIDR(deliveryFee)}
-                        </span>
-                    </div>
-                    <Separator />
-                    <div className="flex justify-between font-black text-base">
-                        <span>Total</span>
-                        <span className="text-rose-600">{fmtIDR(total)}</span>
-                    </div>
+                    {ownDriver ? (
+                        <>
+                            <div className="flex justify-between text-muted-foreground">
+                                <span>Ongkos angkut toko</span>
+                                <span className="font-semibold text-amber-600">
+                                    maks {fmtIDR(haulCap)}
+                                </span>
+                            </div>
+                            <Separator />
+                            <div className="flex justify-between font-black text-base">
+                                <span>Total</span>
+                                <span className="text-rose-600">
+                                    {fmtIDR(goodsTotal)} – {fmtIDR(maxTotal)}
+                                </span>
+                            </div>
+                            <p className="text-xs text-muted-foreground pt-1">
+                                Barang berat diantar sopir toko, bukan kurir. Ongkos angkut
+                                pastinya ditetapkan penjual setelah lihat alamat — tidak akan
+                                lebih dari {fmtIDR(haulCap)}, dan pian bisa batalkan sebelum
+                                barang berangkat.
+                            </p>
+                        </>
+                    ) : (
+                        <>
+                            <div className="flex justify-between text-muted-foreground">
+                                <span>Ongkos kirim</span>
+                                <span className={`font-semibold ${feeError ? "text-destructive" : ""}`}>
+                                    {feeError
+                                        ? feeError
+                                        : deliveryFee === null
+                                        ? "Menghitung..."
+                                        : fmtIDR(deliveryFee)}
+                                </span>
+                            </div>
+                            <Separator />
+                            <div className="flex justify-between font-black text-base">
+                                <span>Total</span>
+                                <span className="text-rose-600">{fmtIDR(total)}</span>
+                            </div>
+                        </>
+                    )}
                 </div>
 
                 <Button
                     onClick={handleCheckout}
-                    disabled={isPending || !!feeError || deliveryFee === null}
+                    // The own-driver lane never fetches a distance fee, so gating
+                    // on deliveryFee there would disable checkout permanently.
+                    disabled={isPending || (!ownDriver && (!!feeError || deliveryFee === null))}
                     className="w-full rounded-2xl bg-rose-500 hover:bg-rose-600 text-white font-black py-6 shadow-lg shadow-rose-200">
                     Checkout <ArrowRight className="ml-2 h-4 w-4" />
                 </Button>

@@ -16,6 +16,7 @@ import {
   cashOutDetailTable,
   invoicePaymentsTable,
   invoicesTable,
+  locationsTable,
 } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
@@ -73,10 +74,23 @@ async function lobbyOrdersByStatus(
       fulfillment: ordersTable.fulfillment,
       scheduledAt: ordersTable.scheduled_at,
       discountAmount: ordersTable.discount_amount,
+      // Needed by the materials lane: the owner prices the haul from how far it
+      // has to go, so the drop-off has to be on the card before they can quote.
+      // leftJoin — a customer with no saved default address must not vanish from
+      // the lobby entirely.
+      dropoffAddress: locationsTable.address,
+      // Coordinates too, so the card's address can open a driving route rather
+      // than a text search that may not resolve a kampung address at all.
+      dropoffLat: locationsTable.lat,
+      dropoffLon: locationsTable.lon,
     })
     .from(ordersTable)
     .innerJoin(customersTable, eq(ordersTable.customer_id, customersTable.id))
     .innerJoin(usersTable, eq(customersTable.user_id, usersTable.id))
+    .leftJoin(
+      locationsTable,
+      and(eq(locationsTable.user_id, usersTable.id), eq(locationsTable.is_default, true)),
+    )
     .where(and(eq(ordersTable.outlet_id, outletId), eq(ordersTable.status, status)))
     .orderBy(ordersTable.createdAt);
 

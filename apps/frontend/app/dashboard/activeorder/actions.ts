@@ -93,3 +93,67 @@ export async function closeServiceOrder(orderId: string) {
 export async function acceptServiceOrder(orderId: string) {
   await postOrderAction('/api/orders/accept-service', orderId, 'Gagal menyelesaikan order layanan');
 }
+
+// ----- Materials (own-driver) order actions -----
+
+export type MaterialsQuote = {
+  /** Ceiling the API enforces, recomputed server-side from the price bands. */
+  cap: number;
+  /** Km from outlet to drop-off. Null if no saved address. */
+  distanceKm: number | null;
+  /** 'road' = real driving route; 'straight' = routing unavailable, reads short. */
+  distanceSource: 'road' | 'straight' | null;
+  /** Driving time estimate in minutes. Null when the distance is straight-line. */
+  driveMinutes: number | null;
+  dropoff: {
+    label: string | null;
+    address: string | null;
+    note: string | null;
+    lat: string;
+    lon: string;
+  } | null;
+};
+
+// Everything needed to price a haul. The cap alone isn't enough — without the
+// distance the owner is picking a number blind.
+export async function getMaterialsQuote(orderId: string): Promise<MaterialsQuote> {
+  const res = await fetch(`${API_URL}/api/orders/${orderId}/materials-quote`, {
+    credentials: 'include',
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json?.success) {
+    throw new Error(json?.error ?? 'Gagal mengambil data ongkos angkut');
+  }
+  return {
+    cap: Number(json.cap ?? 0),
+    distanceKm: json.distanceKm ?? null,
+    distanceSource: json.distanceSource ?? null,
+    driveMinutes: json.driveMinutes ?? null,
+    dropoff: json.dropoff ?? null,
+  };
+}
+
+// Owner accepts a materials order, quoting the haul into delivery_fee. The goods
+// keep their own prices — only the delivery figure is set here.
+export async function confirmMaterialsOrder(orderId: string, deliveryFee: number) {
+  const res = await fetch(`${API_URL}/api/orders/confirm-materials`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ orderId, delivery_fee: deliveryFee }),
+  });
+  if (!res.ok) {
+    const json = await res.json().catch(() => null);
+    throw new Error(json?.error ?? 'Gagal mengonfirmasi order bahan bangunan');
+  }
+}
+
+// Owner's driver leaves with the load (ready -> on_delivery).
+export async function dispatchMaterialsOrder(orderId: string) {
+  await postOrderAction('/api/orders/dispatch-materials', orderId, 'Gagal mengirim order');
+}
+
+// Customer confirms the load arrived (on_delivery -> delivered).
+export async function acceptMaterialsOrder(orderId: string) {
+  await postOrderAction('/api/orders/accept-materials', orderId, 'Gagal menyelesaikan order');
+}

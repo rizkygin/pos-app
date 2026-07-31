@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq, isNotNull, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { db } from "../db";
 import {
   cashInCategoryTable,
@@ -17,7 +17,7 @@ import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 import { getOutletAccess, hasPermission, parseActiveOutletId, getSubscriptionGate, gateBlocks } from "../lib/outlet-access";
 import { CATEGORY_IN } from "../lib/cashflow-categories";
-import { haversineKm } from "../lib/utils/geo";
+import { roadDistance, billableKm } from "../lib/utils/road-distance";
 import { sendPushToUser } from "../lib/push";
 
 type NoteJson = {
@@ -43,9 +43,62 @@ type CreateOrderBody = {
   discount_amount?: number;
   note?: NoteJson | null;
   items: OrderItem[];
-  // 'service' = no courier: skip delivery-fee computation, owner drives the flow.
+  // Only 'service' is honoured from the client — jasa is picked deliberately by
+  // the customer from a service product card. 'delivery' vs 'materials' is NOT a
+  // customer choice: it is derived from the cart's products (see resolveLane).
   fulfillment?: "delivery" | "service";
 };
+
+/**
+ * Decide which lane an order runs in, from the products in the cart.
+ *
+ * One undeliverable item is enough to pull the whole order onto the outlet's own
+ * driver — a courier is never asked to carry half an order. Deliberately server
+ * side: the client already knows `courierDeliverable`, but the lane decides who
+ * gets paid to move the goods, so it is not something a request body may assert.
+ */
+async function resolveLane(items: OrderItem[]): Promise<"delivery" | "materials"> {
+  const ids = [...new Set(items.map((i) => i.product_id))];
+  if (ids.length === 0) return "delivery";
+
+  const [bulky] = await db
+    .select({ id: productsTable.id })
+    .from(productsTable)
+    .where(and(inArray(productsTable.id, ids), eq(productsTable.courier_deliverable, false)))
+    .limit(1);
+
+  return bulky ? "materials" : "delivery";
+}
+
+/**
+ * Ceiling on what the outlet may charge to haul an order, in rupiah.
+ *
+ * Each bulky product carries a [lowest_price, highest_price] band: the floor is
+ * the goods, the gap above it is the outlet's operational room. Summed across
+ * the order, that gap is the most the owner can add. Recomputed from the
+ * products on every call rather than stored, so an owner cannot widen their own
+ * ceiling after the customer has already agreed to it.
+ */
+async function materialsFeeCap(orderId: string): Promise<number> {
+  const rows = await db
+    .select({
+      quantity: orderDetailsTable.quantity,
+      lowest: productsTable.lowest_price,
+      highest: productsTable.highest_price,
+    })
+    .from(orderDetailsTable)
+    .innerJoin(productsTable, eq(productsTable.id, orderDetailsTable.product_id))
+    .where(eq(orderDetailsTable.order_id, orderId));
+
+  return rows.reduce((cap, row) => {
+    const low = Number(row.lowest ?? 0);
+    const high = Number(row.highest ?? 0);
+    // A fixed-price product (no band, or an inverted one) contributes nothing —
+    // a bag of cement riding along in a besi order doesn't raise the ceiling.
+    const gap = Math.max(0, high - low);
+    return cap + gap * Number(row.quantity ?? 0);
+  }, 0);
+}
 
 // Grace window before a customer can cancel their own order — gives the owner
 // a few minutes to start acting on it first. Mirrors the lock in
@@ -53,21 +106,35 @@ type CreateOrderBody = {
 const CUSTOMER_CANCEL_LOCK_MS = 5 * 60 * 1000;
 
 //SEARCH:: distance pricelist
+//
+// `km` is ROAD distance (see computeDeliveryFee), not straight-line. It used to
+// be the straight line, which under-read by ~40% around here: a 5 km crow-flies
+// trip is really ~8.5 km of road, so the courier rode 8.5 km and was paid the
+// 5 km rate. Every tier below now means what it says.
+//
+// The 30 km ceiling is road distance too. Previously a customer 29 km away in a
+// straight line — ~50 km by road — passed the check, and a courier accepted a
+// ride they had no way of knowing the length of.
 function deliveryFeeFromDistance(km: number): number {
-  if (km > 30) throw new Error("Jarak pengiriman melebihi batas maksimum (30 km)");
-  if (km <= 5) return 10_000;
-  if (km <= 6) return 11_000;
-  if (km <= 7) return 13_000;
-  if (km <= 8) return 16_000;
-  if (km <= 9) return 17_000;
-  if (km <= 10) return 19_000;
-  if (km <= 12) return 23_000;
-  if (km <= 14) return 25_000;
-  if (km <= 15) return 28_000;
-  if (km <= 17) return 30_000;
-  if (km <= 20) return 38_000;
-  if (km <= 25) return 45_000;
-  return 60_000;
+  const MAX_KM = 50;
+  const BASE_FEE = 10_000; // tarif dasar untuk jarak <= 5 km
+  const BASE_KM = 5; // jarak yang sudah tercover base fee
+  const RATE_PER_KM = 1_800; // tarif tambahan per km setelah base
+  const ROUNDING = 500; // dibulatkan ke atas ke kelipatan ini
+
+  // Finite check, not just `< 0`: NaN fails every comparison below, so it would
+  // slip past a sign test, sail through the arithmetic, and return NaN as a
+  // price — which String()s to the literal "NaN" in orders.delivery_fee. That is
+  // exactly how empty coordinates poisoned outlets.lat/lon before.
+  if (!Number.isFinite(km) || km < 0) throw new Error("Jarak tidak valid");
+  if (km > MAX_KM) throw new Error(`Jarak pengiriman melebihi batas maksimum (${MAX_KM} km)`);
+
+  if (km <= BASE_KM) return BASE_FEE;
+
+  const extraKm = km - BASE_KM;
+  const rawFee = BASE_FEE + extraKm * RATE_PER_KM;
+
+  return Math.ceil(rawFee / ROUNDING) * ROUNDING;
 }
 
 async function computeDeliveryFee(userId: string, outletId: number): Promise<number> {
@@ -87,14 +154,16 @@ async function computeDeliveryFee(userId: string, outletId: number): Promise<num
   if (!userLoc) throw new Error("Alamat pengiriman tidak ditemukan");
   if (!outlet) throw new Error("Outlet tidak ditemukan");
 
-  const km = haversineKm(
-    parseFloat(userLoc.lat),
-    parseFloat(userLoc.lon),
-    parseFloat(outlet.lat),
-    parseFloat(outlet.lon),
+  // Real road distance, not the straight line the courier can't actually ride.
+  // billableKm scales the straight-line fallback by the local detour factor, so
+  // an OSRM outage degrades to an approximation rather than silently reverting
+  // to the ~40% undercharge this replaced.
+  const distance = await roadDistance(
+    { lat: parseFloat(outlet.lat), lon: parseFloat(outlet.lon) },
+    { lat: parseFloat(userLoc.lat), lon: parseFloat(userLoc.lon) },
   );
 
-  return deliveryFeeFromDistance(km);
+  return deliveryFeeFromDistance(billableKm(distance));
 }
 
 // Owner or employee with the activeOrders permission → outlet {id}, else null.
@@ -149,15 +218,22 @@ export async function orderRoutes(app: FastifyInstance) {
     const isService = data.fulfillment === "service";
 
     try {
-      // Service orders have no courier/delivery, so there's no delivery fee to
-      // compute (and no drop-off location to compute it from).
+      // Jasa is the customer's own choice; everything else is decided from the
+      // cart. A bulky item routes the order to the outlet's driver.
+      const lane = isService ? "service" : await resolveLane(data.items);
+
+      // Neither no-courier lane has a distance fee: jasa has no goods to move,
+      // and a materials haul is quoted by the owner into delivery_fee once they
+      // have seen the address (see /api/orders/confirm-materials).
+      const chargesDistanceFee = lane === "delivery";
+
       const [[customer], delivery_fee, [outlet]] = await Promise.all([
         db
           .select({ id: customersTable.id })
           .from(customersTable)
           .where(eq(customersTable.user_id, session.user.id))
           .limit(1),
-        isService ? Promise.resolve(0) : computeDeliveryFee(session.user.id, data.outlet_id),
+        chargesDistanceFee ? computeDeliveryFee(session.user.id, data.outlet_id) : Promise.resolve(0),
         db
           .select({ user_id: outletsTable.user_id, name: outletsTable.name })
           .from(outletsTable)
@@ -173,7 +249,7 @@ export async function orderRoutes(app: FastifyInstance) {
           customer_id: customer.id,
           outlet_id: data.outlet_id,
           courier_id: null,
-          fulfillment: isService ? "service" : "delivery",
+          fulfillment: lane,
           status: "pending",
           promo_id: data.promo_id,
           discount_amount: data.discount_amount?.toString(),
@@ -239,6 +315,7 @@ export async function orderRoutes(app: FastifyInstance) {
     const [order] = await db
       .select({
         status: ordersTable.status,
+        fulfillment: ordersTable.fulfillment,
         updatedAt: ordersTable.updatedAt,
         createdAt: ordersTable.createdAt,
       })
@@ -251,8 +328,16 @@ export async function orderRoutes(app: FastifyInstance) {
       return reply.status(400).send({ success: false, error: "Order tidak dapat dibatalkan" });
     }
 
+    // A just-quoted materials order is exempt from the grace window. The lock
+    // exists to stop a customer yanking a fresh order before the owner has had a
+    // chance to act on it — but here the owner has just named a haul price the
+    // customer never saw at checkout, and confirm-materials stamps updatedAt, so
+    // the lock would restart at the exact moment they need to say no. Refusing
+    // the price is the whole point of this step; it cannot be rate-limited.
+    const respondingToQuote = order.fulfillment === "materials" && order.status === "confirmed";
+
     const since = (order.updatedAt ?? order.createdAt).getTime();
-    if (Date.now() - since < CUSTOMER_CANCEL_LOCK_MS) {
+    if (!respondingToQuote && Date.now() - since < CUSTOMER_CANCEL_LOCK_MS) {
       return reply.status(400).send({ success: false, error: "Pesanan baru bisa dibatalkan setelah 5 menit" });
     }
 
@@ -351,9 +436,14 @@ export async function orderRoutes(app: FastifyInstance) {
         and(
           eq(ordersTable.id, orderId),
           eq(ordersTable.outlet_id, outlet.id),
-          // Delivery orders need a courier assigned before they can be "ready";
-          // service orders have no courier, so allow them through.
-          or(isNotNull(ordersTable.courier_id), eq(ordersTable.fulfillment, "service")),
+          // Delivery orders need a courier assigned before they can be "ready".
+          // The two courier-less lanes have none by design, so allow them
+          // through — without materials here the owner could never mark a
+          // bahan-bangunan order ready and the update would match zero rows.
+          or(
+            isNotNull(ordersTable.courier_id),
+            inArray(ordersTable.fulfillment, ["service", "materials"]),
+          ),
           or(eq(ordersTable.status, "confirmed"), eq(ordersTable.status, "preparing")),
         ),
       );
@@ -544,6 +634,136 @@ export async function orderRoutes(app: FastifyInstance) {
     }
   });
 
+  // Everything the owner needs to price a haul: the ceiling, and — the part that
+  // actually decides the number — where the load is going and how far that is.
+  //
+  // An address string on its own is not enough to quote against; the owner has
+  // to know the distance. Same drop-off the courier lane uses (the customer's
+  // default location), so both lanes agree on where an order goes.
+  app.get("/api/orders/:orderId/materials-quote", async (request, reply) => {
+    const ctx = await requireOwnerOutlet(request, reply);
+    if (!ctx) return;
+
+    const { orderId } = request.params as { orderId: string };
+    const [row] = await db
+      .select({
+        fulfillment: ordersTable.fulfillment,
+        address: locationsTable.address,
+        note: locationsTable.note,
+        label: locationsTable.label,
+        lat: locationsTable.lat,
+        lon: locationsTable.lon,
+        outletLat: outletsTable.lat,
+        outletLon: outletsTable.lon,
+      })
+      .from(ordersTable)
+      .innerJoin(customersTable, eq(ordersTable.customer_id, customersTable.id))
+      .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))
+      // leftJoin: a customer with no saved default address must still let the
+      // owner open the quote form — they just won't get a distance.
+      .leftJoin(
+        locationsTable,
+        and(
+          eq(locationsTable.user_id, customersTable.user_id),
+          eq(locationsTable.is_default, true),
+        ),
+      )
+      .where(and(eq(ordersTable.id, orderId), eq(ordersTable.outlet_id, ctx.outlet.id)))
+      .limit(1);
+
+    if (!row) return reply.status(404).send({ success: false, error: "Order tidak ditemukan" });
+    if (row.fulfillment !== "materials")
+      return reply.status(400).send({ success: false, error: "Bukan order bahan bangunan" });
+
+    const hasCoords = row.lat != null && row.lon != null;
+    // Real driving distance, not the straight line. Around here roads run ~1.75x
+    // the crow-flies distance, so a straight-line figure would have the owner
+    // quoting a haul at nearly half its true length. Falls back to haversine if
+    // routing is unavailable, and says which one it used.
+    const distance = hasCoords
+      ? await roadDistance(
+          { lat: parseFloat(row.outletLat), lon: parseFloat(row.outletLon) },
+          { lat: parseFloat(row.lat!), lon: parseFloat(row.lon!) },
+        )
+      : null;
+
+    return reply.send({
+      success: true,
+      cap: await materialsFeeCap(orderId),
+      distanceKm: distance === null ? null : Math.round(distance.km * 10) / 10,
+      // 'road' = actual driving route; 'straight' = routing was unavailable and
+      // this is the crow-flies distance, which will read short.
+      distanceSource: distance?.source ?? null,
+      driveMinutes:
+        distance?.minutes == null ? null : Math.round(distance.minutes),
+      dropoff: hasCoords
+        ? {
+            label: row.label,
+            address: row.address,
+            note: row.note,
+            lat: row.lat,
+            lon: row.lon,
+          }
+        : null,
+    });
+  });
+
+  // Owner accepts a pending materials order at a haul price they choose, once
+  // they have seen the address. The goods keep their own fixed prices — only the
+  // delivery fee is set here, bounded by the products' price bands.
+  // pending -> confirmed.
+  app.post("/api/orders/confirm-materials", async (request, reply) => {
+    const ctx = await requireOwnerOutlet(request, reply);
+    if (!ctx) return;
+
+    const { orderId, delivery_fee } =
+      (request.body as { orderId?: string; delivery_fee?: number | string }) ?? {};
+    if (!orderId || delivery_fee == null) {
+      return reply.status(400).send({ success: false, error: "orderId dan delivery_fee wajib diisi" });
+    }
+    const fee = Number(delivery_fee);
+    if (!Number.isFinite(fee) || fee < 0) {
+      return reply.status(400).send({ success: false, error: "Ongkos angkut tidak valid" });
+    }
+
+    try {
+      const [row] = await db
+        .select({ status: ordersTable.status, fulfillment: ordersTable.fulfillment })
+        .from(ordersTable)
+        .where(and(eq(ordersTable.id, orderId), eq(ordersTable.outlet_id, ctx.outlet.id)))
+        .limit(1);
+
+      if (!row) return reply.status(404).send({ success: false, error: "Order tidak ditemukan" });
+      if (row.fulfillment !== "materials")
+        return reply.status(400).send({ success: false, error: "Bukan order bahan bangunan" });
+      if (row.status !== "pending")
+        return reply.status(400).send({ success: false, error: "Order tidak lagi menunggu konfirmasi" });
+
+      // Recomputed here, never taken from the request: the customer agreed to a
+      // ceiling at checkout, and the owner must not be able to raise it after.
+      const cap = await materialsFeeCap(orderId);
+      if (fee > cap) {
+        return reply
+          .status(400)
+          .send({ success: false, error: `Ongkos angkut maksimal ${cap}` });
+      }
+
+      const updated = await db
+        .update(ordersTable)
+        .set({ delivery_fee: String(fee), status: "confirmed", updatedAt: new Date() })
+        .where(and(eq(ordersTable.id, orderId), eq(ordersTable.status, "pending")))
+        .returning({ id: ordersTable.id });
+
+      if (updated.length === 0)
+        return reply.status(400).send({ success: false, error: "Order tidak lagi menunggu konfirmasi" });
+
+      return reply.send({ success: true, delivery_fee: fee });
+    } catch (error: any) {
+      app.log.error(error, "Failed to confirm materials order");
+      return reply.status(400).send({ success: false, error: error.message ?? "Gagal mengonfirmasi order" });
+    }
+  });
+
   // Owner sets the appointment time and an optional discount (amount or percent,
   // stored resolved into discount_amount). confirmed -> preparing.
   app.post("/api/orders/schedule-service", async (request, reply) => {
@@ -703,6 +923,122 @@ export async function orderRoutes(app: FastifyInstance) {
       return reply.send({ success: true });
     } catch (error: any) {
       app.log.error(error, "Failed to accept service order");
+      return reply.status(400).send({ success: false, error: error.message ?? "Gagal menyelesaikan order" });
+    }
+  });
+
+  // Owner's driver has left with the load. ready -> on_delivery. Distinct from
+  // confirm-pickup, which hands the order to a courier and stamps courier_id;
+  // here there is no courier and the outlet is carrying its own goods.
+  app.post("/api/orders/dispatch-materials", async (request, reply) => {
+    const ctx = await requireOwnerOutlet(request, reply);
+    if (!ctx) return;
+
+    const { orderId } = (request.body as { orderId?: string }) ?? {};
+    if (!orderId) return reply.status(400).send({ success: false, error: "orderId wajib diisi" });
+
+    const res = await db
+      .update(ordersTable)
+      .set({ status: "on_delivery", updatedAt: new Date() })
+      .where(
+        and(
+          eq(ordersTable.id, orderId),
+          eq(ordersTable.outlet_id, ctx.outlet.id),
+          eq(ordersTable.fulfillment, "materials"),
+          eq(ordersTable.status, "ready"),
+        ),
+      )
+      .returning({ id: ordersTable.id });
+
+    if (res.length === 0)
+      return reply.status(400).send({ success: false, error: "Order tidak dapat dikirim" });
+    return reply.send({ success: true });
+  });
+
+  // Customer confirms the load arrived. Books the outlet's cash-in and finalises.
+  // on_delivery -> delivered.
+  //
+  // Separate from accept-service rather than shared with it, because the money
+  // differs: a jasa order books the agreed price alone, while a materials order
+  // books the goods PLUS the haul the owner quoted into delivery_fee. Folding
+  // both into one endpoint would mean one of the two silently loses revenue.
+  app.post("/api/orders/accept-materials", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
+
+    const { orderId } = (request.body as { orderId?: string }) ?? {};
+    if (!orderId) return reply.status(400).send({ success: false, error: "orderId wajib diisi" });
+
+    try {
+      const [customer] = await db
+        .select({ id: customersTable.id })
+        .from(customersTable)
+        .where(eq(customersTable.user_id, session.user.id))
+        .limit(1);
+      if (!customer) return reply.status(403).send({ success: false, error: "Customer not found" });
+
+      await db.transaction(async (tx) => {
+        const [order] = await tx
+          .select({
+            outlet_id: ordersTable.outlet_id,
+            discount: ordersTable.discount_amount,
+            delivery_fee: ordersTable.delivery_fee,
+          })
+          .from(ordersTable)
+          .where(
+            and(
+              eq(ordersTable.id, orderId),
+              eq(ordersTable.customer_id, customer.id),
+              eq(ordersTable.fulfillment, "materials"),
+              eq(ordersTable.status, "on_delivery"),
+            ),
+          )
+          .limit(1);
+        if (!order) throw new Error("Order tidak dapat diselesaikan");
+
+        const [{ sum: goods } = { sum: 0 }] = await tx
+          .select({ sum: sql<number>`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric)), 0)` })
+          .from(orderDetailsTable)
+          .where(eq(orderDetailsTable.order_id, orderId));
+
+        // The haul is the outlet's own revenue here — no courier is taking a cut.
+        const net = Math.max(
+          0,
+          Number(goods) + Number(order.delivery_fee ?? 0) - Number(order.discount ?? 0),
+        );
+
+        const [idCategory] = await tx
+          .select({ id: cashInCategoryTable.id })
+          .from(cashInCategoryTable)
+          .where(eq(cashInCategoryTable.category, CATEGORY_IN[0]))
+          .limit(1);
+        if (!idCategory) throw new Error("Kategori kas masuk belum ada");
+
+        const cashIn = await tx
+          .insert(cashInDetailTable)
+          .values({ category_id: idCategory.id, money_amount: String(net), type: "cash" })
+          .returning({ id: cashInDetailTable.id });
+
+        await tx.insert(cashFlows).values({
+          outlet_id: Number(order.outlet_id),
+          cash_opname: "cash",
+          cash_in_detail_id: cashIn[0].id,
+        });
+
+        await tx
+          .update(orderDetailsTable)
+          .set({ status: "checkout" })
+          .where(eq(orderDetailsTable.order_id, orderId));
+
+        await tx
+          .update(ordersTable)
+          .set({ status: "delivered", updatedAt: new Date() })
+          .where(and(eq(ordersTable.id, orderId), eq(ordersTable.status, "on_delivery")));
+      });
+
+      return reply.send({ success: true });
+    } catch (error: any) {
+      app.log.error(error, "Failed to accept materials order");
       return reply.status(400).send({ success: false, error: error.message ?? "Gagal menyelesaikan order" });
     }
   });

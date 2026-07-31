@@ -19,6 +19,7 @@ import {
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 import { getOutletAccess, requireOutletAccess, parseActiveOutletId } from "../lib/outlet-access";
+import { recalcOutletFeatures } from "../lib/outlet-features";
 
 const UPLOADS_ROOT = path.join(process.cwd(), "uploads");
 const PRODUCTS_DIR = path.join(UPLOADS_ROOT, "products");
@@ -39,6 +40,9 @@ type AddProductInput = {
   features?: string[];
   is_for_sale?: boolean;
   track_stock?: boolean;
+  // false = too bulky for a courier; decides the order's fulfillment at
+  // checkout, not the customer. See products.courier_deliverable in schema.ts.
+  courier_deliverable?: boolean;
   // Service products: a negotiable price range. When lowest_price is set the
   // product is treated as a service (price mirrors lowest_price, no stock).
   lowest_price?: string;
@@ -66,20 +70,51 @@ async function findBarcodeConflict(outletId: number, barcode: string, excludePro
   return conflict;
 }
 
-// A service product is priced by range. Mirror `price`/`price_mark_down` to the
-// lowest price so existing "mulai dari" customer displays keep working, and force
-// track_stock off (services hold no countable stock).
-function serviceProductFields(data: Partial<AddProductInput>) {
-  const isService = data.lowest_price != null && data.lowest_price !== "";
-  if (!isService) return null;
+// Two kinds of product are priced by a [lowest, highest] range, and they are NOT
+// the same thing:
+//
+//   jasa      — the range is the price itself, negotiated per job. No stock.
+//   materials — the goods have a fixed price (the range floor); the band above it
+//               is the outlet's haul cost, quoted per order into delivery_fee.
+//               Besi and keramik are counted in batang and dus, so stock stays on.
+//
+// `lowest_price != null` used to imply "service" on its own. It can't any more —
+// the discriminator is courier_deliverable, which is forced true for every
+// category that doesn't ask the question (see resolveCourierDeliverable), so only
+// bulky goods can be both ranged and undeliverable.
+// `courierDeliverable` must be the RESOLVED value (post resolveCourierDeliverable),
+// not the raw body field: a client sending courier_deliverable:false on a makanan
+// product gets forced back to true, and the pricing must agree with that.
+function rangePricedFields(data: Partial<AddProductInput>, courierDeliverable: boolean) {
+  const hasRange = data.lowest_price != null && data.lowest_price !== "";
+  if (!hasRange) return null;
+
+  const isMaterials = courierDeliverable === false;
   return {
     lowest_price: data.lowest_price!,
     highest_price: data.highest_price ?? data.lowest_price!,
+    // Mirrored so existing "mulai dari" customer displays keep working.
     price: data.lowest_price!,
     price_mark_down: data.lowest_price!,
-    track_stock: false,
+    // Forcing this off for materials would silently wipe a hardware store's
+    // inventory the moment they set a delivery band on a product.
+    ...(isMaterials ? {} : { track_stock: false }),
     discount_percent: null,
   };
+}
+
+// Only mart and building materials can hold something a courier can't carry, so
+// only they are asked in the product form. Mirrored here rather than trusted
+// from the client: a stale `false` on a makanan product would silently route
+// the customer's order down the no-courier flow with no UI showing why.
+const COURIER_QUESTION_CATEGORIES = new Set(["mart", "bahan bangunan"]);
+
+function resolveCourierDeliverable(
+  category: string | undefined,
+  value: boolean | undefined,
+): boolean {
+  if (!category || !COURIER_QUESTION_CATEGORIES.has(category)) return true;
+  return value ?? true;
 }
 
 async function requireUser(request: any, reply: any) {
@@ -105,15 +140,26 @@ export async function productRoutes(app: FastifyInstance) {
     if (!access) return reply.send({ outlet: null, products: [] });
     const outlet = access.outlet;
 
-    const products = await db
+    const rows = await db
       .select()
       .from(productsTable)
+      .leftJoin(menuGroupsTable, eq(productsTable.menu_group_id, menuGroupsTable.id))
       .where(
         and(
           eq(productsTable.outlet_id, outlet.id),
           isNull(productsTable.deletedAt),
         ),
       );
+
+    // Flattened back to bare product rows: faktur and stok also read this
+    // endpoint and index straight into product fields, so the join must not
+    // change the shape. The section name rides along as two extra keys, which
+    // the cashier uses for its tabs the same way the customer menu does.
+    const products = rows.map((r) => ({
+      ...r.products,
+      menu_group: r.menu_groups?.name ?? null,
+      menu_group_order: r.menu_groups?.sort_order ?? null,
+    }));
 
     return reply.send({ outlet, products });
   });
@@ -124,7 +170,8 @@ export async function productRoutes(app: FastifyInstance) {
     try {
       const data = request.body as AddProductInput;
       const id = crypto.randomUUID();
-      const service = serviceProductFields(data);
+      const courierDeliverable = resolveCourierDeliverable(data.category, data.courier_deliverable);
+      const ranged = rangePricedFields(data, courierDeliverable);
       const barcode = normalizeBarcode(data.barcode);
 
       if (barcode) {
@@ -141,8 +188,8 @@ export async function productRoutes(app: FastifyInstance) {
         await db.insert(productsTable).values({
           id,
           product_name: data.product_name,
-          price: service?.price ?? data.price,
-          price_mark_down: service?.price_mark_down ?? data.price_mark_down,
+          price: ranged?.price ?? data.price,
+          price_mark_down: ranged?.price_mark_down ?? data.price_mark_down,
           buying_price: data.buying_price,
           // Pinned to the caller's outlet — body.outlet_id is ignored.
           outlet_id: access.outlet.id,
@@ -153,9 +200,12 @@ export async function productRoutes(app: FastifyInstance) {
           image: data.image || "avatar.png",
           features: data.features ?? [],
           is_for_sale: data.is_for_sale ?? true,
-          track_stock: service ? false : (data.track_stock ?? true),
-          lowest_price: service?.lowest_price ?? null,
-          highest_price: service?.highest_price ?? null,
+          // rangePricedFields only pins track_stock off for jasa; bulky goods
+          // keep counting theirs, so fall through to the owner's choice.
+          track_stock: ranged?.track_stock ?? data.track_stock ?? true,
+          courier_deliverable: courierDeliverable,
+          lowest_price: ranged?.lowest_price ?? null,
+          highest_price: ranged?.highest_price ?? null,
           barcode: barcode ?? null,
         });
       } catch (err: any) {
@@ -166,6 +216,10 @@ export async function productRoutes(app: FastifyInstance) {
         }
         throw err;
       }
+
+      // outlets.features is derived, never owner-edited: a new product may put
+      // the outlet into a category it wasn't browsable under before.
+      await recalcOutletFeatures(access.outlet.id);
 
       return reply.send({ success: true, message: "Product added successfully." });
     } catch (error) {
@@ -291,10 +345,14 @@ export async function productRoutes(app: FastifyInstance) {
           .update(productsTable)
           .set({ deletedAt: new Date() })
           .where(eq(productsTable.id, productId));
+        // Archiving the outlet's last product of a category drops that feature,
+        // so the outlet stops being listed under it straight away.
+        await recalcOutletFeatures(access.outlet.id);
         return reply.send({ success: true, message: "Product archived (punya riwayat penjualan)." });
       }
 
       await db.delete(productsTable).where(eq(productsTable.id, productId));
+      await recalcOutletFeatures(access.outlet.id);
       // Unlink the image only after the row delete succeeded, so a failed
       // delete can't orphan the product from its picture.
       if (product.image?.startsWith(PRODUCTS_URL_PREFIX)) {
@@ -325,14 +383,25 @@ export async function productRoutes(app: FastifyInstance) {
       }
 
       const [existing] = await db
-        .select({ outlet_id: productsTable.outlet_id })
+        .select({
+          outlet_id: productsTable.outlet_id,
+          category: productsTable.category,
+          courier_deliverable: productsTable.courier_deliverable,
+        })
         .from(productsTable)
         .where(eq(productsTable.id, productId))
         .limit(1);
       if (!existing || existing.outlet_id !== access.outlet.id)
         return reply.send({ success: false, message: "Product not found" });
 
-      const service = serviceProductFields(data);
+      // Fall back to the stored row for anything the caller omitted. Resolving
+      // against the body alone would flip a besi product back to "deliverable"
+      // on any partial update that didn't happen to resend the flag.
+      const courierDeliverable = resolveCourierDeliverable(
+        data.category ?? existing.category,
+        data.courier_deliverable ?? existing.courier_deliverable,
+      );
+      const ranged = rangePricedFields(data, courierDeliverable);
       const barcode = normalizeBarcode(data.barcode);
 
       if (barcode) {
@@ -350,8 +419,8 @@ export async function productRoutes(app: FastifyInstance) {
           .update(productsTable)
           .set({
             product_name: data.product_name,
-            price: service?.price ?? data.price,
-            price_mark_down: service?.price_mark_down ?? data.price_mark_down,
+            price: ranged?.price ?? data.price,
+            price_mark_down: ranged?.price_mark_down ?? data.price_mark_down,
             buying_price: data.buying_price,
             category: data.category,
             ...(data.menu_group_id !== undefined && { menu_group_id: data.menu_group_id }),
@@ -360,9 +429,21 @@ export async function productRoutes(app: FastifyInstance) {
             ...(data.image && { image: data.image }),
             ...(data.features !== undefined && { features: data.features }),
             ...(data.is_for_sale !== undefined && { is_for_sale: data.is_for_sale }),
+            // Always rewritten: moving a product out of mart/bahan bangunan has
+            // to clear any `false` it was carrying, and the resolved value
+            // already accounts for fields the caller omitted.
+            courier_deliverable: courierDeliverable,
             ...(barcode !== undefined && { barcode }),
-            ...(service
-              ? { lowest_price: service.lowest_price, highest_price: service.highest_price, track_stock: false, discount_percent: null }
+            ...(ranged
+              ? {
+                  lowest_price: ranged.lowest_price,
+                  highest_price: ranged.highest_price,
+                  discount_percent: null,
+                  // Present only for jasa — materials keep their real stock.
+                  ...(ranged.track_stock !== undefined
+                    ? { track_stock: ranged.track_stock }
+                    : data.track_stock !== undefined && { track_stock: data.track_stock }),
+                }
               : data.track_stock !== undefined && { track_stock: data.track_stock }),
           })
           .where(eq(productsTable.id, productId));
@@ -372,6 +453,10 @@ export async function productRoutes(app: FastifyInstance) {
         }
         throw err;
       }
+
+      // Both `category` and `is_for_sale` are editable here, and either can add
+      // or remove a feature — including removing the outlet's last one.
+      await recalcOutletFeatures(access.outlet.id);
 
       return reply.send({ success: true, message: "Product updated successfully." });
     } catch (error) {
