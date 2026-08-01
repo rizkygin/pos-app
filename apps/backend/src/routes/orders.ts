@@ -19,6 +19,7 @@ import { getOutletAccess, hasPermission, parseActiveOutletId, getSubscriptionGat
 import { CATEGORY_IN } from "../lib/cashflow-categories";
 import { roadDistance, billableKm } from "../lib/utils/road-distance";
 import { sendPushToUser } from "../lib/push";
+import { dispatchNextOffer, supersedeOffers } from "../lib/dispatch";
 
 type NoteJson = {
   location: {
@@ -411,6 +412,12 @@ export async function orderRoutes(app: FastifyInstance) {
       .returning({ id: ordersTable.id });
 
     if (res.length === 0) return reply.status(400).send({ success: false, error: "Order tidak dapat dibatalkan" });
+
+    // A courier still holding a clock on a cancelled order would be answering a
+    // question that no longer exists — and would take the timeout as a mark
+    // against them.
+    await supersedeOffers(orderId);
+
     return reply.send({ success: true });
   });
 
@@ -426,7 +433,7 @@ export async function orderRoutes(app: FastifyInstance) {
 
     if (!outlet) return reply.status(403).send({ success: false, error: "Not an owner" });
 
-    await db
+    const confirmed = await db
       .update(ordersTable)
       .set({ status: "confirmed", updatedAt: new Date() })
       .where(
@@ -435,7 +442,22 @@ export async function orderRoutes(app: FastifyInstance) {
           eq(ordersTable.outlet_id, outlet.id),
           eq(ordersTable.status, "pending"),
         ),
-      );
+      )
+      .returning({ id: ordersTable.id, fulfillment: ordersTable.fulfillment });
+
+    // Hand it straight to a courier. Only 'delivery' enters the queue — service
+    // and materials move on the outlet's own wheels.
+    //
+    // Failure here must not fail the confirmation: the order is legitimately
+    // confirmed either way, and tickDispatch() picks up anything that never got
+    // a first offer the next time a lobby polls.
+    if (confirmed[0]?.fulfillment === "delivery") {
+      try {
+        await dispatchNextOffer(orderId);
+      } catch (err) {
+        request.log.error({ err, orderId }, "dispatch after confirm failed");
+      }
+    }
 
     return reply.send({ success: true });
   });

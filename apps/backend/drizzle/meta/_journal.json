@@ -344,6 +344,13 @@
       "when": 1785579841199,
       "tag": "0048_courier_verification",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1785604394852,
+      "tag": "0049_courier_dispatch_offers",
+      "breakpoints": true
     }
   ]
 }

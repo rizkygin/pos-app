@@ -19,6 +19,7 @@ import {
   getCourierDocuments,
   isCourierDocumentKind,
 } from "../lib/courier-documents";
+import { mayAcceptOrder, respondToOffer, supersedeOffers } from "../lib/dispatch";
 
 const DOCUMENT_DIR = path.join(process.cwd(), "uploads", "couriers");
 const DOCUMENT_URL_PREFIX = "/uploads/couriers/";
@@ -142,6 +143,17 @@ export async function courierRoutes(app: FastifyInstance) {
         .send({ success: false, error: "Selesaikan pesanan aktif kamu sebelum menerima order baru" });
     }
 
+    // Dispatch gate. Either this courier holds the live offer, or the order has
+    // fallen through to the open pool where the old first-come rule still
+    // applies. Without this, a courier could accept an order that was offered to
+    // someone else by calling the endpoint directly — which is the race this
+    // whole change removes.
+    if (!(await mayAcceptOrder(courierId, orderId))) {
+      return reply
+        .status(409)
+        .send({ success: false, error: "Order ini sedang ditawarkan ke kurir lain" });
+    }
+
     const updated = await db
       .update(ordersTable)
       .set({ courier_id: courierId, status: "preparing", updatedAt: new Date() })
@@ -160,6 +172,40 @@ export async function courierRoutes(app: FastifyInstance) {
 
     if (updated.length === 0) {
       return reply.status(409).send({ success: false, error: "Order sudah diambil kurir lain" });
+    }
+
+    // Close their offer, then retire anyone else's. The second call matters for
+    // the open-pool case, where several couriers can be looking at the same
+    // order and only one of them just won it.
+    await respondToOffer(courierId, orderId, "accepted");
+    await supersedeOffers(orderId);
+
+    return reply.send({ success: true });
+  });
+
+  /**
+   * Courier turns down the order they were offered.
+   *
+   * Declining is a first-class answer, not a timeout: it passes the order on
+   * immediately instead of making the customer wait out a clock nobody is
+   * watching, and it keeps "said no" distinguishable from "never looked" in the
+   * courier's record.
+   */
+  app.post("/api/courier/decline-order", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
+
+    const courierId = await getCourierId(session.user.id);
+    if (!courierId) return reply.status(403).send({ success: false, error: "Not a courier" });
+
+    const { orderId } = (request.body as { orderId?: string }) ?? {};
+    if (!orderId) return reply.status(400).send({ success: false, error: "orderId wajib diisi" });
+
+    const ok = await respondToOffer(courierId, orderId, "declined");
+    if (!ok) {
+      return reply
+        .status(409)
+        .send({ success: false, error: "Tawaran ini sudah tidak berlaku" });
     }
 
     return reply.send({ success: true });

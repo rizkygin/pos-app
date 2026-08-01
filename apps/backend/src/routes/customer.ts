@@ -16,6 +16,7 @@ import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 import { attachOrderItems } from "../lib/utils/order-items";
 import { getCourierAvailability } from "../lib/utils/courier-availability";
+import { tickDispatch, visibleOrderIdsFor } from "../lib/dispatch";
 import { getOutletByUserId } from "../lib/outlet-id";
 import { parseCoordPair } from "../lib/utils/coords";
 import { deliveryEta } from "../lib/utils/delivery-eta";
@@ -228,6 +229,11 @@ export async function customerRoutes(app: FastifyInstance) {
 
     if (!courier) return reply.status(403).send({ success: false, error: "Not a courier" });
 
+    // Expire what is due and move those orders on, before deciding what this
+    // courier can see. The lobby polls every two seconds, so this is what keeps
+    // the queue flowing without a scheduler process.
+    await tickDispatch();
+
     const availability = await getCourierAvailability(courier.id);
 
     if (!availability.canReceiveOrder) {
@@ -236,6 +242,29 @@ export async function customerRoutes(app: FastifyInstance) {
         orders: [],
         canReceiveOrder: false,
         reason: !availability.isOnline ? "offline" : "busy",
+        ratingStatus: availability.ratingStatus,
+        delaySeconds: availability.delaySeconds,
+      };
+    }
+
+    // What this courier may see: the one order they have been offered, plus
+    // anything that has fallen through to the open pool. Not "every confirmed
+    // order", which is what made staring at the lobby the way to earn.
+    const { offeredOrderId, offerExpiresAt, openPoolOrderIds } =
+      await visibleOrderIdsFor(courier.id);
+
+    const visibleIds = [offeredOrderId, ...openPoolOrderIds].filter(
+      (id): id is string => id !== null,
+    );
+
+    if (visibleIds.length === 0) {
+      return {
+        success: true,
+        orders: [],
+        canReceiveOrder: true,
+        reason: null,
+        offeredOrderId: null,
+        offerExpiresAt: null,
         ratingStatus: availability.ratingStatus,
         delaySeconds: availability.delaySeconds,
       };
@@ -263,16 +292,22 @@ export async function customerRoutes(app: FastifyInstance) {
           // Service and materials orders are courier-less by design — the
           // outlet moves those itself, so they never reach the courier lobby.
           eq(ordersTable.fulfillment, "delivery"),
+          inArray(ordersTable.id, visibleIds),
         ),
       )
       .orderBy(ordersTable.createdAt);
 
-    const visibleOrders = availability.delaySeconds > 0
-      ? orders.filter((order) => {
-        const ageMs = Date.now() - new Date(order.createdAt!).getTime();
-        return ageMs >= availability.delaySeconds * 1000;
-      })
-      : orders;
+    // Probation still slows the open pool — it is the only place first-come
+    // still decides anything, so it is the only place the handicap can apply.
+    // A direct offer is never delayed: it is already this courier's turn.
+    const visibleOrders =
+      availability.delaySeconds > 0
+        ? orders.filter((order) => {
+            if (order.orderId === offeredOrderId) return true;
+            const ageMs = Date.now() - new Date(order.createdAt!).getTime();
+            return ageMs >= availability.delaySeconds * 1000;
+          })
+        : orders;
 
     const ordersWithItems = await attachOrderItems(visibleOrders);
 
@@ -281,6 +316,10 @@ export async function customerRoutes(app: FastifyInstance) {
       orders: ordersWithItems,
       canReceiveOrder: true,
       reason: null,
+      // The UI needs both: which card is a personal offer, and when its clock
+      // runs out, so it can show a countdown instead of a silent disappearance.
+      offeredOrderId,
+      offerExpiresAt,
       ratingStatus: availability.ratingStatus,
       delaySeconds: availability.delaySeconds,
     };

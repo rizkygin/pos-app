@@ -12,6 +12,7 @@ import {
   numeric,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import { timestamps } from './columns.helper';
 
 export const VEHICLE_TYPE = pgEnum('vechile_type', ['car', 'motorcycle']);
@@ -24,6 +25,19 @@ export const COURIER_VERIFICATION_STATUS = pgEnum('courier_verification_status',
   'pending',
   'approved',
   'rejected',
+]);
+
+// A dispatch offer's life. 'superseded' is separate from 'expired' on purpose:
+// expired means a courier was given the order and let the clock run out (which
+// belongs in their record), superseded means dispatch moved on for a reason
+// that isn't their fault — the order was cancelled, or somebody else got there
+// first through the open pool.
+export const OFFER_STATE = pgEnum('offer_state', [
+  'offered',
+  'accepted',
+  'declined',
+  'expired',
+  'superseded',
 ]);
 
 // The exact set an applicant must produce. Fixed slots, not a free-form gallery:
@@ -382,6 +396,11 @@ export const ordersTable = pgTable(
     note: json('note'),
     rejected_by: REJECTED_BY('rejected_by'),
     rejected_reason: varchar('rejected_reason', { length: 255 }),
+    // Set when sequential dispatch has run out of couriers to offer this order
+    // to. From that moment it falls back to the old free-for-all lobby, visible
+    // to everyone who is online — a stuck order helps nobody, so exhausting the
+    // queue must degrade to "anyone can take it", never to silence.
+    offer_pool_opened_at: timestamp('offer_pool_opened_at', { withTimezone: true }),
     ...timestamps,
   },
   (table) => [
@@ -391,6 +410,53 @@ export const ordersTable = pgTable(
     index('outlet_id_idx').on(table.outlet_id),
     index('orders_outlet_status_idx').on(table.outlet_id, table.status),
     index('orders_courier_status_idx').on(table.courier_id, table.status),
+  ],
+);
+
+/**
+ * One order offered to one courier, with a clock on it.
+ *
+ * This replaces first-come-first-served. Under the old rule every online
+ * courier saw every confirmed order and the fastest tap won, which meant the
+ * only way to earn was to sit staring at the lobby — the exact behaviour that
+ * makes couriers keep the app open in traffic.
+ *
+ * Offers are sequential: at most one live offer per order, enforced by the
+ * partial unique index below. When it expires or is declined the next courier
+ * gets it, and when the queue is exhausted the order falls back to the open
+ * pool (orders.offer_pool_opened_at).
+ *
+ * Rows are kept after they resolve. Who was offered what, and who let the clock
+ * run out, is the record behind any later argument about fairness.
+ */
+export const orderOffersTable = pgTable(
+  'order_offers',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    order_id: text('order_id')
+      .notNull()
+      .references(() => ordersTable.id, { onDelete: 'cascade' }),
+    courier_id: integer('courier_id')
+      .notNull()
+      .references(() => couriersTable.id, { onDelete: 'cascade' }),
+    state: OFFER_STATE('state').notNull().default('offered'),
+    // Which pass through the courier list this was. A second round happens only
+    // after everyone has been asked once, so it doubles as "how hard is this
+    // order to place" — useful when an outlet keeps getting passed over.
+    round: integer('round').notNull().default(1),
+    offered_at: timestamp('offered_at', { withTimezone: true }).defaultNow().notNull(),
+    expires_at: timestamp('expires_at', { withTimezone: true }).notNull(),
+    responded_at: timestamp('responded_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    // The core invariant: an order can have only one offer in flight. Two live
+    // offers would recreate the race this whole table exists to remove.
+    uniqueIndex('order_offers_one_live_per_order')
+      .on(table.order_id)
+      .where(sql`${table.state} = 'offered'`),
+    index('order_offers_courier_state_idx').on(table.courier_id, table.state),
+    index('order_offers_expiry_idx').on(table.state, table.expires_at),
   ],
 );
 
