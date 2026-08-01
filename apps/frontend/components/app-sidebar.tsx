@@ -292,6 +292,13 @@ const adminManageNavItems: NavItem[] = [
     iconColor: 'text-orange-600 dark:text-orange-400',
   },
   {
+    name: 'Tawaran Order',
+    url: '/dashboard/admin/courier-offers',
+    icon: ClipboardList,
+    iconBg: 'bg-violet-100 dark:bg-violet-950',
+    iconColor: 'text-violet-600 dark:text-violet-400',
+  },
+  {
     name: 'Sesi Kurir',
     url: '/dashboard/admin/courier-sessions',
     icon: Radio,

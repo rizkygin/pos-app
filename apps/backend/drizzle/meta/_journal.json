@@ -351,6 +351,13 @@
       "when": 1785604394852,
       "tag": "0049_courier_dispatch_offers",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1785611788810,
+      "tag": "0050_unique_live_role_per_user",
+      "breakpoints": true
     }
   ]
 }

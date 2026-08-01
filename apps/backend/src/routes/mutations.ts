@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "../db";
 import {
   adminsTable,
@@ -231,11 +231,21 @@ export async function mutationRoutes(app: FastifyInstance) {
       // resolves by first match, so the duplicates were invisible in the UI
       // while quietly existing in the database. Double-clicking a slow submit
       // button was enough to do it.
+      // LIVE rows only, matching the partial unique indexes exactly. Removal is
+      // soft everywhere here, and counting removed rows would permanently bar
+      // someone an admin had once taken off the platform from ever signing up
+      // again — a ban implemented by accident. The two rules have to stay
+      // identical: if this check is looser than the index, an allowed submit
+      // dies on a constraint violation instead of a readable 409.
       const [existingAdmin, existingCustomer, existingCourier, existingOutlet] = await Promise.all([
-        db.select({ id: adminsTable.id }).from(adminsTable).where(eq(adminsTable.user_id, userId)).limit(1),
-        db.select({ id: customersTable.id }).from(customersTable).where(eq(customersTable.user_id, userId)).limit(1),
-        db.select({ id: couriersTable.id }).from(couriersTable).where(eq(couriersTable.user_id, userId)).limit(1),
-        db.select({ id: outletsTable.id }).from(outletsTable).where(eq(outletsTable.user_id, userId)).limit(1),
+        db.select({ id: adminsTable.id }).from(adminsTable)
+          .where(and(eq(adminsTable.user_id, userId), isNull(adminsTable.deletedAt))).limit(1),
+        db.select({ id: customersTable.id }).from(customersTable)
+          .where(and(eq(customersTable.user_id, userId), isNull(customersTable.deletedAt))).limit(1),
+        db.select({ id: couriersTable.id }).from(couriersTable)
+          .where(and(eq(couriersTable.user_id, userId), isNull(couriersTable.deletedAt))).limit(1),
+        db.select({ id: outletsTable.id }).from(outletsTable)
+          .where(and(eq(outletsTable.user_id, userId), isNull(outletsTable.deletedAt))).limit(1),
       ]);
 
       const currentRole =

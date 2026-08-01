@@ -9,6 +9,7 @@ import {
   adminsTable,
   courierDocumentsTable,
   couriersTable,
+  orderOffersTable,
   courierSessionsTable,
   customersTable,
   ordersTable,
@@ -1246,6 +1247,99 @@ export async function adminRoutes(app: FastifyInstance) {
   //
   // Returns two lists rather than one paginated feed: "who is on shift right
   // now" is the operational question, and it must not get buried under history.
+  /**
+   * Who answers dispatch offers, and who lets them run out.
+   *
+   * Two shapes in one response because they answer two different questions.
+   * The per-courier summary is the one that matters for a fairness argument —
+   * "this courier ignored 8 of 10 offers" is a conversation; a single ignored
+   * offer is a red light or a bad signal. The recent log underneath it is what
+   * makes that number checkable rather than something the platform asserts.
+   *
+   * `expired` and `declined` are kept apart deliberately: declining is
+   * answering, and a courier who says no quickly is behaving better than one
+   * who lets a customer wait out the clock.
+   */
+  app.get("/api/admin/courier-offers", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
+    if (!(await requireAdmin(session.user.id))) {
+      return reply.status(403).send({ success: false, error: "Forbidden" });
+    }
+
+    const { days = "7", limit = "50" } = request.query as Record<string, string>;
+    const windowDays = Math.min(Math.max(Number(days) || 7, 1), 90);
+    const logLimit = Math.min(Math.max(Number(limit) || 50, 1), 200);
+    const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+
+    const summary = await db
+      .select({
+        courierId: couriersTable.id,
+        name: usersTable.name,
+        email: usersTable.email,
+        phone: usersTable.phone,
+        avatar: couriersTable.avatar,
+        verificationStatus: couriersTable.verification_status,
+        ratings: couriersTable.ratings,
+        offered: count(),
+        accepted: sql<number>`COUNT(*) FILTER (WHERE ${orderOffersTable.state} = 'accepted')::int`,
+        declined: sql<number>`COUNT(*) FILTER (WHERE ${orderOffersTable.state} = 'declined')::int`,
+        expired: sql<number>`COUNT(*) FILTER (WHERE ${orderOffersTable.state} = 'expired')::int`,
+        superseded: sql<number>`COUNT(*) FILTER (WHERE ${orderOffersTable.state} = 'superseded')::int`,
+        // Seconds to answer, counted only over offers actually answered —
+        // averaging in a 30-second timeout would flatter nobody and mislead
+        // everybody.
+        avgResponseSeconds: sql<number | null>`ROUND(AVG(
+          EXTRACT(EPOCH FROM (${orderOffersTable.responded_at} - ${orderOffersTable.offered_at}))
+        ) FILTER (WHERE ${orderOffersTable.state} IN ('accepted', 'declined')))::int`,
+        lastOfferedAt: sql<Date | null>`MAX(${orderOffersTable.offered_at})`,
+      })
+      .from(orderOffersTable)
+      .innerJoin(couriersTable, eq(orderOffersTable.courier_id, couriersTable.id))
+      .innerJoin(usersTable, eq(couriersTable.user_id, usersTable.id))
+      .where(gte(orderOffersTable.offered_at, since))
+      .groupBy(couriersTable.id, usersTable.name, usersTable.email, usersTable.phone)
+      // Most ignored first: that is the list an admin opened this page to see.
+      .orderBy(
+        desc(sql`COUNT(*) FILTER (WHERE ${orderOffersTable.state} = 'expired')`),
+        desc(count()),
+      );
+
+    const log = await db
+      .select({
+        id: orderOffersTable.id,
+        orderId: orderOffersTable.order_id,
+        courierId: orderOffersTable.courier_id,
+        courierName: usersTable.name,
+        state: orderOffersTable.state,
+        round: orderOffersTable.round,
+        offeredAt: orderOffersTable.offered_at,
+        respondedAt: orderOffersTable.responded_at,
+        outletName: outletsTable.name,
+        deliveryFee: ordersTable.delivery_fee,
+      })
+      .from(orderOffersTable)
+      .innerJoin(couriersTable, eq(orderOffersTable.courier_id, couriersTable.id))
+      .innerJoin(usersTable, eq(couriersTable.user_id, usersTable.id))
+      .innerJoin(ordersTable, eq(orderOffersTable.order_id, ordersTable.id))
+      .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))
+      .where(gte(orderOffersTable.offered_at, since))
+      .orderBy(desc(orderOffersTable.offered_at))
+      .limit(logLimit);
+
+    const totals = summary.reduce(
+      (acc, row) => ({
+        offered: acc.offered + Number(row.offered ?? 0),
+        accepted: acc.accepted + Number(row.accepted ?? 0),
+        declined: acc.declined + Number(row.declined ?? 0),
+        expired: acc.expired + Number(row.expired ?? 0),
+      }),
+      { offered: 0, accepted: 0, declined: 0, expired: 0 },
+    );
+
+    return reply.send({ success: true, windowDays, totals, couriers: summary, log });
+  });
+
   app.get("/api/admin/courier-sessions", async (request, reply) => {
     const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
     if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });

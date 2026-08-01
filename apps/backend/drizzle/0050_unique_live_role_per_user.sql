@@ -1,0 +1,2 @@
+CREATE UNIQUE INDEX "couriers_user_id_uq" ON "couriers" USING btree ("user_id") WHERE deleted_at IS NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX "customers_user_id_uq" ON "customers" USING btree ("user_id") WHERE deleted_at IS NULL;

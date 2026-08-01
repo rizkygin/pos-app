@@ -194,15 +194,32 @@ export const adminsTable = pgTable('admins', {
   ...timestamps,
 });
 
-export const customersTable = pgTable('customers', {
-  id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
-  user_id: text('user_id')
-    .notNull()
-    .references(() => usersTable.id),
-  ratings: numeric('ratings', { precision: 3, scale: 2 }).default('5'),
-  review_count: integer('review_count').default(0).notNull(),
-  ...timestamps,
-});
+export const customersTable = pgTable(
+  'customers',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    user_id: text('user_id')
+      .notNull()
+      .references(() => usersTable.id),
+    ratings: numeric('ratings', { precision: 3, scale: 2 }).default('5'),
+    review_count: integer('review_count').default(0).notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    // One LIVE customer row per account, enforced in the database rather than
+    // only in the handler. /api/register-role checks first, but that is
+    // check-then-insert: two submits landing together can both pass the check.
+    // The form's disabled button and the endpoint's guard are the friendly
+    // errors; this is the one that cannot be raced.
+    //
+    // Partial, because removal is soft here. A full unique index would outlaw
+    // the perfectly normal history of "registered, removed by an admin,
+    // registered again" — real rows in the dev database look exactly like that.
+    uniqueIndex('customers_user_id_uq')
+      .on(table.user_id)
+      .where(sql`deleted_at IS NULL`),
+  ],
+);
 
 /**
  * The area Ulun Pesan's couriers actually serve, as a centre + radius.
@@ -231,7 +248,9 @@ export const serviceAreaTable = pgTable('service_area', {
   ...timestamps,
 });
 
-export const couriersTable = pgTable('couriers', {
+export const couriersTable = pgTable(
+  'couriers',
+  {
   id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
   user_id: text('user_id')
     .notNull()
@@ -269,7 +288,17 @@ export const couriersTable = pgTable('couriers', {
   verified_at: timestamp('verified_at', { withTimezone: true }),
   verified_by: text('verified_by').references((): AnyPgColumn => usersTable.id),
   ...timestamps,
-});
+},
+  (table) => [
+    // Same reasoning, same partial condition as customers_user_id_uq. The
+    // register-role guard applies the identical "live rows only" rule: the two
+    // must never disagree, or a submit the handler waves through dies on a
+    // constraint violation instead of getting a readable 409.
+    uniqueIndex('couriers_user_id_uq')
+      .on(table.user_id)
+      .where(sql`deleted_at IS NULL`),
+  ],
+);
 
 /**
  * The photos an applicant submits, one row per required slot.
