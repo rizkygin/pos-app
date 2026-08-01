@@ -20,6 +20,12 @@ import {
   isCourierDocumentKind,
 } from "../lib/courier-documents";
 import { mayAcceptOrder, respondToOffer, supersedeOffers } from "../lib/dispatch";
+import {
+  registerCourierDevice,
+  resolveCourier,
+  revokeAllCourierDevices,
+  revokeCourierDevice,
+} from "../lib/courier-device";
 
 const DOCUMENT_DIR = path.join(process.cwd(), "uploads", "couriers");
 const DOCUMENT_URL_PREFIX = "/uploads/couriers/";
@@ -115,20 +121,22 @@ export async function courierRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/courier/accept-order", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
+    // Session OR device token: the offer notification's Terima button fires
+    // from the lock screen, with no WebView and no cookie in the picture.
+    const identity = await resolveCourier(request);
+    if (!identity) return reply.status(401).send({ success: false, error: "Unauthorized" });
 
-    const courier = await getCourierRow(session.user.id);
-    if (!courier) return reply.status(403).send({ success: false, error: "Not a courier" });
-    // Belt and braces with the go-online gate above: an approval can be revoked
-    // while a courier is already online, and that must stop the next order being
+    // Belt and braces with the go-online gate: an approval can be revoked while
+    // a courier is already online, and that must stop the next order being
     // claimed rather than waiting for them to go offline.
-    if (courier.status !== "approved") {
-      return reply
-        .status(403)
-        .send({ success: false, error: NOT_APPROVED_MESSAGE, verificationStatus: courier.status });
+    if (identity.verificationStatus !== "approved") {
+      return reply.status(403).send({
+        success: false,
+        error: NOT_APPROVED_MESSAGE,
+        verificationStatus: identity.verificationStatus,
+      });
     }
-    const courierId = courier.id;
+    const courierId = identity.courierId;
 
     const { orderId } = (request.body as { orderId?: string }) ?? {};
     if (!orderId) return reply.status(400).send({ success: false, error: "orderId wajib diisi" });
@@ -192,11 +200,10 @@ export async function courierRoutes(app: FastifyInstance) {
    * courier's record.
    */
   app.post("/api/courier/decline-order", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
-
-    const courierId = await getCourierId(session.user.id);
-    if (!courierId) return reply.status(403).send({ success: false, error: "Not a courier" });
+    // Same reason as accept-order: Tolak is a notification action button.
+    const identity = await resolveCourier(request);
+    if (!identity) return reply.status(401).send({ success: false, error: "Unauthorized" });
+    const courierId = identity.courierId;
 
     const { orderId } = (request.body as { orderId?: string }) ?? {};
     if (!orderId) return reply.status(400).send({ success: false, error: "orderId wajib diisi" });
@@ -353,6 +360,58 @@ export async function courierRoutes(app: FastifyInstance) {
   });
 
   /**
+   * Register this install: swap an FCM token for a device token.
+   *
+   * Session-authenticated, because this is the one moment the WebView is
+   * definitely alive and holding a cookie. Everything the native side does
+   * afterwards rides on the token minted here.
+   */
+  app.post("/api/courier/device", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
+
+    const courier = await getCourierRow(session.user.id);
+    if (!courier) return reply.status(403).send({ success: false, error: "Not a courier" });
+
+    const { fcmToken, platform, appVersion } =
+      (request.body as { fcmToken?: string; platform?: string; appVersion?: string }) ?? {};
+
+    if (typeof fcmToken !== "string" || fcmToken.length < 20) {
+      return reply.status(400).send({ success: false, error: "fcmToken tidak valid" });
+    }
+
+    const deviceToken = await registerCourierDevice({
+      courierId: courier.id,
+      fcmToken,
+      platform,
+      appVersion,
+    });
+
+    // The plaintext is returned exactly once — only its hash is stored, so a
+    // lost token is replaced by re-registering, never recovered.
+    return reply.send({ success: true, deviceToken });
+  });
+
+  /**
+   * Sign this install out — or every install, when the WebView logs out and no
+   * longer knows which device token it minted.
+   */
+  app.post("/api/courier/device/revoke", async (request, reply) => {
+    const identity = await resolveCourier(request);
+    if (!identity) return reply.status(401).send({ success: false, error: "Unauthorized" });
+
+    const { deviceToken } = (request.body as { deviceToken?: string }) ?? {};
+
+    if (typeof deviceToken === "string" && deviceToken.length > 0) {
+      await revokeCourierDevice(deviceToken);
+    } else {
+      await revokeAllCourierDevices(identity.courierId);
+    }
+
+    return reply.send({ success: true });
+  });
+
+  /**
    * Courier reports where they are, so the customer's ETA reflects reality.
    *
    * Overwrites in place — this is "where are they now", never a movement trail.
@@ -361,11 +420,11 @@ export async function courierRoutes(app: FastifyInstance) {
    * data never outlives the reason for collecting it.
    */
   app.post("/api/courier/location", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
-
-    const courierId = await getCourierId(session.user.id);
-    if (!courierId) return reply.status(403).send({ success: false, error: "Not a courier" });
+    // The reason the device token exists: this is posted by a foreground
+    // service that keeps running after the WebView is gone.
+    const identity = await resolveCourier(request);
+    if (!identity) return reply.status(401).send({ success: false, error: "Unauthorized" });
+    const courierId = identity.courierId;
 
     const { lat, lon } = (request.body as { lat?: unknown; lon?: unknown }) ?? {};
     const coords = parseCoordPair(lat, lon);
@@ -393,16 +452,15 @@ export async function courierRoutes(app: FastifyInstance) {
    * flight there is no reason to keep knowing where this person is.
    */
   app.post("/api/courier/location/clear", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
-
-    const courierId = await getCourierId(session.user.id);
-    if (!courierId) return reply.status(403).send({ success: false, error: "Not a courier" });
+    // Paired with /location, so it takes the same credentials: the service that
+    // reported the position is the one that should be able to erase it.
+    const identity = await resolveCourier(request);
+    if (!identity) return reply.status(401).send({ success: false, error: "Unauthorized" });
 
     await db
       .update(couriersTable)
       .set({ last_lat: null, last_lon: null, last_location_at: null })
-      .where(eq(couriersTable.id, courierId));
+      .where(eq(couriersTable.id, identity.courierId));
 
     return reply.send({ success: true });
   });

@@ -1307,6 +1307,49 @@ export const pushSubscriptionsTable = pgTable(
   (t) => [index('push_subscriptions_user_idx').on(t.user_id)],
 );
 
+/**
+ * One install of the courier app.
+ *
+ * Two credentials live here and they do different jobs. `fcm_token` is how the
+ * server reaches the phone. `device_token_hash` is how the phone proves who it
+ * is on the few endpoints the native side calls WITHOUT the WebView — the
+ * location service outlives the WebView by design, so it cannot borrow that
+ * component's session cookie.
+ *
+ * The device token is stored hashed, never in the clear. It is a bearer
+ * credential sitting in app storage on a phone that gets lost, so the database
+ * should not be a second place it can leak from; the plaintext is returned once
+ * at registration and never again.
+ */
+export const courierDevicesTable = pgTable(
+  'courier_devices',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    courier_id: integer('courier_id')
+      .notNull()
+      .references(() => couriersTable.id, { onDelete: 'cascade' }),
+    // Rotated by FCM whenever it feels like it; the app re-registers on
+    // onNewToken, which moves this row rather than creating a second one.
+    fcm_token: text('fcm_token').notNull(),
+    device_token_hash: text('device_token_hash').notNull(),
+    platform: varchar('platform', { length: 20 }).notNull().default('android'),
+    app_version: varchar('app_version', { length: 30 }),
+    last_seen_at: timestamp('last_seen_at', { withTimezone: true }),
+    // Set on logout. Kept rather than deleted so "this phone was signed out at
+    // 14:02" is answerable when a courier says they never got an offer.
+    revoked_at: timestamp('revoked_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    // A physical phone belongs to one courier. If a device is handed over, the
+    // new courier's registration MOVES the row instead of leaving the previous
+    // owner subscribed to offers they can no longer see.
+    uniqueIndex('courier_devices_fcm_token_uq').on(table.fcm_token),
+    uniqueIndex('courier_devices_token_hash_uq').on(table.device_token_hash),
+    index('courier_devices_courier_idx').on(table.courier_id),
+  ],
+);
+
 // Owner-defined menu sections for the public /menu/[outlet_id] page, e.g.
 // "Nasi", "Mie", "Minuman Dingin". Deliberately SEPARATE from products.category:
 // category is a fixed platform list wired to the marketplace feature browse

@@ -358,6 +358,13 @@
       "when": 1785611788810,
       "tag": "0050_unique_live_role_per_user",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1785613430324,
+      "tag": "0051_courier_devices",
+      "breakpoints": true
     }
   ]
 }
