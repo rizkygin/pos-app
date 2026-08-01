@@ -625,17 +625,21 @@ function EmptyState({ tab, reason }: { tab: Tab; reason?: string | null }) {
       bg: 'bg-violet-50 dark:bg-violet-950/30',
       ring: 'border-violet-300/50',
       title:
-        reason === 'offline'
-          ? 'Kamu Sedang Offline'
-          : reason === 'busy'
-            ? 'Selesaikan Pesanan Aktif Dulu'
-            : 'Tidak Ada Order Tersedia',
+        reason === 'not_verified'
+          ? 'Akun Belum Diverifikasi'
+          : reason === 'offline'
+            ? 'Kamu Sedang Offline'
+            : reason === 'busy'
+              ? 'Selesaikan Pesanan Aktif Dulu'
+              : 'Tidak Ada Order Tersedia',
       desc:
-        reason === 'offline'
-          ? 'Aktifkan status online untuk menerima order baru.'
-          : reason === 'busy'
-            ? 'Selesaikan pesanan yang sedang berjalan sebelum menerima order baru.'
-            : 'Belum ada pesanan yang menunggu kurir.',
+        reason === 'not_verified'
+          ? 'Admin belum menyetujui dokumen pian. Buka halaman Verifikasi Kurir untuk melengkapinya.'
+          : reason === 'offline'
+            ? 'Aktifkan status online untuk menerima order baru.'
+            : reason === 'busy'
+              ? 'Selesaikan pesanan yang sedang berjalan sebelum menerima order baru.'
+              : 'Belum ada pesanan yang menunggu kurir.',
     },
     mine: {
       icon: <ShoppingBag className="h-8 w-8 text-blue-400" />,
@@ -1165,6 +1169,34 @@ export function CourierLobby({ courierId }: { courierId: number }) {
           </div>
         )}
       </div>
+
+      {available.reason === 'not_verified' && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-6 flex items-center justify-between gap-4 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3.5 dark:border-amber-900/30 dark:bg-amber-950/20"
+        >
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-400">
+              <AlertTriangle className="h-4 w-4" />
+            </div>
+            <div>
+              <p className="text-sm font-bold text-amber-700 dark:text-amber-400">
+                Akun pian belum diverifikasi
+              </p>
+              <p className="text-xs text-amber-600/80 dark:text-amber-400/70">
+                Order tidak akan ditawarkan sampai admin menyetujui dokumen pian.
+              </p>
+            </div>
+          </div>
+          <a
+            href="/dashboard/courier-verification"
+            className="shrink-0 rounded-full bg-amber-500 px-4 py-2 text-xs font-bold text-white shadow-sm shadow-amber-500/30 transition-colors hover:bg-amber-600"
+          >
+            Lengkapi Dokumen
+          </a>
+        </motion.div>
+      )}
 
       {available.reason === 'offline' && (
         <OfflineReminderBanner onGoOnline={available.refetch} />

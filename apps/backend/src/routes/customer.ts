@@ -241,7 +241,14 @@ export async function customerRoutes(app: FastifyInstance) {
         success: true,
         orders: [],
         canReceiveOrder: false,
-        reason: !availability.isOnline ? "offline" : "busy",
+        // Verification is checked first: an unverified courier who is online
+        // and idle would otherwise be told "busy", which is both false and
+        // unactionable. Each reason has to name the thing they can fix.
+        reason: !availability.isApproved
+          ? "not_verified"
+          : !availability.isOnline
+            ? "offline"
+            : "busy",
         ratingStatus: availability.ratingStatus,
         delaySeconds: availability.delaySeconds,
       };
