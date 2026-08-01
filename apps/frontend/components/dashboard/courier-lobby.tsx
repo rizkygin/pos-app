@@ -333,8 +333,22 @@ function AvailableOrderCard({
   onOfferExpired: () => void;
 }) {
   const [isPending, startTransition] = useTransition();
-  const [expired, setExpired] = useState(false);
+  /**
+   * Which clock ran out, identified by its arrival stamp — not a bare boolean.
+   *
+   * A boolean latched here outlives the thing it describes. The card is keyed by
+   * order id, so when an order's last offer expires and the open pool opens in
+   * the same instant, React reuses this component: the card becomes a pool card
+   * that anyone may take, still wearing "Waktu habis" and a disabled button. It
+   * only bit the courier who happened to be asked last, because everyone earlier
+   * had their card unmounted while the order was invisible to them.
+   *
+   * Tying the flag to a specific clock means any new data — a fresh offer, or no
+   * offer at all — clears it by definition.
+   */
+  const [expiredClockStamp, setExpiredClockStamp] = useState<number | null>(null);
   const isOffer = !!offerClock;
+  const expired = isOffer && expiredClockStamp === offerClock.receivedAt;
   const note = noteStr(order.note?.customer_note ?? '');
   const rating = noteStr(order.note?.customer_ratings ?? '');
   const review_count = noteStr(String(order.note?.customer_review_count ?? ''));
@@ -393,7 +407,7 @@ function AvailableOrderCard({
             clock={offerClock}
             totalMs={OFFER_TTL_MS}
             onExpire={() => {
-              setExpired(true);
+              setExpiredClockStamp(offerClock.receivedAt);
               onOfferExpired();
             }}
           />
