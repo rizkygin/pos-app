@@ -49,7 +49,8 @@ import {
   ShoppingBag,
   Boxes,
   Truck,
-  Home
+  Home,
+  ShieldCheck
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -153,6 +154,13 @@ const courierNavItems: NavItem[] = [
     icon: Bike,
     iconBg: 'bg-blue-100 dark:bg-blue-950',
     iconColor: 'text-blue-600 dark:text-blue-400',
+  },
+  {
+    name: 'Verifikasi Kurir',
+    url: '/dashboard/courier-verification',
+    icon: ShieldCheck,
+    iconBg: 'bg-emerald-100 dark:bg-emerald-950',
+    iconColor: 'text-emerald-600 dark:text-emerald-400',
   },
   {
     name: 'Ratings',

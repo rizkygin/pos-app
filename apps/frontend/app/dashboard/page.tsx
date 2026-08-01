@@ -45,6 +45,8 @@ const dashboardPage = async () => {
         todayOnlineSeconds={data.todayOnlineSeconds}
         ratingStatus={data.ratingStatus}
         delaySeconds={data.delaySeconds}
+        verificationStatus={data.verificationStatus}
+        verificationNote={data.verificationNote}
       />
     );
   }

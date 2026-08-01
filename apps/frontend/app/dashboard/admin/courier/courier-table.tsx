@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { API_URL } from '@/lib/api-url';
 import { AdminCourier, getColumns } from './columns';
+import { VerificationReview } from './verification-review';
 
 export const CourierTable = () => {
   const [data, setData] = useState<AdminCourier[]>([]);
@@ -27,6 +28,7 @@ export const CourierTable = () => {
   const [search, setSearch] = useState('');
 
   const [viewing, setViewing] = useState<AdminCourier | null>(null);
+  const [verifying, setVerifying] = useState<number | null>(null);
   const [editing, setEditing] = useState<AdminCourier | null>(null);
   const [deleting, setDeleting] = useState<AdminCourier | null>(null);
   const [form, setForm] = useState<{ vehicle_plate: string; vehicle_type: 'car' | 'motorcycle' }>({
@@ -102,7 +104,12 @@ export const CourierTable = () => {
     }
   };
 
-  const columns = getColumns({ onView: setViewing, onEdit: openEdit, onDelete: setDeleting });
+  const columns = getColumns({
+    onView: setViewing,
+    onEdit: openEdit,
+    onDelete: setDeleting,
+    onVerify: (courier) => setVerifying(courier.id),
+  });
 
   return (
     <div className="space-y-4">
@@ -133,6 +140,17 @@ export const CourierTable = () => {
           count={count}
           setPage={setPage}
           setLimit={setLimit}
+        />
+      )}
+
+      {verifying !== null && (
+        <VerificationReview
+          courierId={verifying}
+          onClose={() => setVerifying(null)}
+          // Refetch rather than patch the row: approving also clears the note
+          // and stamps verified_at, and the list is the thing an admin scans
+          // next.
+          onSaved={fetchCouriers}
         />
       )}
 

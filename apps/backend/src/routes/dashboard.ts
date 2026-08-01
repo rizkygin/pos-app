@@ -162,7 +162,11 @@ export async function dashboardRoutes(app: FastifyInstance) {
     if (!session?.user) return reply.status(401).send({ ok: false });
 
     const [courier] = await db
-      .select({ id: couriersTable.id })
+      .select({
+        id: couriersTable.id,
+        verificationStatus: couriersTable.verification_status,
+        verificationNote: couriersTable.verification_note,
+      })
       .from(couriersTable)
       .where(eq(couriersTable.user_id, session.user.id))
       .limit(1);
@@ -373,6 +377,11 @@ export async function dashboardRoutes(app: FastifyInstance) {
       todayOnlineSeconds,
       ratingStatus,
       delaySeconds,
+      // Drives the dashboard's gate. Sent on every load rather than cached in a
+      // cookie or the session: an admin can approve or revoke at any moment, and
+      // the courier finding out on their next refresh is the whole point.
+      verificationStatus: courier.verificationStatus,
+      verificationNote: courier.verificationNote,
     });
   });
 

@@ -1,8 +1,9 @@
 'use client';
 
 import { Column, ColumnDef } from '@tanstack/react-table';
-import { ArrowUpDown, Bike, Car, Eye, Pencil, Star, Trash2 } from 'lucide-react';
+import { ArrowUpDown, Bike, Car, Eye, Pencil, ShieldCheck, Star, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { StatusPill } from './verification-review';
 
 export type AdminCourier = {
   id: number;
@@ -16,6 +17,10 @@ export type AdminCourier = {
   ratings: string | null;
   review_count: number;
   created_at: string | Date | null;
+  verification_status: 'pending' | 'approved' | 'rejected';
+  verification_note: string | null;
+  verified_at: string | Date | null;
+  document_count: number;
 };
 
 const sortableHeader = (label: string) =>
@@ -35,6 +40,7 @@ export type CourierHandlers = {
   onView: (courier: AdminCourier) => void;
   onEdit: (courier: AdminCourier) => void;
   onDelete: (courier: AdminCourier) => void;
+  onVerify: (courier: AdminCourier) => void;
 };
 
 export const getColumns = (handlers: CourierHandlers): ColumnDef<AdminCourier>[] => [
@@ -88,10 +94,34 @@ export const getColumns = (handlers: CourierHandlers): ColumnDef<AdminCourier>[]
     },
   },
   {
+    accessorKey: 'verification_status',
+    header: 'Verifikasi',
+    cell: ({ row }) => (
+      <div className="space-y-1">
+        <StatusPill status={row.original.verification_status} />
+        {/* Progress, not just verdict: "menunggu 4/10" and "menunggu 10/10" are
+            different queues for an admin — one is waiting on the applicant. */}
+        <p className="text-[11px] text-muted-foreground">{row.original.document_count}/10 dokumen</p>
+      </div>
+    ),
+  },
+  {
     id: 'actions',
     header: 'Aksi',
     cell: ({ row }) => (
       <div className="flex items-center gap-1">
+        <Button
+          variant="ghost"
+          size="icon"
+          title="Verifikasi dokumen"
+          onClick={() => handlers.onVerify(row.original)}
+        >
+          <ShieldCheck
+            className={`h-4 w-4 ${
+              row.original.verification_status === 'pending' ? 'text-amber-500' : ''
+            }`}
+          />
+        </Button>
         <Button variant="ghost" size="icon" title="Lihat" onClick={() => handlers.onView(row.original)}>
           <Eye className="h-4 w-4" />
         </Button>

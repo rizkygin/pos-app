@@ -124,14 +124,25 @@ export async function getCourierAvailability(courierId: number) {
     )
     .limit(1);
 
+  const [courier] = await db
+    .select({ status: couriersTable.verification_status })
+    .from(couriersTable)
+    .where(eq(couriersTable.id, courierId))
+    .limit(1);
+
   const isOnline = !!openSession;
   const hasActiveOrder = !!activeOrder;
+  const isApproved = courier?.status === 'approved';
   const ratingInfo = await getCourierRatingInfo(courierId);
 
   return {
     isOnline,
     hasActiveOrder,
+    isApproved,
     ...ratingInfo,
-    canReceiveOrder: isOnline && !hasActiveOrder,
+    // Approval belongs in the same expression as online/busy because this is
+    // the one place every "should this courier be offered work" question is
+    // answered. A separate check somewhere else is a check someone forgets.
+    canReceiveOrder: isApproved && isOnline && !hasActiveOrder,
   };
 }

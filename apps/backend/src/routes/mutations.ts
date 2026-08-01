@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { eq, sql } from "drizzle-orm";
 import { db } from "../db";
 import {
+  adminsTable,
   ordersTable,
   orderDetailsTable,
   outletsTable,
@@ -223,6 +224,45 @@ export async function mutationRoutes(app: FastifyInstance) {
       const userId = session.user.id;
       const body = (request.body as any) || {};
       const { role, data } = body;
+
+      // One role per account, enforced here rather than trusted from the form.
+      // Without this every extra submit inserted ANOTHER row — a second
+      // couriers/customers record, or a whole second outlet — and /api/me
+      // resolves by first match, so the duplicates were invisible in the UI
+      // while quietly existing in the database. Double-clicking a slow submit
+      // button was enough to do it.
+      const [existingAdmin, existingCustomer, existingCourier, existingOutlet] = await Promise.all([
+        db.select({ id: adminsTable.id }).from(adminsTable).where(eq(adminsTable.user_id, userId)).limit(1),
+        db.select({ id: customersTable.id }).from(customersTable).where(eq(customersTable.user_id, userId)).limit(1),
+        db.select({ id: couriersTable.id }).from(couriersTable).where(eq(couriersTable.user_id, userId)).limit(1),
+        db.select({ id: outletsTable.id }).from(outletsTable).where(eq(outletsTable.user_id, userId)).limit(1),
+      ]);
+
+      const currentRole =
+        existingAdmin.length > 0
+          ? "admin"
+          : existingCustomer.length > 0
+            ? "customer"
+            : existingCourier.length > 0
+              ? "courier"
+              : existingOutlet.length > 0
+                ? "owner"
+                : null;
+
+      if (currentRole) {
+        // 409 rather than 400: the request was well-formed, the account simply
+        // already has a role. `alreadyRegistered` lets the form treat a repeat
+        // submit as "you're done" and move on instead of showing an error for
+        // something the user already achieved.
+        return reply.status(409).send({
+          error:
+            currentRole === role
+              ? "Akun pian sudah terdaftar. Silakan lanjut ke dashboard."
+              : `Akun pian sudah terdaftar sebagai ${currentRole}.`,
+          alreadyRegistered: true,
+          role: currentRole,
+        });
+      }
 
       if (role === "owner") {
         const name = String(data?.name ?? "").trim();

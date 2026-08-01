@@ -19,7 +19,10 @@ import {
   Wifi,
   XCircle,
   AlertTriangle,
+  ShieldAlert,
+  ArrowRight,
 } from 'lucide-react';
+import Link from 'next/link';
 import { motion, AnimatePresence } from 'motion/react';
 import { Button } from '@/components/ui/button';
 import { DashboardHeader } from '@/components/dashboard-header';
@@ -52,6 +55,8 @@ type Props = {
   todayOnlineSeconds: number;
   ratingStatus: 'good_standing' | 'probation';
   delaySeconds: number;
+  verificationStatus?: 'pending' | 'approved' | 'rejected';
+  verificationNote?: string | null;
 };
 
 function formatSeconds(totalSeconds: number): string {
@@ -115,9 +120,16 @@ export const CourierDashboard = ({
   todayOnlineSeconds,
   ratingStatus,
   delaySeconds,
+  verificationStatus = 'approved',
+  verificationNote = null,
 }: Props) => {
   const [isOnline, setIsOnline] = useState(initialIsOnline);
   const [isPending, startTransition] = useTransition();
+
+  // Defaults to approved so a courier whose payload predates this feature (or
+  // any caller that omits the field) is never locked out by a missing value —
+  // the backend is the actual gate, and it reads the column directly.
+  const isVerified = verificationStatus === 'approved';
 
   // Report position only while there is a delivery in flight — not merely while
   // online. An idle courier waiting for an order gets nothing from being tracked
@@ -146,6 +158,9 @@ export const CourierDashboard = ({
   }, []);
 
   const handleToggle = () => {
+    // The backend refuses go-online for an unverified courier anyway; this stops
+    // them making the request only to be told no.
+    if (!isVerified) return;
     if (isOnline) {
       // Ask for confirmation before going offline
       setShowConfirm(true);
@@ -202,6 +217,44 @@ export const CourierDashboard = ({
 
   return (
     <main className="px-4 mx-2 md:mx-6 pb-12 space-y-8">
+      {/* Verification gate. Sits above everything: until an admin says yes there
+          is no going online, so leading with the earnings panel would be
+          describing a job this person cannot start. */}
+      {!isVerified && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className={`flex flex-col gap-3 rounded-2xl border-2 px-5 py-4 sm:flex-row sm:items-center ${
+            verificationStatus === 'rejected'
+              ? 'border-rose-300 bg-rose-50 dark:border-rose-900 dark:bg-rose-950/30'
+              : 'border-amber-300 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30'
+          }`}
+        >
+          <ShieldAlert
+            className={`h-6 w-6 shrink-0 ${
+              verificationStatus === 'rejected' ? 'text-rose-600' : 'text-amber-600'
+            }`}
+          />
+          <div className="min-w-0 flex-1">
+            <p className="font-black">
+              {verificationStatus === 'rejected'
+                ? 'Verifikasi ditolak'
+                : 'Menunggu verifikasi admin'}
+            </p>
+            <p className="text-sm text-muted-foreground">
+              {verificationStatus === 'rejected'
+                ? verificationNote || 'Perbaiki dokumen pian, lalu unggah ulang.'
+                : 'Pian belum bisa online sampai dokumen diverifikasi admin.'}
+            </p>
+          </div>
+          <Link
+            href="/dashboard/courier-verification"
+            className="inline-flex shrink-0 items-center gap-2 rounded-full bg-blue-600 px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-blue-600/25 transition-colors hover:bg-blue-700"
+          >
+            Lengkapi Dokumen <ArrowRight className="h-4 w-4" />
+          </Link>
+        </motion.div>
+      )}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <DashboardHeader
           title="Courier Dashboard"
@@ -306,7 +359,7 @@ export const CourierDashboard = ({
             <motion.button
               whileTap={{ scale: 0.93 }}
               whileHover={{ scale: 1.04 }}
-              disabled={isPending}
+              disabled={isPending || !isVerified}
               onClick={handleToggle}
               className={`relative flex items-center gap-2 px-5 py-2.5 rounded-full font-black text-sm shadow-lg transition-colors disabled:opacity-60 disabled:cursor-not-allowed
                                 ${

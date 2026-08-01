@@ -27,6 +27,16 @@ export function resolveOutletImage(image?: string | null): string {
   return `/${image}`;
 }
 
+// Backend-served uploads with no legacy history to honour (courier documents,
+// courier avatars). Anything under /uploads/ lives on the backend origin; a
+// full URL is already resolved; everything else is a frontend public path.
+export function resolveUploadImage(image?: string | null): string {
+  if (!image) return DEFAULT_IMAGE;
+  if (image.startsWith("http")) return image;
+  if (image.startsWith("/uploads/")) return `${API_URL}${image}`;
+  return image.startsWith("/") ? image : `/${image}`;
+}
+
 // True when the stored value points at a backend-served upload (/uploads/...).
 // Next's image optimizer can't proxy these, so such <Image>s must set
 // `unoptimized` (matches the outlet-avatar precedent in owner-setting.tsx).

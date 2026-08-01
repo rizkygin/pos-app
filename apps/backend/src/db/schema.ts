@@ -15,6 +15,32 @@ import {
 import { timestamps } from './columns.helper';
 
 export const VEHICLE_TYPE = pgEnum('vechile_type', ['car', 'motorcycle']);
+
+// A courier carries other people's money and goods to strangers' front doors,
+// so joining is an application an admin decides on, not a signup that completes
+// itself. 'rejected' is a real state rather than a deletion: the applicant is
+// told why and can replace the offending photos.
+export const COURIER_VERIFICATION_STATUS = pgEnum('courier_verification_status', [
+  'pending',
+  'approved',
+  'rejected',
+]);
+
+// The exact set an applicant must produce. Fixed slots, not a free-form gallery:
+// an admin comparing a face against a SIM photo needs to know which shot is
+// which, and a missing angle has to be nameable ("foto kiri belum ada").
+export const COURIER_DOCUMENT_KIND = pgEnum('courier_document_kind', [
+  'face_front',
+  'face_right',
+  'face_left',
+  'face_back',
+  'stnk',
+  'sim_c',
+  'vehicle_front',
+  'vehicle_right',
+  'vehicle_left',
+  'vehicle_back',
+]);
 export const STATUS = pgEnum('state', ['addToChart', 'checkout']);
 export const ORDER_STATUS = pgEnum('order_status', [
   'pending',
@@ -216,8 +242,43 @@ export const couriersTable = pgTable('couriers', {
   // Staleness marker: a position from 40 minutes ago is not "live", and the ETA
   // must fall back rather than quietly present it as current.
   last_location_at: timestamp('last_location_at', { withTimezone: true }),
+  // Document review. Defaults to 'pending' so every future applicant goes
+  // through an admin; migration 0048 backfills the couriers who already exist
+  // to 'approved', because they were vetted by whatever process predates this
+  // and taking them off the road on deploy day would be an outage, not a policy.
+  verification_status: COURIER_VERIFICATION_STATUS('verification_status')
+    .notNull()
+    .default('pending'),
+  // Why an application was rejected, shown verbatim to the applicant — a
+  // rejection they can't act on just produces the same photos again.
+  verification_note: varchar('verification_note', { length: 500 }),
+  verified_at: timestamp('verified_at', { withTimezone: true }),
+  verified_by: text('verified_by').references((): AnyPgColumn => usersTable.id),
   ...timestamps,
 });
+
+/**
+ * The photos an applicant submits, one row per required slot.
+ *
+ * Unique on (courier_id, kind) so re-uploading a rejected angle replaces it
+ * rather than piling up: an admin must always be looking at the current answer
+ * for each slot, never at a stack they have to date-sort first.
+ */
+export const courierDocumentsTable = pgTable(
+  'courier_documents',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    courier_id: integer('courier_id')
+      .notNull()
+      .references(() => couriersTable.id, { onDelete: 'cascade' }),
+    kind: COURIER_DOCUMENT_KIND('kind').notNull(),
+    image: varchar('image', { length: 255 }).notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex('courier_documents_courier_kind_uq').on(table.courier_id, table.kind),
+  ],
+);
 
 export const productsTable = pgTable(
   'products',

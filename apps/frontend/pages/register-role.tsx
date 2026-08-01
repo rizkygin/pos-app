@@ -312,6 +312,10 @@ const RegistrationForm = ({ role, onCancel }: { role: string; onCancel: () => vo
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
+        // Guard the handler itself, not just the button. Submitting with Enter
+        // while a click is already in flight reaches here without ever touching
+        // the disabled attribute.
+        if (loading) return;
         if (role === 'owner' && selectedFeatures.length === 0) {
             setFeatureError(true);
             return;
@@ -329,15 +333,39 @@ const RegistrationForm = ({ role, onCancel }: { role: string; onCancel: () => vo
                 // Hard navigation (not router.push): the fresh role must
                 // re-resolve on the server — layout, sidebar, and session all
                 // key off it, and a client-side push would show stale state.
-                window.location.assign("/dashboard");
+                //
+                // A new courier goes straight to the document upload rather than
+                // to a dashboard they can't use yet: nothing on it works until
+                // an admin has approved them, and the photos are the only thing
+                // standing between them and their first order.
+                window.location.assign(
+                    role === "courier" ? "/dashboard/courier-verification" : "/dashboard",
+                );
+                // Deliberately NOT clearing `loading`, and no `finally` doing it
+                // either: window.location.assign only *starts* a navigation, and
+                // this page stays interactive until the next document commits —
+                // seconds, on a bad connection. Re-enabling the button in that
+                // window is what let a registration be submitted several times
+                // in a row.
                 return;
-            } else {
-                const data = await res.json().catch(() => ({}));
-                setSubmitError(data.error || "Terjadi kesalahan, silakan coba lagi.");
             }
+
+            const data = await res.json().catch(() => ({}));
+
+            // The account already has a role — usually this very form, submitted
+            // twice. Nothing has gone wrong from the user's point of view, so
+            // send them on instead of showing them an error about it.
+            if (res.status === 409 && data?.alreadyRegistered) {
+                window.location.assign(
+                    data.role === "courier" ? "/dashboard/courier-verification" : "/dashboard",
+                );
+                return;
+            }
+
+            setSubmitError(data.error || "Terjadi kesalahan, silakan coba lagi.");
+            setLoading(false);
         } catch {
             setSubmitError("Gagal terhubung ke server. Periksa koneksi Pian lalu coba lagi.");
-        } finally {
             setLoading(false);
         }
     };
@@ -481,6 +509,19 @@ const RegistrationForm = ({ role, onCancel }: { role: string; onCancel: () => vo
                                 <option value="car">Bemobil</option>
                             </select>
                         </div>
+                        {/* Said here, before they commit, because the photos are
+                            the real work of joining — finding out afterwards
+                            that the account is useless without them reads as a
+                            bait and switch. */}
+                        <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+                            <p className="font-bold">Setelah ini: unggah dokumen</p>
+                            <p className="mt-1 leading-relaxed">
+                                Pian perlu mengunggah 4 foto wajah (tanpa kacamata, topi, atau
+                                aksesori penutup wajah), foto STNK dan SIM C, serta 4 foto
+                                kendaraan. Admin memverifikasi dulu sebelum pian bisa menerima
+                                order.
+                            </p>
+                        </div>
                     </>
                 )}
 
@@ -515,11 +556,31 @@ const RegistrationForm = ({ role, onCancel }: { role: string; onCancel: () => vo
                 )}
 
                 <div className="flex gap-4 pt-4">
-                    <Button type="button" variant="outline" onClick={onCancel} className="flex-1 rounded-2xl py-6 transition-all hover:bg-muted">
+                    {/* Cancel goes too: it unmounts the form mid-request, which
+                        leaves the registration to land with nothing on screen
+                        that reflects it. */}
+                    <Button
+                        type="button"
+                        variant="outline"
+                        onClick={onCancel}
+                        disabled={loading}
+                        className="flex-1 rounded-2xl py-6 transition-all hover:bg-muted disabled:opacity-50"
+                    >
                         Batal
                     </Button>
-                    <Button type="submit" disabled={loading} className="flex-1 rounded-2xl py-6 font-bold shadow-lg shadow-primary/20 transition-all hover:scale-[1.02]">
-                        {loading ? "Mendaftar..." : "Selesai Daftar"}
+                    <Button
+                        type="submit"
+                        disabled={loading}
+                        className="flex-1 rounded-2xl py-6 font-bold shadow-lg shadow-primary/20 transition-all hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-70 disabled:hover:scale-100"
+                    >
+                        {loading ? (
+                            <>
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                Mendaftar...
+                            </>
+                        ) : (
+                            "Selesai Daftar"
+                        )}
                     </Button>
                 </div>
             </form>

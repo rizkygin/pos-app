@@ -1,9 +1,13 @@
 import type { FastifyInstance } from "fastify";
+import fs from "node:fs/promises";
+import path from "node:path";
+import sharp from "sharp";
 import { and, asc, count, countDistinct, desc, eq, gte, ilike, inArray, isNull, lt, notInArray, or, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "../db";
 import {
   adminsTable,
+  courierDocumentsTable,
   couriersTable,
   courierSessionsTable,
   customersTable,
@@ -22,7 +26,18 @@ import {
 const OFFLINE_CUSTOMER_EMAIL = "rizkygin1@gmail.com";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
-import { closeStaleCourierSessions, staleShiftCutoff } from "../lib/utils/courier-availability";
+import { cappedShiftEnd, closeStaleCourierSessions, staleShiftCutoff } from "../lib/utils/courier-availability";
+import {
+  COURIER_DOCUMENT_GROUPS,
+  courierDocumentLabel,
+  getCourierDocuments,
+  isCourierDocumentKind,
+} from "../lib/courier-documents";
+
+// Same folder the applicant's own uploads land in (routes/courier.ts) — one
+// place on disk for everything attached to a courier.
+const COURIER_UPLOAD_DIR = path.join(process.cwd(), "uploads", "couriers");
+const COURIER_UPLOAD_URL_PREFIX = "/uploads/couriers/";
 import { getServiceArea, recomputeCourierReachable } from "../lib/service-area";
 import { parseCoordPair } from "../lib/utils/coords";
 
@@ -463,6 +478,15 @@ export async function adminRoutes(app: FastifyInstance) {
           ratings: couriersTable.ratings,
           review_count: couriersTable.review_count,
           created_at: couriersTable.createdAt,
+          verification_status: couriersTable.verification_status,
+          verification_note: couriersTable.verification_note,
+          verified_at: couriersTable.verified_at,
+          // How far along the application is, so the table can show "6/10"
+          // without a second request per row.
+          document_count: sql<number>`(
+            SELECT COUNT(*)::int FROM ${courierDocumentsTable}
+            WHERE ${courierDocumentsTable.courier_id} = ${couriersTable.id}
+          )`,
         })
         .from(couriersTable)
         .innerJoin(usersTable, eq(couriersTable.user_id, usersTable.id))
@@ -493,6 +517,273 @@ export async function adminRoutes(app: FastifyInstance) {
       .where(eq(couriersTable.id, id));
 
     return reply.send({ success: true, message: "Courier updated." });
+  });
+
+  // ---- Courier verification ----
+
+  /** Everything an admin needs to judge one application, on one screen. */
+  app.get("/api/admin/couriers/:id/verification", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
+    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+
+    const id = Number((request.params as { id: string }).id);
+    if (!id) return reply.status(400).send({ success: false, error: "id tidak valid" });
+
+    const [courier] = await db
+      .select({
+        id: couriersTable.id,
+        user_id: couriersTable.user_id,
+        name: usersTable.name,
+        email: usersTable.email,
+        phone: usersTable.phone,
+        avatar: couriersTable.avatar,
+        vehicle_plate: couriersTable.vehicle_plate,
+        vehicle_type: couriersTable.vehicle_type,
+        verification_status: couriersTable.verification_status,
+        verification_note: couriersTable.verification_note,
+        verified_at: couriersTable.verified_at,
+        created_at: couriersTable.createdAt,
+      })
+      .from(couriersTable)
+      .innerJoin(usersTable, eq(couriersTable.user_id, usersTable.id))
+      .where(eq(couriersTable.id, id))
+      .limit(1);
+
+    if (!courier) return reply.status(404).send({ success: false, error: "Kurir tidak ditemukan" });
+
+    const { documents, missing, complete } = await getCourierDocuments(id);
+
+    return reply.send({
+      success: true,
+      courier,
+      documents,
+      missing,
+      complete,
+      groups: COURIER_DOCUMENT_GROUPS,
+    });
+  });
+
+  /**
+   * The verdict.
+   *
+   * Approving with slots still empty is refused: "yes" is supposed to mean an
+   * admin looked at all ten photographs, and an application that can be waved
+   * through half-finished makes the whole checklist decorative. Rejecting is
+   * allowed at any point — you don't need the vehicle shots to know the face
+   * photo is somebody in a motorcycle helmet.
+   */
+  app.post("/api/admin/couriers/:id/verify", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
+    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+
+    const id = Number((request.params as { id: string }).id);
+    const { approve, note } = (request.body as { approve?: boolean; note?: string }) ?? {};
+    if (!id) return reply.status(400).send({ success: false, error: "id tidak valid" });
+    if (typeof approve !== "boolean") {
+      return reply.status(400).send({ success: false, error: "approve wajib true atau false" });
+    }
+
+    const [courier] = await db
+      .select({ id: couriersTable.id })
+      .from(couriersTable)
+      .where(eq(couriersTable.id, id))
+      .limit(1);
+    if (!courier) return reply.status(404).send({ success: false, error: "Kurir tidak ditemukan" });
+
+    if (approve) {
+      const { missing } = await getCourierDocuments(id);
+      if (missing.length > 0) {
+        return reply.status(409).send({
+          success: false,
+          error: `Dokumen belum lengkap: ${missing.map(courierDocumentLabel).join(", ")}`,
+          missing,
+        });
+      }
+    } else if (!note?.trim()) {
+      // A rejection the applicant can't act on just produces the same photos
+      // again, so the reason is required rather than optional.
+      return reply
+        .status(400)
+        .send({ success: false, error: "Alasan penolakan wajib diisi" });
+    }
+
+    await db
+      .update(couriersTable)
+      .set({
+        verification_status: approve ? "approved" : "rejected",
+        verification_note: approve ? null : note!.trim().slice(0, 500),
+        verified_at: new Date(),
+        verified_by: session.user.id,
+      })
+      .where(eq(couriersTable.id, id));
+
+    // A rejected courier mid-shift stops being offered work immediately;
+    // getCourierAvailability already refuses them, and closing the session makes
+    // the app agree with that instead of showing them as online.
+    if (!approve) {
+      await db
+        .update(courierSessionsTable)
+        .set({ ended_at: cappedShiftEnd })
+        .where(
+          and(
+            eq(courierSessionsTable.courier_id, id),
+            isNull(courierSessionsTable.ended_at),
+          ),
+        );
+    }
+
+    return reply.send({ success: true, status: approve ? "approved" : "rejected" });
+  });
+
+  /**
+   * Admin replaces one of the courier's document photos.
+   *
+   * Exists for retouching, not for fabricating a submission: the intended use is
+   * an admin cleaning up the background of a face shot so the courier looks
+   * presentable to customers. That's why it works after approval too — the
+   * courier's own upload route is closed once they're verified, and the tidying
+   * usually happens exactly then.
+   *
+   * Whatever is replaced is gone: the old file is deleted, and the slot's
+   * unique constraint means there is one current answer per angle. An admin who
+   * replaces a document is changing the record, so this is an admin-only route
+   * and stays out of the courier's hands.
+   */
+  app.post("/api/admin/couriers/:id/documents", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
+    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+
+    const id = Number((request.params as { id: string }).id);
+    if (!id) return reply.status(400).send({ success: false, error: "id tidak valid" });
+
+    const [courier] = await db
+      .select({ id: couriersTable.id, avatar: couriersTable.avatar })
+      .from(couriersTable)
+      .where(eq(couriersTable.id, id))
+      .limit(1);
+    if (!courier) return reply.status(404).send({ success: false, error: "Kurir tidak ditemukan" });
+
+    const file = await request.file();
+    if (!file) return reply.status(400).send({ success: false, error: "Foto wajib diunggah" });
+
+    const kindField = (file.fields as Record<string, { value?: unknown } | undefined>)?.kind;
+    const kind = typeof kindField?.value === "string" ? kindField.value : "";
+    if (!isCourierDocumentKind(kind)) {
+      return reply.status(400).send({ success: false, error: "Jenis dokumen tidak dikenal" });
+    }
+    // `setAvatar` on the same request, because replacing the front face shot to
+    // clean up its background and then having to click again to actually use it
+    // is two steps for one intention.
+    const setAvatarField = (file.fields as Record<string, { value?: unknown } | undefined>)
+      ?.setAvatar;
+    const setAvatar = setAvatarField?.value === "true";
+
+    const buffer = await file.toBuffer();
+    const filename = `courier-${id}-${kind}-admin-${Date.now()}.webp`;
+    await fs.mkdir(COURIER_UPLOAD_DIR, { recursive: true });
+    await sharp(buffer)
+      .rotate()
+      .resize(1400, 1400, { fit: "inside", withoutEnlargement: true })
+      .webp({ quality: 82 })
+      .toFile(path.join(COURIER_UPLOAD_DIR, filename));
+
+    const image = `${COURIER_UPLOAD_URL_PREFIX}${filename}`;
+
+    const [previous] = await db
+      .select({ image: courierDocumentsTable.image })
+      .from(courierDocumentsTable)
+      .where(
+        and(eq(courierDocumentsTable.courier_id, id), eq(courierDocumentsTable.kind, kind)),
+      )
+      .limit(1);
+
+    await db
+      .insert(courierDocumentsTable)
+      .values({ courier_id: id, kind, image })
+      .onConflictDoUpdate({
+        target: [courierDocumentsTable.courier_id, courierDocumentsTable.kind],
+        set: { image, updatedAt: new Date() },
+      });
+
+    if (setAvatar) {
+      await db.update(couriersTable).set({ avatar: image }).where(eq(couriersTable.id, id));
+    }
+
+    // Same rule as the courier's own upload: the replaced file goes, unless the
+    // avatar is still pointing at it.
+    if (previous && previous.image !== image && courier.avatar !== previous.image) {
+      await fs
+        .rm(path.join(process.cwd(), previous.image.replace(/^\//, "")), { force: true })
+        .catch(() => {});
+    }
+
+    const { documents, missing, complete } = await getCourierDocuments(id);
+    return reply.send({ success: true, image, documents, missing, complete });
+  });
+
+  /**
+   * Replace the courier's avatar — the photo a customer sees on a live delivery.
+   *
+   * Two ways in, because an admin normally wants one of the face shots that was
+   * just approved (`fromDocument`), and occasionally a file of their own
+   * (multipart). Writes couriers.avatar only: users.image is the person's own
+   * account picture and isn't the platform's to overwrite.
+   */
+  app.post("/api/admin/couriers/:id/avatar", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
+    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+
+    const id = Number((request.params as { id: string }).id);
+    if (!id) return reply.status(400).send({ success: false, error: "id tidak valid" });
+
+    const [courier] = await db
+      .select({ id: couriersTable.id })
+      .from(couriersTable)
+      .where(eq(couriersTable.id, id))
+      .limit(1);
+    if (!courier) return reply.status(404).send({ success: false, error: "Kurir tidak ditemukan" });
+
+    let avatar: string | null = null;
+
+    if (request.isMultipart()) {
+      const file = await request.file();
+      if (!file) return reply.status(400).send({ success: false, error: "Foto wajib diunggah" });
+
+      const buffer = await file.toBuffer();
+      const filename = `courier-avatar-${id}-${Date.now()}.webp`;
+      await fs.mkdir(COURIER_UPLOAD_DIR, { recursive: true });
+      // Square-cropped: it is rendered in a circle everywhere it appears, and
+      // cropping here beats every call site guessing at object-fit.
+      await sharp(buffer)
+        .rotate()
+        .resize(512, 512, { fit: "cover" })
+        .webp({ quality: 85 })
+        .toFile(path.join(COURIER_UPLOAD_DIR, filename));
+
+      avatar = `${COURIER_UPLOAD_URL_PREFIX}${filename}`;
+    } else {
+      const { fromDocument } = (request.body as { fromDocument?: string }) ?? {};
+      if (!isCourierDocumentKind(fromDocument)) {
+        return reply.status(400).send({ success: false, error: "Pilih foto dokumen yang valid" });
+      }
+      const { documents } = await getCourierDocuments(id);
+      const doc = documents[fromDocument];
+      if (!doc) {
+        return reply.status(404).send({ success: false, error: "Foto tersebut belum diunggah" });
+      }
+      // Points at the same stored file rather than copying it: the document is
+      // already immutable per slot (re-upload writes a new filename), so there
+      // is nothing for the avatar to drift away from.
+      avatar = doc.image;
+    }
+
+    await db.update(couriersTable).set({ avatar }).where(eq(couriersTable.id, id));
+
+    return reply.send({ success: true, avatar });
   });
 
   app.post("/api/admin/couriers/delete", async (request, reply) => {
