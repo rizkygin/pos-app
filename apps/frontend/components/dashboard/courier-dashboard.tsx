@@ -131,12 +131,11 @@ export const CourierDashboard = ({
   // the backend is the actual gate, and it reads the column directly.
   const isVerified = verificationStatus === 'approved';
 
-  // Report position only while there is a delivery in flight — not merely while
-  // online. An idle courier waiting for an order gets nothing from being tracked
-  // and the customer gains nothing either, so the collection is scoped to the
-  // window where it actually powers someone's ETA. The hook clears the stored
-  // point as soon as this goes false.
-  useCourierLocationReporting(isOnline && currentPickUp?.status === 'on_delivery');
+  // Report position for the whole shift, not just mid-delivery: dispatch offers
+  // orders nearest-first, so an online courier with no known position is ranked
+  // behind everyone who has one. Stops at go-offline, which also clears the
+  // stored point server-side.
+  useCourierLocationReporting(isOnline);
   // Today's accumulated online time. Ticks only while actually on shift —
   // previously it counted up regardless, so an offline courier's total kept
   // growing and was wrong the moment they came back online.

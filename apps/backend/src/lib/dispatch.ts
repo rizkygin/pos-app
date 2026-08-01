@@ -19,11 +19,13 @@ import { parseCoordPair } from "./utils/coords";
  * work: the way to earn was to sit watching the lobby, which is precisely the
  * behaviour that puts a phone in someone's hand in traffic.
  *
- * The design is deliberately boring and self-healing. There is no scheduler
- * process; offers expire lazily on the read paths (the lobby polls every two
- * seconds, so in practice expiry is immediate), matching how subscriptions
- * already self-clean in this codebase. If literally nobody polls, an expired
- * offer sits — which costs nothing, because nobody is waiting to see it.
+ * The clock is driven by a real scheduler (startDispatchScheduler, wired up in
+ * server.ts), not by whoever happens to poll. An offer therefore expires on
+ * time whether or not any courier has the lobby open, and an order confirmed
+ * while nobody was on shift starts moving the moment somebody goes online.
+ * Read paths still call tickDispatch as a cheap backstop — every operation here
+ * is idempotent and guarded by the partial unique index, so an extra tick is
+ * harmless.
  */
 
 /** How long a courier has to answer before the order moves on. */
@@ -36,8 +38,24 @@ export const OFFER_TTL_SECONDS = 30;
  */
 export const MAX_ROUNDS = 2;
 
-/** A position older than this can't be trusted to rank anyone by distance. */
-const FRESH_LOCATION_MS = 10 * 60 * 1000;
+/**
+ * A position older than this can't be trusted to rank anyone by distance.
+ *
+ * Couriers report every 30s while on shift, so anything this stale means the
+ * phone lost signal or the app was killed. Those candidates fall to the back
+ * rather than being ranked on a position they may have left long ago.
+ */
+const FRESH_LOCATION_MS = 5 * 60 * 1000;
+
+/**
+ * Distances are bucketed before they decide anything.
+ *
+ * Raw distance would hand every order near a busy junction to whoever happens to
+ * sit closest to it, permanently. Within a bucket the tie goes to whoever has
+ * waited longest, so "near the outlet" wins the order while "nearest by 80
+ * metres" does not win every order.
+ */
+const DISTANCE_BUCKET_KM = 0.5;
 
 type Candidate = {
   id: number;
@@ -57,9 +75,13 @@ type Candidate = {
 export async function expireStaleOffers(): Promise<string[]> {
   const expired = await db
     .update(orderOffersTable)
-    .set({ state: "expired", responded_at: new Date() })
+    .set({ state: "expired", responded_at: sql`now()` })
+    // now(), not the Node clock. Every other check in this file asks Postgres
+    // what time it is, and the backend and the database are separate containers
+    // in production — a courier's 30 seconds must not depend on two machines
+    // agreeing about the current time.
     .where(
-      and(eq(orderOffersTable.state, "offered"), lt(orderOffersTable.expires_at, new Date())),
+      and(eq(orderOffersTable.state, "offered"), sql`${orderOffersTable.expires_at} < now()`),
     )
     .returning({ orderId: orderOffersTable.order_id });
 
@@ -75,7 +97,7 @@ export async function expireStaleOffers(): Promise<string[]> {
 export async function supersedeOffers(orderId: string): Promise<void> {
   await db
     .update(orderOffersTable)
-    .set({ state: "superseded", responded_at: new Date() })
+    .set({ state: "superseded", responded_at: sql`now()` })
     .where(
       and(eq(orderOffersTable.order_id, orderId), eq(orderOffersTable.state, "offered")),
     );
@@ -117,9 +139,16 @@ async function findCandidates(orderId: string, round: number): Promise<Candidate
       lat: couriersTable.last_lat,
       lon: couriersTable.last_lon,
       locationAt: couriersTable.last_location_at,
+      // Table names written out rather than interpolated. Drizzle qualifies
+      // column references inside a WHERE clause ("order_offers"."courier_id" =
+      // "couriers"."id") but NOT inside a projection, where the same fragment
+      // renders as `WHERE "courier_id" = "id"` — order_offers has an `id` of its
+      // own, so that silently compared a courier id against an offer's primary
+      // key and returned NULL for everybody. Every candidate then tied on
+      // fairness and ranking fell back to whatever order the rows arrived in.
       lastOfferedAt: sql<Date | null>`(
-        SELECT MAX(${orderOffersTable.offered_at}) FROM ${orderOffersTable}
-        WHERE ${orderOffersTable.courier_id} = ${couriersTable.id}
+        SELECT MAX(oo.offered_at) FROM order_offers oo
+        WHERE oo.courier_id = couriers.id
       )`,
     })
     .from(couriersTable)
@@ -166,15 +195,17 @@ async function findCandidates(orderId: string, round: number): Promise<Candidate
 }
 
 /**
- * Rank candidates.
+ * Rank candidates: nearest to the outlet first, ties broken by who has waited
+ * longest.
  *
- * Distance first when we actually know where someone is — but we usually don't,
- * and that's deliberate: this platform does not track idle couriers, only ones
- * mid-delivery (see use-courier-location-reporting). So in practice this sorts
- * by fairness: whoever has gone longest without being offered anything goes
- * first, which spreads work by waiting rather than by reflexes. When the courier
- * app starts reporting position while on shift, the distance branch starts
- * doing real work with no change here.
+ * Distance is what a customer actually feels — a courier two streets away
+ * collects the food while it is still hot — so it leads. It is bucketed rather
+ * than exact (see DISTANCE_BUCKET_KM) precisely so it can't become a proxy for
+ * "whoever parks nearest the busiest outlet gets everything".
+ *
+ * Couriers whose position is missing or stale rank last, on fairness alone.
+ * They are still offered work — a dead GPS should cost you the good orders, not
+ * your shift.
  */
 function rankCandidates(candidates: Candidate[], outlet: { lat: number; lon: number } | null) {
   const now = Date.now();
@@ -187,18 +218,24 @@ function rankCandidates(candidates: Candidate[], outlet: { lat: number; lon: num
       c.locationAt &&
       now - new Date(c.locationAt).getTime() <= FRESH_LOCATION_MS;
 
+    const distanceKm = fresh ? haversineKm(outlet.lat, outlet.lon, coords.lat, coords.lon) : null;
+
     return {
       candidate: c,
-      distanceKm: fresh ? haversineKm(outlet.lat, outlet.lon, coords.lat, coords.lon) : null,
+      distanceKm,
+      bucket: distanceKm === null ? null : Math.floor(distanceKm / DISTANCE_BUCKET_KM),
     };
   });
 
   return withDistance
     .sort((a, b) => {
-      if (a.distanceKm !== null && b.distanceKm !== null) return a.distanceKm - b.distanceKm;
-      if (a.distanceKm !== null) return -1;
-      if (b.distanceKm !== null) return 1;
-      // Never-offered first, then longest-waiting.
+      // Known position beats unknown, whatever the numbers say.
+      if (a.bucket !== null && b.bucket === null) return -1;
+      if (a.bucket === null && b.bucket !== null) return 1;
+      if (a.bucket !== null && b.bucket !== null && a.bucket !== b.bucket) {
+        return a.bucket - b.bucket;
+      }
+      // Same bucket (or both unknown): never-offered first, then longest-waiting.
       const at = a.candidate.lastOfferedAt?.getTime() ?? 0;
       const bt = b.candidate.lastOfferedAt?.getTime() ?? 0;
       return at - bt;
@@ -276,15 +313,21 @@ export async function dispatchNextOffer(orderId: string): Promise<DispatchResult
     if (candidates.length === 0) continue;
 
     const chosen = candidates[0];
-    const expiresAt = new Date(Date.now() + OFFER_TTL_SECONDS * 1000);
 
+    let expiresAt: Date;
     try {
-      await db.insert(orderOffersTable).values({
-        order_id: orderId,
-        courier_id: chosen.id,
-        round,
-        expires_at: expiresAt,
-      });
+      // The deadline is set by the database clock for the same reason expiry
+      // reads it: one clock, one answer.
+      const [inserted] = await db
+        .insert(orderOffersTable)
+        .values({
+          order_id: orderId,
+          courier_id: chosen.id,
+          round,
+          expires_at: sql`now() + make_interval(secs => ${OFFER_TTL_SECONDS})`,
+        })
+        .returning({ expiresAt: orderOffersTable.expires_at });
+      expiresAt = inserted.expiresAt;
     } catch (err: any) {
       // Two callers dispatched the same order at once and the partial unique
       // index caught it. The other one won; that is exactly what the index is
@@ -302,7 +345,7 @@ export async function dispatchNextOffer(orderId: string): Promise<DispatchResult
   // placed, and the customer is still waiting.
   await db
     .update(ordersTable)
-    .set({ offer_pool_opened_at: new Date() })
+    .set({ offer_pool_opened_at: sql`now()` })
     .where(and(eq(ordersTable.id, orderId), isNull(ordersTable.offer_pool_opened_at)));
 
   return { outcome: "open_pool" };
@@ -363,7 +406,7 @@ export async function respondToOffer(
 ): Promise<boolean> {
   const updated = await db
     .update(orderOffersTable)
-    .set({ state: response, responded_at: new Date() })
+    .set({ state: response, responded_at: sql`now()` })
     .where(
       and(
         eq(orderOffersTable.order_id, orderId),

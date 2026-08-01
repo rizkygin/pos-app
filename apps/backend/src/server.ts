@@ -23,6 +23,7 @@ import { subscriptionRoutes } from "./routes/subscriptions";
 import { employeeRoutes } from "./routes/employees";
 import { pushRoutes } from "./routes/push";
 import { routingRoutes } from "./routes/routing";
+import { startDispatchScheduler } from "./lib/dispatch-scheduler";
 
 const PORT = Number(process.env.PORT ?? 4000);
 // FRONTEND_ORIGIN accepts a comma-separated list so apex + www (and any extra
@@ -115,6 +116,10 @@ async function main() {
   await app.register(routingRoutes);
 
   app.get("/health", async () => ({ ok: true }));
+
+  // The courier dispatch clock. Started after the routes are registered so a
+  // tick can never fire against a half-built app.
+  startDispatchScheduler(app);
 
   // Bind IPv6 "::" (dual-stack) so the server is reachable both over Railway's
   // private network (IPv6-only, e.g. backend.railway.internal) AND the public
