@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useTransition, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'motion/react';
 import {
@@ -22,7 +22,7 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import QRCode from 'react-qr-code';
-import { acceptOrder } from '@/app/dashboard/lobby/actions';
+import { acceptOrder, declineOrder } from '@/app/dashboard/lobby/actions';
 import { markOrderDelivered } from '@/app/dashboard/activeorder/actions';
 import { goOnline } from '@/app/dashboard/courier-sessions/actions';
 import { API_URL } from '@/lib/api-url';
@@ -57,6 +57,13 @@ type Order = {
 };
 
 type Tab = 'available' | 'mine';
+
+/**
+ * Mirrors OFFER_TTL_SECONDS in the backend's dispatch lib — used only to draw
+ * the bar's full width. The actual deadline always comes from the server, so
+ * this being stale would cost a slightly wrong bar, never a wrong countdown.
+ */
+const OFFER_TTL_MS = 30_000;
 
 function fmtIDR(amount: number) {
   return new Intl.NumberFormat('id-ID', {
@@ -236,16 +243,98 @@ function QrModal({ value, onClose }: { value: string; onClose: () => void }) {
   );
 }
 
+/**
+ * Counts an offer down to zero, ticking from elapsed time rather than the clock.
+ *
+ * Re-syncs every time the poll brings a fresh `remainingMs`, so drift can never
+ * accumulate past two seconds. At zero it stops and reports up — the card turns
+ * itself off rather than leaving a dead Terima button that would 409.
+ */
+function OfferCountdown({
+  clock,
+  totalMs,
+  onExpire,
+}: {
+  clock: { remainingMs: number; receivedAt: number };
+  totalMs: number;
+  onExpire: () => void;
+}) {
+  // Only the current instant is held in state; the remaining time is derived
+  // from it. Seeded with the stamp on the clock itself rather than a fresh
+  // reading, so nothing impure is called while rendering — at mount the two are
+  // the same moment anyway, and the first tick corrects it 100ms later.
+  const [now, setNow] = useState(clock.receivedAt);
+  const firedRef = useRef(false);
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(performance.now()), 100);
+    return () => clearInterval(id);
+  }, []);
+
+  // Clamped: a tick from before this clock arrived would otherwise read as
+  // negative elapsed time and inflate the countdown.
+  const elapsed = Math.max(0, now - clock.receivedAt);
+  const remaining = Math.max(0, clock.remainingMs - elapsed);
+
+  useEffect(() => {
+    firedRef.current = false;
+  }, [clock.remainingMs, clock.receivedAt]);
+
+  useEffect(() => {
+    if (remaining > 0 || firedRef.current) return;
+    firedRef.current = true;
+    onExpire();
+  }, [remaining, onExpire]);
+
+  const seconds = Math.ceil(remaining / 1000);
+  const pct = Math.max(0, Math.min(100, (remaining / totalMs) * 100));
+  // Colour is the only warning a courier riding gets — red is the last 10s.
+  const tone =
+    seconds <= 10
+      ? { bar: 'bg-rose-500', text: 'text-rose-600 dark:text-rose-400' }
+      : seconds <= 20
+        ? { bar: 'bg-amber-500', text: 'text-amber-600 dark:text-amber-400' }
+        : { bar: 'bg-emerald-500', text: 'text-emerald-600 dark:text-emerald-400' };
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">
+          Sisa waktu
+        </span>
+        <span className={`font-mono text-sm font-black tabular-nums ${tone.text}`}>
+          0:{String(Math.max(0, seconds)).padStart(2, '0')}
+        </span>
+      </div>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+        <div
+          className={`h-full rounded-full transition-[width] duration-100 ease-linear ${tone.bar}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function AvailableOrderCard({
   order,
   index,
   onAccept,
+  onDecline,
+  offerClock,
+  onOfferExpired,
 }: {
   order: Order;
   index: number;
   onAccept: (id: string) => void;
+  onDecline: (id: string) => void;
+  /** Present only on the order offered to THIS courier. */
+  offerClock?: { remainingMs: number; receivedAt: number } | null;
+  onOfferExpired: () => void;
 }) {
   const [isPending, startTransition] = useTransition();
+  const [expired, setExpired] = useState(false);
+  const isOffer = !!offerClock;
   const note = noteStr(order.note?.customer_note ?? '');
   const rating = noteStr(order.note?.customer_ratings ?? '');
   const review_count = noteStr(String(order.note?.customer_review_count ?? ''));
@@ -256,15 +345,40 @@ function AvailableOrderCard({
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, scale: 0.95, y: -10 }}
       transition={{ duration: 0.3, delay: index * 0.05 }}
-      className="rounded-2xl border bg-background shadow-sm hover:shadow-md transition-shadow overflow-hidden flex flex-col"
+      // An offer is this courier's to answer; a pool card is a free-for-all
+      // nobody has been asked about. Ring and colour carry that difference,
+      // because the two need different reflexes.
+      className={`rounded-2xl border bg-background shadow-sm transition-shadow overflow-hidden flex flex-col ${
+        isOffer
+          ? 'border-emerald-300 ring-2 ring-emerald-200 dark:border-emerald-800 dark:ring-emerald-900/50'
+          : 'hover:shadow-md'
+      } ${expired ? 'opacity-60' : ''}`}
     >
-      <div className="flex items-center justify-between px-5 py-3 bg-violet-50 dark:bg-violet-950/20 border-b border-violet-100 dark:border-violet-900/30">
+      <div
+        className={`flex items-center justify-between px-5 py-3 border-b ${
+          isOffer
+            ? 'bg-emerald-50 dark:bg-emerald-950/20 border-emerald-100 dark:border-emerald-900/30'
+            : 'bg-violet-50 dark:bg-violet-950/20 border-violet-100 dark:border-violet-900/30'
+        }`}
+      >
         <div className="flex items-center gap-2">
-          <span className="font-mono font-black text-sm text-violet-700 dark:text-violet-400">
+          <span
+            className={`font-mono font-black text-sm ${
+              isOffer
+                ? 'text-emerald-700 dark:text-emerald-400'
+                : 'text-violet-700 dark:text-violet-400'
+            }`}
+          >
             #{order.orderId.slice(-8).toUpperCase()}
           </span>
-          <span className="px-2 py-0.5 rounded-full bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-400 text-[10px] font-bold uppercase tracking-wider">
-            Tersedia
+          <span
+            className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+              isOffer
+                ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400'
+                : 'bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-400'
+            }`}
+          >
+            {isOffer ? 'Untuk Pian' : 'Terbuka untuk semua'}
           </span>
         </div>
         <div className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -274,6 +388,23 @@ function AvailableOrderCard({
       </div>
 
       <div className="px-5 py-4 flex flex-col gap-4 flex-1">
+        {offerClock && !expired && (
+          <OfferCountdown
+            clock={offerClock}
+            totalMs={OFFER_TTL_MS}
+            onExpire={() => {
+              setExpired(true);
+              onOfferExpired();
+            }}
+          />
+        )}
+
+        {expired && (
+          <p className="rounded-xl bg-muted px-3 py-2 text-xs font-bold text-muted-foreground">
+            Waktu habis — order ini diteruskan ke kurir lain.
+          </p>
+        )}
+
         <div className="flex items-center gap-2 text-sm">
           <User className="h-4 w-4 text-muted-foreground shrink-0" />
           <span className="font-semibold">{order.customerName}</span>
@@ -311,14 +442,32 @@ function AvailableOrderCard({
               </p>
             )}
           </div>
-          <button
-            disabled={isPending}
-            onClick={() => startTransition(() => onAccept(order.orderId))}
-            className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-bold bg-violet-500 text-white hover:bg-violet-600 transition-colors shadow-sm shadow-violet-200 disabled:opacity-60 disabled:cursor-not-allowed"
-          >
-            {isPending ? 'Memproses...' : 'Ambil Order'}
-            {!isPending && <ChevronRight className="h-3 w-3" />}
-          </button>
+          <div className="flex items-center gap-2">
+            {/* Declining only means something for an offer that is yours. A
+                pool order was never assigned to anyone, so there is nothing to
+                hand back. */}
+            {isOffer && !expired && (
+              <button
+                disabled={isPending}
+                onClick={() => startTransition(() => onDecline(order.orderId))}
+                className="rounded-lg border px-3 py-1.5 text-xs font-bold text-muted-foreground transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-60 dark:hover:bg-rose-950/40"
+              >
+                Tolak
+              </button>
+            )}
+            <button
+              disabled={isPending || expired}
+              onClick={() => startTransition(() => onAccept(order.orderId))}
+              className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-bold text-white transition-colors shadow-sm disabled:opacity-60 disabled:cursor-not-allowed ${
+                isOffer
+                  ? 'bg-emerald-500 hover:bg-emerald-600 shadow-emerald-200'
+                  : 'bg-violet-500 hover:bg-violet-600 shadow-violet-200'
+              }`}
+            >
+              {isPending ? 'Memproses...' : isOffer ? 'Terima' : 'Ambil Order'}
+              {!isPending && <ChevronRight className="h-3 w-3" />}
+            </button>
+          </div>
         </div>
       </div>
     </motion.div>
@@ -774,6 +923,19 @@ function DeliveryScannerBar({
   );
 }
 
+/**
+ * The live offer's deadline, as the server measured it.
+ *
+ * `remainingMs` is what the database said was left, and `receivedAt` is a
+ * performance.now() stamp from the moment it arrived. The countdown ticks from
+ * those two rather than from a wall-clock deadline: performance.now() measures
+ * elapsed time regardless of what the phone thinks the date is, so a courier
+ * with a badly set clock still sees a truthful number. Network latency makes it
+ * a shade pessimistic, which is the right direction to be wrong in — never
+ * promise time that has already gone.
+ */
+type OfferClock = { orderId: string; remainingMs: number; receivedAt: number } | null;
+
 function useOrdersPolling(endpoint: string) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
@@ -781,6 +943,8 @@ function useOrdersPolling(endpoint: string) {
   const [reason, setReason] = useState<string | null>(null);
   const [ratingStatus, setRatingStatus] = useState<string | null>(null);
   const [delaySeconds, setDelaySeconds] = useState(0);
+  const [offeredOrderId, setOfferedOrderId] = useState<string | null>(null);
+  const [offerClock, setOfferClock] = useState<OfferClock>(null);
 
   const fetch_ = useCallback(async () => {
     try {
@@ -792,6 +956,16 @@ function useOrdersPolling(endpoint: string) {
         setRatingStatus(data.ratingStatus ?? null);
         setDelaySeconds(data.delaySeconds ?? 0);
         setLastUpdated(new Date());
+        setOfferedOrderId(data.offeredOrderId ?? null);
+        setOfferClock(
+          data.offeredOrderId && typeof data.offerRemainingMs === 'number'
+            ? {
+                orderId: data.offeredOrderId,
+                remainingMs: data.offerRemainingMs,
+                receivedAt: performance.now(),
+              }
+            : null,
+        );
       }
     } catch {
       // silently retry
@@ -806,7 +980,18 @@ function useOrdersPolling(endpoint: string) {
     return () => clearInterval(id);
   }, [fetch_]);
 
-  return { orders, setOrders, loading, lastUpdated, reason, ratingStatus, delaySeconds, refetch: fetch_ };
+  return {
+    orders,
+    setOrders,
+    loading,
+    lastUpdated,
+    reason,
+    ratingStatus,
+    delaySeconds,
+    offeredOrderId,
+    offerClock,
+    refetch: fetch_,
+  };
 }
 
 function OfflineReminderBanner({ onGoOnline }: { onGoOnline: () => void }) {
@@ -898,6 +1083,25 @@ export function CourierLobby({ courierId }: { courierId: number }) {
     [available],
   );
 
+  const handleDecline = useCallback(
+    async (orderId: string) => {
+      // Drop it immediately: the backend hands the order to the next courier
+      // the moment this returns, so leaving the card up would show something
+      // that is already somebody else's.
+      const removed = available.orders.find((o) => o.orderId === orderId);
+      available.setOrders((prev) => prev.filter((o) => o.orderId !== orderId));
+      try {
+        await declineOrder(orderId);
+      } catch (err) {
+        if (removed) available.setOrders((prev) => [...prev, removed]);
+        alert(err instanceof Error ? err.message : 'Gagal menolak order');
+      } finally {
+        available.refetch();
+      }
+    },
+    [available],
+  );
+
   const handleDelivered = useCallback(
     async (orderId: string) => {
       //DONE:: db catch the delivered state and insert into CashInDetailTables
@@ -939,9 +1143,11 @@ export function CourierLobby({ courierId }: { courierId: number }) {
             </div>
           </div>
           <p className="text-sm text-muted-foreground">
-            {available.orders.length > 0
-              ? `${available.orders.length} pesanan menunggu kurir`
-              : 'Belum ada pesanan yang tersedia'}
+            {available.offeredOrderId
+              ? 'Ada tawaran untuk pian — jawab sebelum waktunya habis'
+              : available.orders.length > 0
+                ? `${available.orders.length} pesanan terbuka untuk semua kurir`
+                : 'Belum ada pesanan yang tersedia'}
           </p>
         </div>
         {current.lastUpdated && (
@@ -1026,14 +1232,31 @@ export function CourierLobby({ courierId }: { courierId: number }) {
               <AnimatePresence mode="popLayout">
                 {activeTab === 'available' ? (
                   <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
-                    {available.orders.map((order, i) => (
-                      <AvailableOrderCard
-                        key={order.orderId}
-                        order={order}
-                        index={i}
-                        onAccept={handleAccept}
-                      />
-                    ))}
+                    {[...available.orders]
+                      // The offer with a clock on it goes first — it is the only
+                      // card with a deadline, so it must not sit below three
+                      // pool orders that will still be there in a minute.
+                      .sort((a, b) => {
+                        const aOffer = a.orderId === available.offeredOrderId ? 0 : 1;
+                        const bOffer = b.orderId === available.offeredOrderId ? 0 : 1;
+                        return aOffer - bOffer;
+                      })
+                      .map((order, i) => (
+                        <AvailableOrderCard
+                          key={order.orderId}
+                          order={order}
+                          index={i}
+                          onAccept={handleAccept}
+                          onDecline={handleDecline}
+                          offerClock={
+                            available.offerClock &&
+                            available.offerClock.orderId === order.orderId
+                              ? available.offerClock
+                              : null
+                          }
+                          onOfferExpired={available.refetch}
+                        />
+                      ))}
                   </div>
                 ) : (
                   <div className="flex flex-col gap-4">

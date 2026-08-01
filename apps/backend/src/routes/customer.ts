@@ -250,7 +250,7 @@ export async function customerRoutes(app: FastifyInstance) {
     // What this courier may see: the one order they have been offered, plus
     // anything that has fallen through to the open pool. Not "every confirmed
     // order", which is what made staring at the lobby the way to earn.
-    const { offeredOrderId, offerExpiresAt, openPoolOrderIds } =
+    const { offeredOrderId, offerExpiresAt, offerRemainingMs, openPoolOrderIds } =
       await visibleOrderIdsFor(courier.id);
 
     const visibleIds = [offeredOrderId, ...openPoolOrderIds].filter(
@@ -265,6 +265,7 @@ export async function customerRoutes(app: FastifyInstance) {
         reason: null,
         offeredOrderId: null,
         offerExpiresAt: null,
+        offerRemainingMs: null,
         ratingStatus: availability.ratingStatus,
         delaySeconds: availability.delaySeconds,
       };
@@ -320,6 +321,9 @@ export async function customerRoutes(app: FastifyInstance) {
       // runs out, so it can show a countdown instead of a silent disappearance.
       offeredOrderId,
       offerExpiresAt,
+      // Milliseconds left as measured by the database, for a countdown that
+      // doesn't depend on the phone's clock being right.
+      offerRemainingMs,
       ratingStatus: availability.ratingStatus,
       delaySeconds: availability.delaySeconds,
     };

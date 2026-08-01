@@ -103,7 +103,16 @@ export async function supersedeOffers(orderId: string): Promise<void> {
     );
 }
 
-/** The offer this courier is currently being asked to answer, if any. */
+/**
+ * The offer this courier is currently being asked to answer, if any.
+ *
+ * `remainingMs` is computed by Postgres rather than handed to the client as a
+ * deadline to subtract from its own clock. A courier's phone can be minutes out
+ * — and a countdown that disagrees with the server is worse than no countdown,
+ * because it either promises time that has already gone or expires an offer
+ * that is still live. The client ticks this number down locally and re-syncs on
+ * every poll.
+ */
 export async function getLiveOfferForCourier(courierId: number) {
   const [offer] = await db
     .select({
@@ -111,6 +120,7 @@ export async function getLiveOfferForCourier(courierId: number) {
       orderId: orderOffersTable.order_id,
       expiresAt: orderOffersTable.expires_at,
       offeredAt: orderOffersTable.offered_at,
+      remainingMs: sql<number>`GREATEST(0, EXTRACT(EPOCH FROM (${orderOffersTable.expires_at} - now())) * 1000)::int`,
     })
     .from(orderOffersTable)
     .where(
@@ -458,6 +468,7 @@ export async function mayAcceptOrder(courierId: number, orderId: string): Promis
 export async function visibleOrderIdsFor(courierId: number): Promise<{
   offeredOrderId: string | null;
   offerExpiresAt: Date | null;
+  offerRemainingMs: number | null;
   openPoolOrderIds: string[];
 }> {
   const offer = await getLiveOfferForCourier(courierId);
@@ -478,6 +489,7 @@ export async function visibleOrderIdsFor(courierId: number): Promise<{
   return {
     offeredOrderId: offer?.orderId ?? null,
     offerExpiresAt: offer?.expiresAt ?? null,
+    offerRemainingMs: offer?.remainingMs ?? null,
     openPoolOrderIds: pool.map((p) => p.id),
   };
 }
