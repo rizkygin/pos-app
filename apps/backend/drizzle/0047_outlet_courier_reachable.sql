@@ -1,0 +1,23 @@
+-- Whether a courier can reach this outlet, cached rather than recomputed.
+--
+-- The owner's order lobby polls four endpoints every two seconds. Deriving
+-- "is this outlet inside the coverage circle" on each of those would be a
+-- distance calculation per poll to answer a question that changes only when the
+-- outlet moves or an admin redraws the area.
+--
+-- An unreachable outlet keeps its cashier, invoices, stock and everything else
+-- it sells over the counter with. What it loses is the courier-delivered online
+-- order flow — the lobby stops polling and the page explains why, rather than
+-- leaving an owner watching an empty screen for orders that can never arrive.
+--
+-- DEFAULT true and no backfill: every existing outlet stays exactly as it is
+-- until an admin configures a service area and recomputes. Defaulting to false
+-- would take all 27 production outlets off the order flow the moment this
+-- migration ran.
+--
+-- Overridable by an admin on purpose. The circle approximates where couriers
+-- go; it is not the territory. A shop just outside the line that a courier
+-- happily serves should be marked reachable without distorting the geometry for
+-- everyone else.
+
+ALTER TABLE "outlets" ADD COLUMN IF NOT EXISTS "courier_reachable" boolean DEFAULT true NOT NULL;

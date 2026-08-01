@@ -207,70 +207,77 @@ export default function HistoryOrderPage() {
 
   if (notCustomer) {
     return (
-      <main className="flex min-h-[40vh] flex-col items-center justify-center gap-3 px-4 pb-12 md:px-6">
-        <ShoppingBag className="size-10 text-muted-foreground/40" />
-        <p className="text-sm text-muted-foreground">Kamu belum terdaftar sebagai pelanggan.</p>
+      <main className="w-full px-4 pb-12 md:px-6">
+        <div className="mx-auto flex min-h-[40vh] w-full max-w-2xl flex-col items-center justify-center gap-3">
+          <ShoppingBag className="size-10 text-muted-foreground/40" />
+          <p className="text-sm text-muted-foreground">Kamu belum terdaftar sebagai pelanggan.</p>
+        </div>
       </main>
     );
   }
 
   return (
-    <main className="mx-auto max-w-2xl px-4 pb-16 md:px-6">
-      {/* Hero */}
-      <div className="relative mt-4 overflow-hidden rounded-3xl bg-gradient-to-br from-rose-500 via-fuchsia-600 to-purple-600 p-6 text-white shadow-xl shadow-fuchsia-500/20">
-        <div className="absolute -right-8 -top-10 size-40 rounded-full bg-white/10 blur-2xl" />
-        <div className="absolute -bottom-12 -left-6 size-40 rounded-full bg-white/10 blur-2xl" />
-        <div className="relative flex flex-col items-center text-center">
-          <FloatingReceipt3D />
-          <h1 className="text-2xl font-black tracking-tight">Riwayat Pesanan</h1>
-          <p className="mt-1 text-sm text-white/80">
-            {orders === null
-              ? 'Memuat...'
-              : orders.length === 0
-                ? 'Belum ada pesanan'
-                : `${orders.length} pesanan`}
-            {rateable > 0 && (
-              <span className="ml-1 font-bold text-amber-200">• {rateable} bisa dinilai</span>
-            )}
-          </p>
+    <main className="w-full px-4 pb-16 md:px-6">
+      {/* The column centers on an inner block, not on <main> itself: <main> is a
+          direct child of the flex-column sidebar inset, where auto margins on a
+          stretched item don't reliably win. */}
+      <div className="mx-auto w-full max-w-2xl">
+        {/* Hero */}
+        <div className="relative mt-4 overflow-hidden rounded-3xl bg-gradient-to-br from-rose-500 via-fuchsia-600 to-purple-600 p-6 text-white shadow-xl shadow-fuchsia-500/20">
+          <div className="absolute -right-8 -top-10 size-40 rounded-full bg-white/10 blur-2xl" />
+          <div className="absolute -bottom-12 -left-6 size-40 rounded-full bg-white/10 blur-2xl" />
+          <div className="relative flex flex-col items-center text-center">
+            <FloatingReceipt3D />
+            <h1 className="text-2xl font-black tracking-tight">Riwayat Pesanan</h1>
+            <p className="mt-1 text-sm text-white/80">
+              {orders === null
+                ? 'Memuat...'
+                : orders.length === 0
+                  ? 'Belum ada pesanan'
+                  : `${orders.length} pesanan`}
+              {rateable > 0 && (
+                <span className="ml-1 font-bold text-amber-200">• {rateable} bisa dinilai</span>
+              )}
+            </p>
+          </div>
         </div>
-      </div>
 
-      {/* List */}
-      <div className="mt-5">
-        {orders === null ? (
-          <div className="flex min-h-[30vh] items-center justify-center text-muted-foreground">
-            <Loader2 className="size-6 animate-spin" />
-          </div>
-        ) : orders.length === 0 ? (
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="flex flex-col items-center justify-center gap-4 rounded-3xl border border-dashed border-border/60 py-16 text-center"
-          >
-            <div className="flex size-16 items-center justify-center rounded-3xl bg-gradient-to-br from-rose-100 to-fuchsia-100 dark:from-rose-950 dark:to-fuchsia-950">
-              <ShoppingBag className="size-8 text-fuchsia-500" />
+        {/* List */}
+        <div className="mt-5">
+          {orders === null ? (
+            <div className="flex min-h-[30vh] items-center justify-center text-muted-foreground">
+              <Loader2 className="size-6 animate-spin" />
             </div>
-            <div>
-              <p className="font-bold">Belum ada pesanan</p>
-              <p className="text-sm text-muted-foreground">Pesanan yang kamu buat akan muncul di sini</p>
-            </div>
-            <Link
-              href="/dashboard/order"
-              className="inline-flex items-center gap-2 rounded-2xl bg-fuchsia-600 px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-fuchsia-600/25 transition-colors hover:bg-fuchsia-700"
+          ) : orders.length === 0 ? (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="flex flex-col items-center justify-center gap-4 rounded-3xl border border-dashed border-border/60 py-16 text-center"
             >
-              Mulai pesan sekarang
-            </Link>
-          </motion.div>
-        ) : (
-          <div className="space-y-4">
-            <AnimatePresence>
-              {orders.map((order, i) => (
-                <HistoryCard key={order.id} order={order} index={i} />
-              ))}
-            </AnimatePresence>
-          </div>
-        )}
+              <div className="flex size-16 items-center justify-center rounded-3xl bg-gradient-to-br from-rose-100 to-fuchsia-100 dark:from-rose-950 dark:to-fuchsia-950">
+                <ShoppingBag className="size-8 text-fuchsia-500" />
+              </div>
+              <div>
+                <p className="font-bold">Belum ada pesanan</p>
+                <p className="text-sm text-muted-foreground">Pesanan yang kamu buat akan muncul di sini</p>
+              </div>
+              <Link
+                href="/dashboard/order"
+                className="inline-flex items-center gap-2 rounded-2xl bg-fuchsia-600 px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-fuchsia-600/25 transition-colors hover:bg-fuchsia-700"
+              >
+                Mulai pesan sekarang
+              </Link>
+            </motion.div>
+          ) : (
+            <div className="space-y-4">
+              <AnimatePresence>
+                {orders.map((order, i) => (
+                  <HistoryCard key={order.id} order={order} index={i} />
+                ))}
+              </AnimatePresence>
+            </div>
+          )}
+        </div>
       </div>
     </main>
   );

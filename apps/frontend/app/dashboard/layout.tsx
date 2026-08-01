@@ -14,6 +14,8 @@ import { SubscriptionWarningBanner } from "@/components/subscription-warning-ban
 import { IncomingOrderAlarm } from "@/components/dashboard/incoming-order-alarm"
 import { PushNotificationNudge } from "@/components/dashboard/push-notification-nudge"
 import { EmailVerificationGate } from "@/components/dashboard/email-verification-gate"
+import { CustomerBottomNav } from "@/components/customer-bottom-nav"
+import { cn } from "@/lib/utils"
 
 // Private, authenticated area — never index. robots.ts also disallows
 // crawling it, but noindex here is the real guarantee (a disallowed page can
@@ -39,6 +41,12 @@ const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
         isEmployee ? ((role.data?.permissions as Record<string, boolean>) ?? {}) : {};
     const isCustomer = !isOwner && !isCourier && !isAdmin && !isEmployee;
 
+    // Who gets the bottom nav instead of the sidebar (phone-portrait only).
+    // Stricter than `isCustomer`: a signed-up user with no role row yet also
+    // satisfies that flag, and they're looking at RegisterRolePage, where every
+    // customer tab would be a dead end.
+    const isSettledCustomer = !!role && role.role === 'customer';
+
     // Email is the only identity check a customer goes through — there's no
     // WhatsApp/phone verification — so an unverified address blocks the whole
     // dashboard until confirmed. Checked against role.role === 'customer', NOT
@@ -54,9 +62,23 @@ const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
             <AppShell variant="sidebar">
                 <AppSidebar isOwner={isOwner} isCourier={isCourier} isCustomer={isCustomer} isAdmin={isAdmin} isEmployee={isEmployee} employeePermissions={employeePermissions} />
 
-                <AppContent variant="sidebar" className="h-svh overflow-x-hidden overflow-y-auto">
+                <AppContent
+                    variant="sidebar"
+                    className={cn(
+                        "h-svh overflow-x-hidden overflow-y-auto",
+                        // Room for the fixed bottom nav, so the last card of any
+                        // page clears it instead of hiding behind it.
+                        isSettledCustomer && "max-md:portrait:pb-20",
+                    )}
+                >
                     <header className="animated-gradient header-shine sticky top-0 z-30 flex h-12 shrink-0 items-center gap-2 overflow-hidden border-b border-white/10 px-3 shadow-sm md:h-10">
-                        <SidebarTrigger className="relative z-10 size-11 text-amber-50 hover:bg-white/15 hover:text-white md:size-7" />
+                        {/* Hiding the trigger is what retires the sidebar: on
+                            mobile it renders as a sheet, so with no way to open
+                            it, the bottom nav is the only navigation. */}
+                        <SidebarTrigger className={cn(
+                            "relative z-10 size-11 text-amber-50 hover:bg-white/15 hover:text-white md:size-7",
+                            isSettledCustomer && "max-md:portrait:hidden",
+                        )} />
                         <span className="relative z-10 flex items-center gap-2 text-sm font-semibold text-amber-50 drop-shadow-sm">
                             <span className="inline-block size-1.5 animate-pulse rounded-full bg-emerald-300 shadow-[0_0_8px_rgba(110,231,183,0.9)]" />
                             {isAdmin ? 'Hello Admin' : isOwner ? 'Dashboard' : isCourier ? 'Kurir' : isEmployee ? 'Karyawan' : 'Dashboard'}
@@ -81,6 +103,8 @@ const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
                     ) : (
                         children
                     )}
+
+                    {isSettledCustomer && <CustomerBottomNav />}
 
                     {/* <div className="hidden md:block"><MessageChatComponent /></div> */}
                 </AppContent>

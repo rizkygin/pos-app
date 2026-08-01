@@ -115,8 +115,15 @@ const CUSTOMER_CANCEL_LOCK_MS = 5 * 60 * 1000;
 // The 30 km ceiling is road distance too. Previously a customer 29 km away in a
 // straight line — ~50 km by road — passed the check, and a courier accepted a
 // ride they had no way of knowing the length of.
+// Hard ceiling on how far physical goods travel, road distance. Shared by the
+// fee table and the range gate below so the two can't drift — a customer who
+// can be charged is a customer who can be served, and vice versa. Mirrored by
+// MAX_DELIVERY_KM in routes/public.ts, which hides out-of-range outlets from
+// browse; this is the enforcement, that is the courtesy.
+const MAX_DELIVERY_KM = 50;
+
 function deliveryFeeFromDistance(km: number): number {
-  const MAX_KM = 50;
+  const MAX_KM = MAX_DELIVERY_KM;
   const BASE_FEE = 10_000; // tarif dasar untuk jarak <= 5 km
   const BASE_KM = 5; // jarak yang sudah tercover base fee
   const RATE_PER_KM = 1_800; // tarif tambahan per km setelah base
@@ -164,6 +171,48 @@ async function computeDeliveryFee(userId: string, outletId: number): Promise<num
   );
 
   return deliveryFeeFromDistance(billableKm(distance));
+}
+
+/**
+ * Refuse an order the outlet cannot physically serve.
+ *
+ * The delivery lane gets this for free — computeDeliveryFee() throws past the
+ * cap — but the materials lane has no distance fee to compute, so without an
+ * explicit check an outlet could be handed a 200 km haul it never agreed to and
+ * has no courier to refuse it with.
+ *
+ * Server-side because the browse list and the outlet page only *hide* distant
+ * outlets. Anything that hides can be bypassed with a direct API call; this is
+ * the part that actually cannot.
+ */
+async function assertWithinDeliveryRange(userId: string, outletId: number): Promise<void> {
+  const [[userLoc], [outlet]] = await Promise.all([
+    db
+      .select({ lat: locationsTable.lat, lon: locationsTable.lon })
+      .from(locationsTable)
+      .where(and(eq(locationsTable.user_id, userId), eq(locationsTable.is_default, true)))
+      .limit(1),
+    db
+      .select({ lat: outletsTable.lat, lon: outletsTable.lon })
+      .from(outletsTable)
+      .where(eq(outletsTable.id, outletId))
+      .limit(1),
+  ]);
+
+  if (!userLoc) throw new Error("Alamat pengiriman tidak ditemukan");
+  if (!outlet) throw new Error("Outlet tidak ditemukan");
+
+  const distance = await roadDistance(
+    { lat: parseFloat(outlet.lat), lon: parseFloat(outlet.lon) },
+    { lat: parseFloat(userLoc.lat), lon: parseFloat(userLoc.lon) },
+  );
+
+  // billableKm, not raw km: a straight-line fallback reads ~40% short here, and
+  // letting an outage wave through a haul that is really 70 km would defeat the
+  // point of having a cap.
+  if (billableKm(distance) > MAX_DELIVERY_KM) {
+    throw new Error(`Jarak pengiriman melebihi batas maksimum (${MAX_DELIVERY_KM} km)`);
+  }
 }
 
 // Owner or employee with the activeOrders permission → outlet {id}, else null.
@@ -226,6 +275,14 @@ export async function orderRoutes(app: FastifyInstance) {
       // and a materials haul is quoted by the owner into delivery_fee once they
       // have seen the address (see /api/orders/confirm-materials).
       const chargesDistanceFee = lane === "delivery";
+
+      // Materials moves real goods but computes no distance fee, so the range
+      // cap has to be asserted for it explicitly. Jasa is exempt: nothing is
+      // transported, and the customer travels to the outlet or the owner to
+      // them by their own arrangement.
+      if (lane === "materials") {
+        await assertWithinDeliveryRange(session.user.id, data.outlet_id);
+      }
 
       const [[customer], delivery_fee, [outlet]] = await Promise.all([
         db

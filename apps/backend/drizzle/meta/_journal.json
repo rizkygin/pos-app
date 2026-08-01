@@ -323,6 +323,20 @@
       "when": 1785524345242,
       "tag": "0045_user_phone_change_cooldown",
       "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1785550807427,
+      "tag": "0046_service_area",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1785552649197,
+      "tag": "0047_outlet_courier_reachable",
+      "breakpoints": true
     }
   ]
 }

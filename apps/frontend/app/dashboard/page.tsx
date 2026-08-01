@@ -94,6 +94,7 @@ const dashboardPage = async () => {
         recommend={data.recommend}
         ads={data.ads}
         hasLocation={data.hasLocation}
+        location={data.location ?? null}
       />
     );
   }

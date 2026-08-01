@@ -263,6 +263,13 @@ const adminOutletSubItems = [
 
 const adminManageNavItems: NavItem[] = [
   {
+    name: 'Area Layanan',
+    url: '/dashboard/admin/service-area',
+    icon: MapPin,
+    iconBg: 'bg-blue-100 dark:bg-blue-950',
+    iconColor: 'text-blue-600 dark:text-blue-400',
+  },
+  {
     name: 'Order',
     url: '/dashboard/admin/order',
     icon: Receipt,

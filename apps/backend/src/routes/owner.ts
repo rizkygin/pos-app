@@ -194,7 +194,14 @@ export async function ownerRoutes(app: FastifyInstance) {
     const outlet = await outletFor(session.user.id, "activeOrders", request);
     if (!outlet) return reply.status(403).send({ success: false, error: "Not an owner" });
 
-    return { success: true, orders: await lobbyOrdersByStatus(outlet.id, "pending") };
+    // No courier reaches this outlet, so no courier-delivered order can
+    // ever land here. Reported explicitly rather than as an empty list:
+    // the client uses it to stop polling and explain the blank screen.
+    if (!outlet.courier_reachable) {
+      return { success: true, orders: [], courierReachable: false };
+    }
+
+    return { success: true, orders: await lobbyOrdersByStatus(outlet.id, "pending"), courierReachable: true };
   });
 
   // Count-only sibling of the route above. The incoming-order alarm polls this
@@ -207,12 +214,19 @@ export async function ownerRoutes(app: FastifyInstance) {
     const outlet = await outletFor(session.user.id, "activeOrders", request);
     if (!outlet) return reply.status(403).send({ success: false, error: "Not an owner" });
 
+    // The alarm polls this from every dashboard page. An outlet no courier
+    // reaches can never accumulate a pending courier order, so skip the query
+    // entirely rather than counting to zero over and over.
+    if (!outlet.courier_reachable) {
+      return { success: true, count: 0, courierReachable: false };
+    }
+
     const [row] = await db
       .select({ count: count() })
       .from(ordersTable)
       .where(and(eq(ordersTable.outlet_id, outlet.id), eq(ordersTable.status, "pending")));
 
-    return { success: true, count: row?.count ?? 0 };
+    return { success: true, count: row?.count ?? 0, courierReachable: true };
   });
 
   app.get("/api/get-preparing-orders", async (request, reply) => {
@@ -222,7 +236,14 @@ export async function ownerRoutes(app: FastifyInstance) {
     const outlet = await outletFor(session.user.id, "activeOrders", request);
     if (!outlet) return reply.status(403).send({ success: false, error: "Not an owner" });
 
-    return { success: true, orders: await lobbyOrdersByStatus(outlet.id, "preparing") };
+    // No courier reaches this outlet, so no courier-delivered order can
+    // ever land here. Reported explicitly rather than as an empty list:
+    // the client uses it to stop polling and explain the blank screen.
+    if (!outlet.courier_reachable) {
+      return { success: true, orders: [], courierReachable: false };
+    }
+
+    return { success: true, orders: await lobbyOrdersByStatus(outlet.id, "preparing"), courierReachable: true };
   });
 
   // "Mencari kurir" lane: the owner has confirmed the order but no courier has
@@ -236,7 +257,14 @@ export async function ownerRoutes(app: FastifyInstance) {
     const outlet = await outletFor(session.user.id, "activeOrders", request);
     if (!outlet) return reply.status(403).send({ success: false, error: "Not an owner" });
 
-    return { success: true, orders: await lobbyOrdersByStatus(outlet.id, "confirmed") };
+    // No courier reaches this outlet, so no courier-delivered order can
+    // ever land here. Reported explicitly rather than as an empty list:
+    // the client uses it to stop polling and explain the blank screen.
+    if (!outlet.courier_reachable) {
+      return { success: true, orders: [], courierReachable: false };
+    }
+
+    return { success: true, orders: await lobbyOrdersByStatus(outlet.id, "confirmed"), courierReachable: true };
   });
 
   app.get("/api/get-ready-orders", async (request, reply) => {
@@ -246,7 +274,14 @@ export async function ownerRoutes(app: FastifyInstance) {
     const outlet = await outletFor(session.user.id, "activeOrders", request);
     if (!outlet) return reply.status(403).send({ success: false, error: "Not an owner" });
 
-    return { success: true, orders: await lobbyOrdersByStatus(outlet.id, "ready") };
+    // No courier reaches this outlet, so no courier-delivered order can
+    // ever land here. Reported explicitly rather than as an empty list:
+    // the client uses it to stop polling and explain the blank screen.
+    if (!outlet.courier_reachable) {
+      return { success: true, orders: [], courierReachable: false };
+    }
+
+    return { success: true, orders: await lobbyOrdersByStatus(outlet.id, "ready"), courierReachable: true };
   });
 
   app.get("/api/get-outlet-order-detail", async (request, reply) => {

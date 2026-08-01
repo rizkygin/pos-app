@@ -399,8 +399,32 @@ export function OrderClient({
         </div>
       </div>
 
-      {/* ── Closed State ─────────────────────────────────────────── */}
-      {outlet && !outlet.isOpen ? (
+      {/* ── Out of range ─────────────────────────────────────────
+          Checked before "closed": being unreachable is the more fundamental
+          problem, and "buka besok" would be misleading advice for somewhere
+          that can't deliver here at all. Shown rather than silently redirecting
+          so the customer learns why — the outlet is real, just too far. */}
+      {outlet?.outOfRange ? (
+        <div className="px-4 md:px-8 pt-10 pb-16">
+          <div className="flex flex-col items-center text-center gap-3 max-w-sm mx-auto">
+            <div className="h-16 w-16 rounded-2xl bg-amber-50 flex items-center justify-center">
+              <MapPin className="h-8 w-8 text-amber-500" />
+            </div>
+            <h2 className="font-black text-xl">Di Luar Jangkauan Antar</h2>
+            <p className="text-sm text-muted-foreground">
+              {outlet.name} berjarak {outlet.distanceKm} km lewat jalan dari alamat
+              pian — di luar batas antar 50 km, jadi pesanan ke sini tidak bisa
+              diproses.
+            </p>
+            <Link
+              href={backHref}
+              className="mt-2 inline-flex items-center gap-1.5 px-5 py-2.5 rounded-full bg-rose-500 hover:bg-rose-600 text-white font-bold text-sm transition-colors"
+            >
+              Cari Outlet Terdekat
+            </Link>
+          </div>
+        </div>
+      ) : outlet && !outlet.isOpen ? (
         <div className="px-4 md:px-8 pt-10 pb-16">
           <div className="flex flex-col items-center text-center gap-3 max-w-sm mx-auto">
             <div className="h-16 w-16 rounded-2xl bg-red-50 flex items-center justify-center">
@@ -579,9 +603,12 @@ export function OrderClient({
       </div>
       )}
 
-      {/* ── Floating Action Bar (no basket in service mode) ───────── */}
-      {isService || (outlet && !outlet.isOpen) ? null : (
-      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3">
+      {/* ── Floating Action Bar (no basket in service mode) ─────────
+          Also hidden out of range: leaving a Checkout button live on an outlet
+          that can't deliver here is an invitation to a rejection at the end.
+          Lifted clear of the customer bottom nav wherever that nav is on screen. */}
+      {isService || outlet?.outOfRange || (outlet && !outlet.isOpen) ? null : (
+      <div className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 max-md:portrait:bottom-24">
         {/* Wishlist button */}
         <Sheet open={wishlistOpen} onOpenChange={setWishlistOpen}>
           <SheetTrigger asChild>

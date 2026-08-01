@@ -1,5 +1,5 @@
 'use client'
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { MapPin, Loader2, AlertCircle } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { Button } from "@/components/ui/button";
@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { ORDER_FEATURES } from "@/lib/order-features";
 import { API_URL } from "@/lib/api-url";
 import { getCurrentPosition, geolocationMessage } from "@/lib/geolocation";
+import { haversineKm } from "@/lib/haversine";
 
 /* ─── Syariah-friendly SVG illustrations ────────────────────────────────────
    Each character has glasses frames but NO eyes drawn inside them.
@@ -251,6 +252,43 @@ const RegistrationForm = ({ role, onCancel }: { role: string; onCancel: () => vo
 
     const currentRole = roles.find((r) => r.id === role);
 
+    // Courier coverage circle, fetched once. Held as the shape rather than a
+    // yes/no so the warning re-evaluates instantly when the pin moves, instead
+    // of waiting on a round-trip per location.
+    const [serviceArea, setServiceArea] = useState<{
+        centerLat: number;
+        centerLon: number;
+        radiusKm: number;
+    } | null>(null);
+
+    useEffect(() => {
+        let cancelled = false;
+        fetch(`${API_URL}/api/service-area`)
+            .then((r) => r.json())
+            .then((json) => {
+                if (!cancelled && json?.success) setServiceArea(json.area ?? null);
+            })
+            .catch(() => {
+                // No area means no warning. Failing to fetch it must never block
+                // someone from registering.
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    // Advisory only — an owner outside the circle can still register. They can
+    // sell over the counter today, and coverage expands; refusing a real
+    // business over a circle drawn last month would cost more than it saves.
+    const coverage = useMemo(() => {
+        if (!serviceArea || !formData.lat || !formData.lon) return null;
+        const lat = Number(formData.lat);
+        const lon = Number(formData.lon);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+        const distanceKm = haversineKm(lat, lon, serviceArea.centerLat, serviceArea.centerLon);
+        return { outside: distanceKm > serviceArea.radiusKm, distanceKm, area: serviceArea };
+    }, [serviceArea, formData.lat, formData.lon]);
+
     const handleGetLocation = () => {
         if (!navigator.geolocation) return alert("Geolocation tidak didukung browser ini");
         setLocating(true);
@@ -365,6 +403,26 @@ const RegistrationForm = ({ role, onCancel }: { role: string; onCancel: () => vo
                                     ? `Lokasi: ${Number(formData.lat).toFixed(5)}, ${Number(formData.lon).toFixed(5)}`
                                     : "Gunakan Lokasi Saya"}
                         </Button>
+
+                        {/* Advisory, not a blocker — the form stays submittable.
+                            Amber rather than red on purpose: this is something
+                            to know, not an error to fix. */}
+                        {coverage?.outside && (
+                            <div className="flex items-start gap-2.5 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 dark:border-amber-900 dark:bg-amber-950/40">
+                                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                                <div className="space-y-1">
+                                    <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+                                        Titik lokasi anda tidak tercakup dalam area penjemputan kurir kami.
+                                    </p>
+                                    <p className="text-xs text-amber-700 dark:text-amber-400/90">
+                                        Lokasi pian {Math.round(coverage.distanceKm)} km dari pusat area
+                                        layanan (radius {coverage.area.radiusKm} km). Pian tetap bisa
+                                        mendaftar dan berjualan langsung di tempat — hanya pengantaran
+                                        oleh kurir yang belum tersedia di sana.
+                                    </p>
+                                </div>
+                            </div>
+                        )}
 
                         <div className="space-y-2 bg-amber-950 rounded-2xl p-1.5">
                             <label className="text-sm font-medium text-white flex items-center justify-between">

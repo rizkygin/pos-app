@@ -13,6 +13,9 @@ export const OutletSchema = z.object({
     estimatedTime: z.string().nullable(),
     // Road distance from the customer's default address, km. Null likewise.
     distanceKm: z.number().nullable().optional(),
+    // Beyond the 50 km delivery cap by road. Only ever true on a real routed
+    // measurement — absent distance means "unknown", never "too far".
+    outOfRange: z.boolean().optional(),
     isOpen: z.boolean(),
     features: z.array(z.string().optional()),
     coverImage: z.string(),

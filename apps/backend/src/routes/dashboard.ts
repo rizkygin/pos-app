@@ -470,8 +470,17 @@ export async function dashboardRoutes(app: FastifyInstance) {
       .orderBy(desc(productsTable.review_count))
       .limit(3);
 
+    // label/address ride along for the dashboard's delivery-address header —
+    // same default-address row the distances below are measured from, so what
+    // the customer reads at the top is what everything under it is relative to.
     const [userLocation] = await db
-      .select({ lat: locationsTable.lat, lon: locationsTable.lon })
+      .select({
+        id: locationsTable.id,
+        label: locationsTable.label,
+        address: locationsTable.address,
+        lat: locationsTable.lat,
+        lon: locationsTable.lon,
+      })
       .from(locationsTable)
       .where(
         and(eq(locationsTable.user_id, session.user.id), eq(locationsTable.is_default, true)),
@@ -550,6 +559,9 @@ export async function dashboardRoutes(app: FastifyInstance) {
       recommend,
       ads,
       hasLocation: !!userLocation,
+      location: userLocation
+        ? { id: userLocation.id, label: userLocation.label, address: userLocation.address }
+        : null,
     });
   });
 }

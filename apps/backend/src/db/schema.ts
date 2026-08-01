@@ -130,6 +130,17 @@ export const outletsTable = pgTable('outlets', {
   tags: text('tags').array().default([]).notNull(),
   features: text('features').array().default([]).notNull(),
   is_open: boolean('is_open').default(true).notNull(),
+  // Can a courier actually reach this outlet? Cached, not derived on read: the
+  // order lobby polls four endpoints every two seconds, and the answer only
+  // changes when the outlet moves or an admin redraws the coverage circle.
+  //
+  // Deliberately overridable by an admin. The circle approximates where couriers
+  // go — it is not the territory — so a shop just outside the line that is in
+  // fact served should be markable without distorting the geometry for everyone.
+  //
+  // Defaults true: inert until an admin configures an area, matching the
+  // "unset means permissive" rule the rest of this feature follows.
+  courier_reachable: boolean('courier_reachable').default(true).notNull(),
   ...timestamps,
 });
 
@@ -150,6 +161,33 @@ export const customersTable = pgTable('customers', {
     .references(() => usersTable.id),
   ratings: numeric('ratings', { precision: 3, scale: 2 }).default('5'),
   review_count: integer('review_count').default(0).notNull(),
+  ...timestamps,
+});
+
+/**
+ * The area Ulun Pesan's couriers actually serve, as a centre + radius.
+ *
+ * Single logical row — read as "the newest one wins" rather than enforced by a
+ * constraint, so changing it leaves an audit trail of who moved the centre and
+ * when instead of silently overwriting.
+ *
+ * Straight-line radius, deliberately. This answers "do we operate here at all",
+ * a coarse business question, and a circle is something an admin can reason
+ * about and draw on a map. The per-order 50 km cap is separate and measured by
+ * ROAD (see MAX_DELIVERY_KM in routes/orders.ts) — that one decides whether a
+ * specific delivery is viable.
+ *
+ * numeric, not varchar: empty strings and the literal 'NaN' are how coordinates
+ * got poisoned before (see migration 0041 and the repair preceding it).
+ */
+export const serviceAreaTable = pgTable('service_area', {
+  id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+  center_lat: numeric('center_lat', { precision: 10, scale: 7 }).notNull(),
+  center_lon: numeric('center_lon', { precision: 10, scale: 7 }).notNull(),
+  radius_km: integer('radius_km').notNull().default(50),
+  // Who last moved it. Null-safe on user deletion — the history of the change
+  // matters more than being able to name the admin forever.
+  updated_by: text('updated_by').references(() => usersTable.id, { onDelete: 'set null' }),
   ...timestamps,
 });
 

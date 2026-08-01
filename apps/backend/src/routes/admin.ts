@@ -16,12 +16,15 @@ import {
   ratingsTable,
   orderDetailsTable,
   usersTable,
+  serviceAreaTable,
 } from "../db/schema";
 
 const OFFLINE_CUSTOMER_EMAIL = "rizkygin1@gmail.com";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 import { closeStaleCourierSessions, staleShiftCutoff } from "../lib/utils/courier-availability";
+import { getServiceArea, recomputeCourierReachable } from "../lib/service-area";
+import { parseCoordPair } from "../lib/utils/coords";
 
 async function requireAdmin(userId: string) {
   const [admin] = await db
@@ -1001,5 +1004,126 @@ export async function adminRoutes(app: FastifyInstance) {
     ]);
 
     return reply.send({ success: true, online, history });
+  });
+
+  /**
+   * Courier coverage area — the circle admins draw on the map.
+   *
+   * Also returns every outlet's position so the map can show which ones fall
+   * inside and which are stranded. Moving the centre has real consequences for
+   * existing outlets, and an admin should be able to see them before saving
+   * rather than discovering them through support tickets.
+   */
+  app.get("/api/admin/service-area", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false });
+    if (!(await requireAdmin(session.user.id)))
+      return reply.status(403).send({ success: false, error: "Admin only" });
+
+    const area = await getServiceArea();
+
+    const outlets = await db
+      .select({
+        id: outletsTable.id,
+        name: outletsTable.name,
+        lat: outletsTable.lat,
+        lon: outletsTable.lon,
+        isOpen: outletsTable.is_open,
+        reachable: outletsTable.courier_reachable,
+      })
+      .from(outletsTable)
+      .where(isNull(outletsTable.deletedAt));
+
+    return reply.send({
+      success: true,
+      area,
+      outlets: outlets
+        .map((o) => {
+          const coords = parseCoordPair(o.lat, o.lon);
+          return coords
+            ? { id: o.id, name: o.name, isOpen: o.isOpen, reachable: o.reachable, ...coords }
+            : null;
+        })
+        // Outlets with unusable coordinates simply can't be plotted. Dropped
+        // rather than defaulted, so the map never invents a position.
+        .filter((o): o is NonNullable<typeof o> => o !== null),
+    });
+  });
+
+  app.put("/api/admin/service-area", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false });
+    if (!(await requireAdmin(session.user.id)))
+      return reply.status(403).send({ success: false, error: "Admin only" });
+
+    const body = (request.body ?? {}) as { lat?: unknown; lon?: unknown; radiusKm?: unknown };
+    const coords = parseCoordPair(body.lat, body.lon);
+    if (!coords) {
+      return reply.status(400).send({ success: false, error: "Titik pusat tidak valid" });
+    }
+
+    const radiusKm = Number(body.radiusKm ?? 50);
+    if (!Number.isFinite(radiusKm) || radiusKm < 1 || radiusKm > 500) {
+      return reply.status(400).send({ success: false, error: "Radius harus antara 1 dan 500 km" });
+    }
+
+    // Insert, not update: each change is a new row, so the centre's history is
+    // preserved and getServiceArea() reads the newest.
+    await db.insert(serviceAreaTable).values({
+      center_lat: String(coords.lat),
+      center_lon: String(coords.lon),
+      radius_km: Math.round(radiusKm),
+      updated_by: session.user.id,
+    });
+
+    // Moving the circle changes who is inside it, so every outlet is
+    // re-evaluated here. Doing it at save time — rather than lazily — means the
+    // admin finds out immediately how many outlets they just affected, instead
+    // of it surfacing days later as a support ticket.
+    const changed = await recomputeCourierReachable();
+
+    return reply.send({ success: true, area: await getServiceArea(), changed });
+  });
+
+  /**
+   * Manual override of a single outlet's reachability.
+   *
+   * The circle is an approximation of where couriers actually go. When it
+   * disagrees with reality — a shop just past the line that a courier passes
+   * anyway — an admin should be able to correct that one outlet without
+   * reshaping the geometry for everyone else.
+   *
+   * Note this is overwritten the next time the service area is saved, since
+   * that recomputes every outlet from the circle. Deliberate: the geometry is
+   * the rule, and an override is a patch on top of the current rule, not a
+   * permanent exemption from future ones.
+   */
+  app.put("/api/admin/outlet/:outletId/reachable", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false });
+    if (!(await requireAdmin(session.user.id)))
+      return reply.status(403).send({ success: false, error: "Admin only" });
+
+    const { outletId } = request.params as { outletId: string };
+    const id = Number(outletId);
+    if (!Number.isInteger(id)) {
+      return reply.status(400).send({ success: false, error: "outletId tidak valid" });
+    }
+
+    const reachable = (request.body as { reachable?: unknown })?.reachable;
+    if (typeof reachable !== "boolean") {
+      return reply.status(400).send({ success: false, error: "reachable harus true/false" });
+    }
+
+    const updated = await db
+      .update(outletsTable)
+      .set({ courier_reachable: reachable })
+      .where(and(eq(outletsTable.id, id), isNull(outletsTable.deletedAt)))
+      .returning({ id: outletsTable.id });
+
+    if (updated.length === 0)
+      return reply.status(404).send({ success: false, error: "Outlet tidak ditemukan" });
+
+    return reply.send({ success: true, reachable });
   });
 }

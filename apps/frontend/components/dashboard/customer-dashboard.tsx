@@ -28,11 +28,11 @@ import {
     AlertDialogMedia,
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { DashboardHeader } from "@/components/dashboard-header";
 import Image from "next/image";
 import Link from "next/link";
 import { formatCurrency } from "@/lib/utils/format";
 import { resolveProductImage, resolveBannerImage, isBackendImage } from "@/lib/image-src";
+import { CustomerHero, type ActiveLocation } from "@/components/dashboard/customer-hero";
 
 type LastOrder = {
     orderId: string;
@@ -83,9 +83,10 @@ type CustomerDashboardProps = {
     recommend?: RecommendedMenu[];
     ads?: AdBanner[];
     hasLocation?: boolean;
+    location?: ActiveLocation;
 };
 
-export const CustomerDashboard = ({ lastOrders = [], recommend = [], ads = [], hasLocation = true }: CustomerDashboardProps) => {
+export const CustomerDashboard = ({ lastOrders = [], recommend = [], ads = [], hasLocation = true, location = null }: CustomerDashboardProps) => {
     const [adIndex, setAdIndex] = useState(0);
 
     useEffect(() => {
@@ -110,17 +111,10 @@ export const CustomerDashboard = ({ lastOrders = [], recommend = [], ads = [], h
 
     return (
         <main className="px-4 mx-2 md:mx-6 pb-12 space-y-8">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <DashboardHeader
-                    title="Handak pesan apa?"
-                    description="Pilih kategori di bawah buat mulai pesan."
-                />
-
-                {/* <div className="flex items-center gap-2 text-sm font-bold text-muted-foreground bg-muted/30 px-4 py-2 rounded-full border border-border/50">
-                    <MapPin className="h-4 w-4 text-rose-500" />
-                    <span>Sudirman, Jakarta</span>
-                </div> */}
-            </div>
+            {/* Address first, then search — both above the greeting, because
+                "where does this go" and "what am I looking for" are the two
+                things a customer arrives with. */}
+            <CustomerHero location={location} />
 
             {/* Promo Banner */}
             {ads.length > 0 && (

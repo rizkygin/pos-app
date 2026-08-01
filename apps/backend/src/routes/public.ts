@@ -8,12 +8,13 @@ import { toWebHeaders } from "../lib/web-headers";
 import { haversineKm } from "../lib/utils/geo";
 import { parseCoordPair } from "../lib/utils/coords";
 import { roadTable } from "../lib/utils/road-distance";
+import { getServiceArea } from "../lib/service-area";
 // Scopes get-all-product?feature=... to that feature's own products. Shared with
 // recalcOutletFeatures so the outlet gate (outlets.features) and the product
 // gate (products.category) below are derived from one identical map — the local
 // copy that used to live here is what let "bahan bangunan" go missing and drop
 // out of browse while its outlets still advertised the feature.
-import { FEATURE_CATEGORY } from "../lib/outlet-features";
+import { CATEGORY_FEATURE, FEATURE_CATEGORY } from "../lib/outlet-features";
 
 // Must not exceed the delivery cap in deliveryFeeFromDistance (orders.ts) —
 // listing an outlet nobody can actually order from is worse than omitting it.
@@ -248,6 +249,17 @@ export async function publicRoutes(app: FastifyInstance) {
     return {
       data: reachable
         .map((c, i) => ({ c, d: table[i] }))
+        // Second pass, now on ROAD distance. The straight-line filter above only
+        // narrows the routing candidates — it can't be the final word, because
+        // road distance runs ~1.7x here: an outlet 40 km as the crow flies is
+        // ~68 km of driving and over the cap. Listing it would let a customer
+        // browse and fill a basket, then be refused at checkout when
+        // deliveryFeeFromDistance throws. Better never to offer it.
+        //
+        // A straight-line fallback (routing unavailable) is kept rather than
+        // dropped: it already passed the crow-flies test, and hiding outlets
+        // because OSRM blinked would be worse than showing an optimistic one.
+        .filter(({ d }) => d.source !== "road" || d.km <= MAX_DELIVERY_KM)
         .sort((a, b) => {
           // Open outlets first — a closer shop that's shut is not a better
           // answer than an open one slightly further away.
@@ -318,6 +330,151 @@ export async function publicRoutes(app: FastifyInstance) {
     return { data: rows.map(mapProductRow) };
   });
 
+  /**
+   * Marketplace-wide product search (the /dashboard/search-order page).
+   *
+   * Distinct from get-all-product, which is the browse feed: that one is scoped
+   * to one feature or one outlet and hides anything that isn't in an open shop.
+   * Search is the opposite contract — a customer typing "bebek goreng" wants
+   * every match there is, so closed outlets stay in the results and are simply
+   * sorted last and flagged, rather than silently missing.
+   *
+   * Public on purpose: it reads the session only to measure distance, so
+   * anonymous browsing keeps working (with distanceKm null).
+   */
+  app.get("/api/search-products", async (request) => {
+    const { q, limit, offset } = request.query as {
+      q?: string;
+      limit?: string;
+      offset?: string;
+    };
+
+    const term = (q ?? "").trim();
+    const take = Math.min(Math.max(Number(limit) || 24, 1), 48);
+    const skip = Math.max(Number(offset) || 0, 0);
+    const pattern = `%${term}%`;
+
+    // An empty query isn't an error — it's the state the page opens in, and it
+    // answers with the best-rated things on the marketplace so the list is never
+    // a blank rectangle.
+    const match = term
+      ? or(
+          ilike(productsTable.product_name, pattern),
+          ilike(productsTable.description, pattern),
+          ilike(productsTable.category, pattern),
+          ilike(outletsTable.name, pattern),
+          sql`EXISTS (SELECT 1 FROM unnest(${outletsTable.tags}) AS tag WHERE tag ILIKE ${pattern})`,
+        )
+      : sql`true`;
+
+    // Name-starts-with beats name-contains beats matched-on-the-shop-name. Without
+    // this, "kebab" puts every product of a stall called "Kebab Turki" above the
+    // actual kebabs. Omitted entirely when there's no term — a constant in ORDER
+    // BY is read by Postgres as a column ordinal, not a value, and errors out.
+    const relevance = term
+      ? [
+          sql`CASE
+            WHEN ${productsTable.product_name} ILIKE ${term + "%"} THEN 0
+            WHEN ${productsTable.product_name} ILIKE ${pattern} THEN 1
+            WHEN ${outletsTable.name} ILIKE ${pattern} THEN 2
+            ELSE 3
+          END`,
+        ]
+      : [];
+
+    const rows = await db
+      .select({
+        id: productsTable.id,
+        name: productsTable.product_name,
+        image: productsTable.image,
+        description: productsTable.description,
+        category: productsTable.category,
+        price: productsTable.price,
+        priceMarkDown: productsTable.price_mark_down,
+        lowestPrice: productsTable.lowest_price,
+        highestPrice: productsTable.highest_price,
+        discountPercent: productsTable.discount_percent,
+        unit: productsTable.unit,
+        ratings: productsTable.ratings,
+        reviewCount: productsTable.review_count,
+        outletId: outletsTable.id,
+        outletName: outletsTable.name,
+        outletAvatar: outletsTable.avatar,
+        outletRatings: outletsTable.ratings,
+        outletIsOpen: outletsTable.is_open,
+        outletFeatures: outletsTable.features,
+        lat: outletsTable.lat,
+        lon: outletsTable.lon,
+      })
+      .from(productsTable)
+      .innerJoin(outletsTable, eq(productsTable.outlet_id, outletsTable.id))
+      .where(
+        and(
+          eq(productsTable.isAvailable, true),
+          eq(productsTable.is_for_sale, true),
+          isNull(productsTable.deletedAt),
+          isNull(outletsTable.deletedAt),
+          match,
+        ),
+      )
+      .orderBy(
+        desc(outletsTable.is_open),
+        ...relevance,
+        desc(sql`COALESCE(${productsTable.ratings}::numeric, 0)`),
+        desc(productsTable.review_count),
+      )
+      .limit(take)
+      .offset(skip);
+
+    const here = await customerHomeCoords(request);
+
+    const data = rows
+      .map((r) => {
+        const coords = parseCoordPair(r.lat, r.lon);
+        // Straight-line, not routed: a search page turns over dozens of rows per
+        // keystroke and one OSRM table call per query would be paid on every one
+        // of them. The browse list still routes — this number is a rough "how far
+        // is this from me", and the outlet page recomputes it properly.
+        const distanceKm =
+          here && coords
+            ? Math.round(haversineKm(here.lat, here.lon, coords.lat, coords.lon) * 10) / 10
+            : null;
+        const feature = CATEGORY_FEATURE[r.category] ?? r.outletFeatures[0] ?? "food";
+
+        return {
+          id: r.id,
+          name: r.name,
+          image: r.image,
+          description: r.description ?? "",
+          category: r.category,
+          feature,
+          isService: r.category === FEATURE_CATEGORY.service,
+          price: Number(r.price),
+          priceMarkDown: Number(r.priceMarkDown),
+          lowestPrice: r.lowestPrice != null ? Number(r.lowestPrice) : null,
+          highestPrice: r.highestPrice != null ? Number(r.highestPrice) : null,
+          discountPercent: r.discountPercent ?? null,
+          unit: r.unit,
+          ratings: Number(r.ratings ?? 0),
+          reviewCount: r.reviewCount ?? 0,
+          outletId: r.outletId,
+          outletName: r.outletName,
+          outletAvatar: r.outletAvatar,
+          outletRatings: Number(r.outletRatings ?? 0),
+          outletIsOpen: r.outletIsOpen,
+          distanceKm,
+        };
+      })
+      // Nothing beyond the delivery cap can be ordered, so offering it is a dead
+      // end. Jasa is exempt for the same reason the outlet page exempts it:
+      // nothing is transported, so distance doesn't disqualify the listing.
+      .filter((p) => p.isService || p.distanceKm === null || p.distanceKm <= MAX_DELIVERY_KM);
+
+    // Measured on the rows the query returned, not on `data` — the distance
+    // filter above can empty a page that still has pages behind it.
+    return { success: true, data, hasMore: rows.length === take };
+  });
+
   app.get("/api/get-outlet-id", async (request, reply) => {
     const { outletId } = request.query as { outletId?: string };
     if (!outletId) return reply.status(400).send({ error: "outletId is required" });
@@ -359,6 +516,15 @@ export async function publicRoutes(app: FastifyInstance) {
         ...outlet,
         distanceKm: distance ? Math.round(distance.km * 10) / 10 : null,
         estimatedTime: outlet.isOpen ? formatEta(distance?.minutes ?? null) : "Tutup",
+        // Beyond the delivery cap by ROAD. The browse list already hides these,
+        // but this page is reachable by direct link, bookmark, or an old order —
+        // so it has to know, and say so up front instead of letting someone
+        // build a basket that checkout will refuse.
+        //
+        // Only asserted on a real routed measurement: with no session, no saved
+        // address, or routing down, "too far" is not something we know.
+        outOfRange:
+          distance?.source === "road" && distance.km > MAX_DELIVERY_KM,
       },
     };
   });
@@ -396,6 +562,21 @@ export async function publicRoutes(app: FastifyInstance) {
       );
 
     return { success: true, data: rows };
+  });
+
+  /**
+   * The courier coverage circle, for surfaces that need to warn about it.
+   *
+   * Returns the shape rather than answering "is this point covered", so the
+   * registration form can evaluate it locally as the owner moves their pin —
+   * a round-trip per drag would make the warning lag behind the map.
+   *
+   * Public: it's a business boundary an outlet owner needs before signing up,
+   * not a secret. `area: null` means unconfigured, which every caller treats as
+   * "no restriction" rather than "nothing is covered".
+   */
+  app.get("/api/service-area", async () => {
+    return { success: true, area: await getServiceArea() };
   });
 
   app.get("/api/get-categories", async (request, reply) => {

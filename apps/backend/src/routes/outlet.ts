@@ -9,6 +9,7 @@ import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 import { parseActiveOutletId, getSubscriptionGate } from "../lib/outlet-access";
 import { parseCoordPair } from "../lib/utils/coords";
+import { recomputeCourierReachable } from "../lib/service-area";
 import { and, sql } from "drizzle-orm";
 
 const UPLOADS_ROOT = path.join(process.cwd(), "uploads");
@@ -169,8 +170,13 @@ export async function outletRoutes(app: FastifyInstance) {
 
     const outlet = await activeOwnedOutlet(request, session.user.id);
     if (!outlet) return reply.send({ success: true, outlet: null });
-    const { id, name, phone, address, lat, lon, avatar, is_open, features, tags } = outlet;
-    return reply.send({ success: true, outlet: { id, name, phone, address, lat, lon, avatar, is_open, features, tags } });
+    const { id, name, phone, address, lat, lon, avatar, is_open, features, tags, courier_reachable } = outlet;
+    return reply.send({
+      success: true,
+      // courier_reachable rides along so the order lobby can decide whether to
+      // mount and poll at all, rather than discovering it four requests in.
+      outlet: { id, name, phone, address, lat, lon, avatar, is_open, features, tags, courier_reachable },
+    });
   });
 
   app.patch("/api/outlet/me", async (request, reply) => {
@@ -206,6 +212,12 @@ export async function outletRoutes(app: FastifyInstance) {
           ...(data.avatar && { avatar: data.avatar }),
         })
         .where(eq(outletsTable.id, target.id));
+
+      // The pin may have moved, which changes whether couriers reach here.
+      // Recomputed on save rather than on read: the order lobby polls every two
+      // seconds and shouldn't be measuring distances to answer a question that
+      // only changes when someone drags a marker.
+      await recomputeCourierReachable(target.id);
 
       return reply.send({ success: true, message: "Pengaturan berhasil disimpan." });
     } catch (error) {

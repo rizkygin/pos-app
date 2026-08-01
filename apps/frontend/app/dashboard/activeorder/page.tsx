@@ -1,4 +1,6 @@
 import { redirect } from 'next/navigation';
+import Link from 'next/link';
+import { MapPin } from 'lucide-react';
 import { getRole } from '@/lib/utils/get-role';
 import { getSession } from '@/lib/auth';
 import { serverFetch } from '@/lib/server-fetch';
@@ -17,6 +19,40 @@ export default async function ActiveOrderPage() {
       serverFetch('/api/outlet/me'),
     ]);
     const outlet = outletRes.ok ? (await outletRes.json()).outlet : null;
+
+    // No courier reaches this outlet, so no courier-delivered order can ever
+    // arrive. The lobby isn't mounted at all — that stops four endpoints being
+    // polled every two seconds forever, and replaces a permanently empty screen
+    // with an explanation of why it's empty.
+    //
+    // The outlet keeps everything it sells over the counter with: cashier,
+    // invoices, stock, reports. Only this one flow is unavailable.
+    if (outlet && outlet.courier_reachable === false) {
+      return (
+        <main className="px-4 mx-2 md:mx-6 pb-12 pt-6">
+          <div className="mx-auto flex max-w-md flex-col items-center gap-3 text-center">
+            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-50 dark:bg-amber-950/40">
+              <MapPin className="h-8 w-8 text-amber-500" />
+            </div>
+            <h2 className="text-xl font-black">Belum Terjangkau Kurir</h2>
+            <p className="text-sm text-muted-foreground">
+              Lokasi {outlet.name} berada di luar area penjemputan kurir Ulun Pesan,
+              jadi pesanan antar belum bisa masuk ke outlet ini.
+            </p>
+            <p className="text-sm text-muted-foreground">
+              Kasir, faktur, stok, dan laporan tetap berjalan normal — pian masih
+              bisa berjualan langsung di tempat seperti biasa.
+            </p>
+            <Link
+              href="/dashboard/setting"
+              className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-rose-500 px-5 py-2.5 text-sm font-bold text-white transition-colors hover:bg-rose-600"
+            >
+              Periksa Lokasi Outlet
+            </Link>
+          </div>
+        </main>
+      );
+    }
 
     return (
       <main className="px-4 mx-2 md:mx-6 pb-12">

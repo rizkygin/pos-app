@@ -17,6 +17,8 @@ import { toWebHeaders } from "../lib/web-headers";
 import { requireOutletAccess } from "../lib/outlet-access";
 import { applySaleStockOut } from "../lib/stock";
 import { normalizeIndonesianPhone } from "../lib/utils/phone";
+import { parseCoordPair } from "../lib/utils/coords";
+import { isWithinServiceArea } from "../lib/service-area";
 
 // Transaction client type (drizzle's tx has the same query builder as `db`).
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -233,6 +235,12 @@ export async function mutationRoutes(app: FastifyInstance) {
             .send({ error: "Nama, alamat, WhatsApp, dan email outlet wajib diisi" });
         }
 
+        // Coverage is advisory, NOT a gate. An outlet outside courier range is
+        // warned at the form (see /api/service-area) and may still register:
+        // they can sell over the counter today, couriers expand, and refusing a
+        // real business because of a circle drawn last month is worse than
+        // letting them in with their eyes open.
+        //
         // outlets.email is UNIQUE — pre-check so the form gets a friendly 409
         // instead of a raw Postgres error via 500.
         const [taken] = await db
@@ -246,6 +254,14 @@ export async function mutationRoutes(app: FastifyInstance) {
             .send({ error: "Email outlet sudah digunakan, silakan pakai email lain" });
         }
 
+        // Coverage is advisory at signup — the form warns, it never blocks — but
+        // the answer is recorded so the order lobby doesn't have to recompute it
+        // on every poll.
+        const outletCoords = parseCoordPair(data?.lat, data?.lon);
+        const { covered } = outletCoords
+          ? await isWithinServiceArea(outletCoords.lat, outletCoords.lon)
+          : { covered: true };
+
         try {
           await db.insert(outletsTable).values({
             name,
@@ -253,6 +269,7 @@ export async function mutationRoutes(app: FastifyInstance) {
             phone,
             email,
             user_id: userId,
+            courier_reachable: covered,
             avatar: data.avatar || "avatar.png",
             // Use the coordinates from the form's "Gunakan Lokasi Saya"; the
             // old Banjarmasin point stays as the fallback only.

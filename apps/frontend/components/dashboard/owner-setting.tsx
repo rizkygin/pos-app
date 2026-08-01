@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useRef, useEffect, useTransition } from "react";
+import { useState, useRef, useEffect, useMemo, useTransition } from "react";
 import dynamic from "next/dynamic";
 import Image from "next/image";
 import { motion } from "motion/react";
-import { MapPin, Loader2, Camera, Store, Phone, Navigation, Utensils, Coffee, Wrench, ShoppingBag, PackageOpen, Scissors, Bike, Sparkles, Popcorn, Tag, X } from "lucide-react";
+import { MapPin, Loader2, Camera, Store, Phone, Navigation, Utensils, Coffee, Wrench, ShoppingBag, PackageOpen, Scissors, Bike, Sparkles, Popcorn, Tag, X, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FEATURES } from "@/lib/feature-categories";
@@ -12,6 +12,7 @@ import { ORDER_FEATURES } from "@/lib/order-features";
 import { API_URL } from "@/lib/api-url";
 import { resolveOutletImage, isBackendImage } from "@/lib/image-src";
 import { parseCoord, isValidCoord } from "@/lib/coords";
+import { haversineKm } from "@/lib/haversine";
 import { getCurrentPosition, geolocationMessage, GEOLOCATION_OPTIONS } from "@/lib/geolocation";
 import { PushNotificationCard } from "@/components/dashboard/push-notification-card";
 
@@ -97,6 +98,36 @@ export function OwnerSetting() {
             })
             .finally(() => setLoading(false));
     }, []);
+
+    // Courier coverage circle. Fetched as a shape, not a verdict, so the warning
+    // re-evaluates while the owner drags the pin instead of trailing a
+    // round-trip behind the map.
+    const [serviceArea, setServiceArea] = useState<{
+        centerLat: number;
+        centerLon: number;
+        radiusKm: number;
+    } | null>(null);
+
+    useEffect(() => {
+        let cancelled = false;
+        fetch(`${API_URL}/api/service-area`)
+            .then((r) => r.json())
+            .then((json) => {
+                if (!cancelled && json?.success) setServiceArea(json.area ?? null);
+            })
+            .catch(() => {
+                // No area, no warning. A failed fetch must never imply "outside".
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    const coverage = useMemo(() => {
+        if (!serviceArea || !isValidCoord(lat, lon)) return null;
+        const distanceKm = haversineKm(lat, lon, serviceArea.centerLat, serviceArea.centerLon);
+        return { outside: distanceKm > serviceArea.radiusKm, distanceKm, area: serviceArea };
+    }, [serviceArea, lat, lon]);
 
     const avatarSrc = resolveOutletImage(avatar);
 
@@ -409,6 +440,28 @@ export function OwnerSetting() {
                         <span>·</span>
                         <span>Lon: <span className="font-black text-foreground">{lon.toFixed(6)}</span></span>
                     </div>
+
+                    {/* Same advisory as registration. An owner can move their pin
+                        long after signing up — or the admin can move the coverage
+                        centre underneath them — so the warning has to live here
+                        too, not only on the form they filled in once. Never
+                        blocks saving. */}
+                    {coverage?.outside && (
+                        <div className="flex items-start gap-2.5 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 dark:border-amber-900 dark:bg-amber-950/40">
+                            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                            <div className="space-y-1">
+                                <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+                                    Titik lokasi anda tidak tercakup dalam area penjemputan kurir kami.
+                                </p>
+                                <p className="text-xs text-amber-700 dark:text-amber-400/90">
+                                    Lokasi outlet pian {Math.round(coverage.distanceKm)} km dari pusat
+                                    area layanan (radius {coverage.area.radiusKm} km). Outlet tetap
+                                    aktif dan bisa berjualan langsung di tempat — hanya pengantaran
+                                    oleh kurir yang belum tersedia di sana.
+                                </p>
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 {/* ── Save ─────────────────────────────────────────────── */}
