@@ -1,4 +1,5 @@
 import { API_URL } from '@/lib/api-url';
+import { notifyShiftEnded, notifyShiftStarted } from '@/lib/native-bridge';
 
 export async function goOnline() {
   const res = await fetch(`${API_URL}/api/courier/go-online`, {
@@ -6,6 +7,10 @@ export async function goOnline() {
     credentials: 'include',
   });
   if (!res.ok) throw new Error('Failed to go online');
+  // After the request succeeds, not before: telling the app to start tracking
+  // ahead of a go-online that then fails would run the foreground service for
+  // a courier who — as far as the backend is concerned — never went on shift.
+  notifyShiftStarted();
 }
 
 export async function goOffline() {
@@ -14,4 +19,5 @@ export async function goOffline() {
     credentials: 'include',
   });
   if (!res.ok) throw new Error('Failed to go offline');
+  notifyShiftEnded();
 }
