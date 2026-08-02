@@ -68,7 +68,13 @@ const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
                         "h-svh overflow-x-hidden overflow-y-auto",
                         // Room for the fixed bottom nav, so the last card of any
                         // page clears it instead of hiding behind it.
-                        isSettledCustomer && "max-md:portrait:pb-20",
+                        //
+                        // Must match the nav's real height, which is h-16 PLUS
+                        // the safe-area inset it pads itself with — on a phone
+                        // with a gesture bar that is ~98px, and a flat pb-20
+                        // (80px) left the last stripe of every page underneath.
+                        isSettledCustomer &&
+                            "max-md:portrait:pb-[calc(4rem+env(safe-area-inset-bottom))]",
                     )}
                 >
                     <header className="animated-gradient header-shine sticky top-0 z-30 flex h-12 shrink-0 items-center gap-2 overflow-hidden border-b border-white/10 px-3 shadow-sm md:h-10">
