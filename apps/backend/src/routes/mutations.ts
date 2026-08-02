@@ -18,7 +18,7 @@ import { toWebHeaders } from "../lib/web-headers";
 import { requireOutletAccess } from "../lib/outlet-access";
 import { applySaleStockOut } from "../lib/stock";
 import { normalizeIndonesianPhone } from "../lib/utils/phone";
-import { parseCoordPair } from "../lib/utils/coords";
+import { DEFAULT_COORDS, parseCoordPair } from "../lib/utils/coords";
 import { isWithinServiceArea } from "../lib/service-area";
 
 // Transaction client type (drizzle's tx has the same query builder as `db`).
@@ -323,8 +323,8 @@ export async function mutationRoutes(app: FastifyInstance) {
             avatar: data.avatar || "avatar.png",
             // Use the coordinates from the form's "Gunakan Lokasi Saya"; the
             // old Banjarmasin point stays as the fallback only.
-            lat: data.lat || "-3.3199",
-            lon: data.lon || "114.5907",
+            lat: data.lat || String(DEFAULT_COORDS.lat),
+            lon: data.lon || String(DEFAULT_COORDS.lon),
             features: Array.isArray(data.features) ? data.features : [],
             is_open: false,
           });

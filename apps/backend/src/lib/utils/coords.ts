@@ -6,6 +6,22 @@
 // came back out of `parseFloat` as NaN and crashed the map picker. No route may
 // write a coordinate that has not been through here.
 
+/**
+ * Where the app lands when it has no coordinate to work with.
+ *
+ * Pangkalan Bun — the town these outlets actually serve. It used to be
+ * Banjarmasin (-3.3199, 114.5907), 350 km east, which is a strange place to
+ * drop someone who is about to pick their shop's location, and worse than
+ * strange as seed data: a seeded outlet sat outside the courier delivery cap
+ * AND outside the routing graph's bbox, so a fresh database could not exercise
+ * road distance at all.
+ *
+ * Used for fallbacks only. A real coordinate always wins; this is what stands
+ * in when the browser refused to locate, the form sent nothing, or a stored
+ * value turned out to be junk (see parseCoordPair below).
+ */
+export const DEFAULT_COORDS = { lat: -2.6847, lon: 111.6236 } as const;
+
 export const isValidLat = (v: unknown): v is number =>
   typeof v === "number" && Number.isFinite(v) && v >= -90 && v <= 90;
 

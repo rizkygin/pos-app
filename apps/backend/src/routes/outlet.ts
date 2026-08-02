@@ -8,7 +8,7 @@ import { outletsTable } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 import { parseActiveOutletId, getSubscriptionGate } from "../lib/outlet-access";
-import { parseCoordPair } from "../lib/utils/coords";
+import { DEFAULT_COORDS, parseCoordPair } from "../lib/utils/coords";
 import { recomputeCourierReachable } from "../lib/service-area";
 import { and, sql } from "drizzle-orm";
 
@@ -140,7 +140,7 @@ export async function outletRoutes(app: FastifyInstance) {
     // `String(body.lat ?? default)` only defaulted on null/undefined, so the
     // form's empty strings were stored verbatim in a notNull varchar and read
     // back as NaN, crashing the map picker. Fall back to Banjarmasin instead.
-    const coords = parseCoordPair(body.lat, body.lon) ?? { lat: -3.3199, lon: 114.5907 };
+    const coords = parseCoordPair(body.lat, body.lon) ?? DEFAULT_COORDS;
 
     const [created] = await db
       .insert(outletsTable)

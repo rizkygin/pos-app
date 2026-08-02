@@ -5,13 +5,14 @@ import { MapContainer, TileLayer, Marker, useMapEvents, useMap } from "react-lea
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { isValidLat, isValidLon, isValidCoord } from "@/lib/coords";
+import { FALLBACK_COORDS } from "@/lib/geolocation";
 
-// Where the map sits when it has nothing valid to show — Banjarmasin, matching
-// the server-side fallback in outlet.ts. A stored coordinate can still be junk
-// (see lib/coords.ts), and Leaflet throws rather than degrading, so the picker
+// Where the map sits when it has nothing valid to show, matching the
+// server-side fallback in outlet.ts. A stored coordinate can still be junk (see
+// lib/coords.ts), and Leaflet throws rather than degrading, so the picker
 // renders here instead of taking the whole settings page down with it.
-const FALLBACK_LAT = -3.3199;
-const FALLBACK_LON = 114.5907;
+const FALLBACK_LAT = FALLBACK_COORDS.lat;
+const FALLBACK_LON = FALLBACK_COORDS.lon;
 
 // Fix default marker icon (webpack breaks leaflet's auto-detection)
 const icon = L.icon({
