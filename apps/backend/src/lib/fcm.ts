@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { getCourierFcmTokens, pruneFcmTokens } from "./courier-device";
+import type { OfferDetails } from "./offer-details";
 
 /**
  * Firebase Cloud Messaging (HTTP v1) for the courier app.
@@ -105,6 +106,16 @@ export type OfferPush = {
   expiresAt: Date;
   deliveryFee: string | null;
   itemCount?: number;
+  pickupLat: number | null;
+  pickupLon: number | null;
+  /**
+   * Everything the incoming-offer screen shows beyond "an order exists" —
+   * customer identity, the address to drop at, and how past couriers rated
+   * this customer. Optional because getOfferDetails can come back empty (a
+   * customer row that vanished mid-dispatch); the screen degrades to showing
+   * less rather than the push failing to send at all.
+   */
+  details?: OfferDetails;
 };
 
 /**
@@ -134,6 +145,10 @@ export async function sendOfferPush(courierId: number, offer: OfferPush): Promis
       const message = {
         message: {
           token,
+          // FCM data values must all be strings. Everything numeric or
+          // nullable is stringified here rather than left for the app to
+          // guess a serialization for, so there is exactly one place that
+          // decides how "no drop-off address on this order" is spelled.
           data: {
             type: "offer",
             orderId: offer.orderId,
@@ -141,6 +156,22 @@ export async function sendOfferPush(courierId: number, offer: OfferPush): Promis
             expiresAt: offer.expiresAt.toISOString(),
             deliveryFee: offer.deliveryFee ?? "",
             itemCount: String(offer.itemCount ?? 0),
+            pickupLat: offer.pickupLat !== null ? String(offer.pickupLat) : "",
+            pickupLon: offer.pickupLon !== null ? String(offer.pickupLon) : "",
+            customerName: offer.details?.customerName ?? "",
+            customerRating: offer.details ? String(offer.details.customerRating) : "",
+            customerReviewCount: offer.details ? String(offer.details.customerReviewCount) : "",
+            dropoffLabel: offer.details?.dropoffLabel ?? "",
+            dropoffLat: offer.details?.dropoffLat !== null && offer.details?.dropoffLat !== undefined
+              ? String(offer.details.dropoffLat)
+              : "",
+            dropoffLon: offer.details?.dropoffLon !== null && offer.details?.dropoffLon !== undefined
+              ? String(offer.details.dropoffLon)
+              : "",
+            // One JSON string rather than three indexed fields — the app
+            // parses it once into an array, and adding a fourth prior rating
+            // later needs no new field name on either side.
+            priorRatings: JSON.stringify(offer.details?.priorRatings ?? []),
           },
           android: {
             // Wakes a dozing device. Reserved for things a person is waiting

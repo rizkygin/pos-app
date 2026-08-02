@@ -11,6 +11,7 @@ import { staleShiftCutoff } from "./utils/courier-availability";
 import { haversineKm } from "./utils/geo";
 import { parseCoordPair } from "./utils/coords";
 import { sendOfferPush } from "./fcm";
+import { getOfferDetails } from "./offer-details";
 
 /**
  * Sequential dispatch: one order, offered to one courier at a time, on a clock.
@@ -350,14 +351,29 @@ export async function dispatchNextOffer(orderId: string): Promise<DispatchResult
       throw err;
     }
 
-    // Ring the phone. Deliberately after the row is committed and deliberately
-    // not awaited into the result: a courier watching the lobby already has the
-    // offer, and a failed push must never undo a valid dispatch.
+    // The customer/ratings enrichment IS awaited, unlike the push send below —
+    // it's two cheap indexed queries, run once per offer rather than per poll,
+    // and getting it wrong silently (a stale closure value) is worse than the
+    // few extra milliseconds. A failure here degrades to an offer with less
+    // detail, not a failed dispatch — never let it throw dispatchNextOffer.
+    const details = await getOfferDetails(orderId)
+      .then((d) => d ?? undefined)
+      .catch((err) => {
+        console.error("[dispatch] offer enrichment failed", { orderId, err });
+        return undefined;
+      });
+
+    // Ring the phone. Deliberately not awaited into the result: a courier
+    // watching the lobby already has the offer, and a failed push must never
+    // undo a valid dispatch.
     void sendOfferPush(chosen.id, {
       orderId,
       outletName: order.outletName,
       expiresAt,
       deliveryFee: order.deliveryFee,
+      pickupLat: outletCoords?.lat ?? null,
+      pickupLon: outletCoords?.lon ?? null,
+      details,
     }).catch((err) => {
       console.error("[dispatch] offer push failed", { orderId, courierId: chosen.id, err });
     });
