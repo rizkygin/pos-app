@@ -3,6 +3,13 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { db } from "./db";
 import { usersTable, session, account, verification } from "./db/schema";
 import { Resend } from "resend";
+import {
+  APP_ENV,
+  COOKIE_DOMAIN,
+  COOKIE_SECURE,
+  FRONTEND_ORIGINS,
+  FRONTEND_URL,
+} from "./lib/app-env";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 // Sender for all transactional mail. mail.ulunpesan.com is a dedicated sending
@@ -10,23 +17,12 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 // stays isolated from the root domain. If Resend un-verifies it, every send is
 // rejected.
 const FROM = "Ulun Pesan <noreply@mail.ulunpesan.com>";
-const isProduction = process.env.NODE_ENV === "production";
-
-// Cookie attributes are env-driven so a production build can still be run over
-// plain HTTP locally (e.g. docker-compose). Defaults preserve prod behaviour.
-// Local override: COOKIE_SECURE=false and COOKIE_DOMAIN= (empty) -> host-only,
-// non-secure cookie that browsers accept on http://localhost.
-const cookieSecure = process.env.COOKIE_SECURE
-  ? process.env.COOKIE_SECURE === "true"
-  : isProduction;
-const cookieDomain =
-  process.env.COOKIE_DOMAIN ?? (isProduction ? ".ulunpesan.com" : undefined);
-
-// FRONTEND_ORIGIN may list several origins (apex + www) for CORS; the first one
-// is the canonical site we point email links back at.
-const FRONTEND_URL = (process.env.FRONTEND_ORIGIN ?? "http://localhost:3000")
-  .split(",")[0]
-  .trim();
+// Cookie attributes and addresses both come from APP_ENV now (see lib/app-env),
+// so "which world is this" is answered in one place instead of by four
+// variables that have to agree. Explicit env still overrides, which is what
+// docker-compose and a laptop rely on.
+const cookieSecure = COOKIE_SECURE;
+const cookieDomain = COOKIE_DOMAIN;
 
 // Both email links are handled by the backend first (to burn the token), then
 // redirected to a `callbackURL`. better-auth resolves a relative callbackURL
@@ -112,18 +108,18 @@ export const auth = betterAuth({
   rateLimit: {
     // better-auth only rate-limits in production by default. AUTH_RATE_LIMIT=true
     // forces it on locally so the flow can be exercised end to end.
-    enabled: process.env.AUTH_RATE_LIMIT === "true" || isProduction,
+    // Dev counts as production here: a rate limit that only exists in prod is a
+    // rate limit nobody has ever tested.
+    enabled: process.env.AUTH_RATE_LIMIT === "true" || APP_ENV !== "local",
     customRules: {
       "/send-verification-email": { window: 300, max: 3 },
       "/forget-password": { window: 300, max: 3 },
       "/request-password-reset": { window: 300, max: 3 },
     },
   },
-  trustedOrigins: [
-    "https://ulunpesan.com",
-    "https://www.ulunpesan.com",
-    process.env.FRONTEND_ORIGIN ?? "http://localhost:3000",
-  ],
+  // Derived, not hardcoded: a dev deployment that trusts only the production
+  // origins rejects its own login redirects.
+  trustedOrigins: FRONTEND_ORIGINS,
   advanced: {
     cookies: {
       session_token: {
