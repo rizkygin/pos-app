@@ -168,9 +168,15 @@ export async function sendOfferPush(courierId: number, offer: OfferPush): Promis
             dropoffLon: offer.details?.dropoffLon !== null && offer.details?.dropoffLon !== undefined
               ? String(offer.details.dropoffLon)
               : "",
-            // One JSON string rather than three indexed fields — the app
-            // parses it once into an array, and adding a fourth prior rating
-            // later needs no new field name on either side.
+            customerPhone: offer.details?.customerPhone ?? "",
+            customerNote: offer.details?.customerNote ?? "",
+            outletAddress: offer.details?.outletAddress ?? "",
+            totalAmount: offer.details ? String(offer.details.totalAmount) : "",
+            createdAt: offer.details?.createdAt ?? "",
+            // One JSON string rather than N indexed fields, for both lists —
+            // the app parses each once into an array, and a bigger cart or a
+            // fourth prior rating later needs no new field name on either side.
+            items: JSON.stringify(offer.details?.items ?? []),
             priorRatings: JSON.stringify(offer.details?.priorRatings ?? []),
           },
           android: {
