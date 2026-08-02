@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   Bike,
   FileBarChart,
+  Download,
 } from "lucide-react";
 
 // ============================================================================
@@ -707,6 +708,12 @@ export default async function LandingPage() {
           <div className="flex items-center gap-5">
             <a href="#fitur" className="transition-colors hover:text-white">Fitur</a>
             <a href="#harga" className="transition-colors hover:text-white">Harga</a>
+            <a
+              href="https://github.com/rizkygin/kurir-ulunpesan/releases/download/Production/KurirUlunPesan.apk"
+              className="inline-flex items-center gap-1.5 transition-colors hover:text-white"
+            >
+              <Download className="size-3.5" /> Aplikasi Kurir
+            </a>
             <Link href="/login" className="transition-colors hover:text-foreground">Masuk</Link>
           </div>
           <p className="text-xs">© {new Date().getFullYear()} Ulun Pesan</p>
