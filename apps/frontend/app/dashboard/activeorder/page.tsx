@@ -98,6 +98,7 @@ export default async function ActiveOrderPage() {
         rejectedReason={activeOrder.rejectedReason ?? null}
         deliveryFee={activeOrder.deliveryFee ?? null}
         goodsTotal={activeOrder.goodsTotal ?? null}
+        courier={activeOrder.courier ?? null}
       />
     </main>
   );

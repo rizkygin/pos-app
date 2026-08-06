@@ -18,6 +18,12 @@ export async function goOffline() {
     method: 'POST',
     credentials: 'include',
   });
-  if (!res.ok) throw new Error('Failed to go offline');
+  if (!res.ok) {
+    // The backend refuses this while an order is in flight and says why; a
+    // generic message would leave the courier tapping a button that keeps
+    // failing with no reason given.
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.error ?? 'Gagal offline');
+  }
   notifyShiftEnded();
 }

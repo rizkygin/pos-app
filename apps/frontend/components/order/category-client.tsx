@@ -335,7 +335,7 @@ export function CategoryClient({ feature }: { feature: string }) {
                             <p className="text-sm">Coba kata kunci lain</p>
                         </div>
                     ) : (
-                        <div className="grid grid-cols-2 lg:grid-cols-5 gap-5">
+                        <div className="grid grid-cols-2 lg:grid-cols-5 gap-5 pb-40">
                             <AnimatePresence>
                                 {filteredOutlets?.map((outlet) => (
                                     <OutletCard key={outlet.id} outlet={outlet} feature={feature} />

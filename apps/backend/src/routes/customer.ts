@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { alias } from "drizzle-orm/pg-core";
 import { and, desc, eq, inArray, isNull, notInArray, or, sql, sum } from "drizzle-orm";
 import { db } from "../db";
 import {
@@ -20,6 +21,11 @@ import { tickDispatch, visibleOrderIdsFor } from "../lib/dispatch";
 import { getOutletByUserId } from "../lib/outlet-id";
 import { parseCoordPair } from "../lib/utils/coords";
 import { deliveryEta } from "../lib/utils/delivery-eta";
+import { normalizeIndonesianPhone } from "../lib/utils/phone";
+
+// The courier's own user row. Aliased because several queries here already join
+// usersTable for the CUSTOMER, and one query needs both sides at once.
+const courierUser = alias(usersTable, "courier_user");
 
 export async function customerRoutes(app: FastifyInstance) {
   // The caller's full order history with per-order item count + total. Backs the
@@ -184,11 +190,18 @@ export async function customerRoutes(app: FastifyInstance) {
         courierLat: couriersTable.last_lat,
         courierLon: couriersTable.last_lon,
         courierLocationAt: couriersTable.last_location_at,
+        // Who is actually bringing this. A name and a face turn "a courier is on
+        // the way" into a specific person the customer can recognise at the door.
+        courierName: courierUser.name,
+        courierAvatar: couriersTable.avatar,
+        courierVehiclePlate: couriersTable.vehicle_plate,
+        courierPhone: courierUser.phone,
       })
       .from(ordersTable)
       .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))
       // leftJoin — most of an order's life has no courier attached.
       .leftJoin(couriersTable, eq(ordersTable.courier_id, couriersTable.id))
+      .leftJoin(courierUser, eq(couriersTable.user_id, courierUser.id))
       .where(eq(ordersTable.customer_id, customer.id))
       .orderBy(desc(ordersTable.createdAt))
       .limit(1);
@@ -203,8 +216,22 @@ export async function customerRoutes(app: FastifyInstance) {
       .where(eq(orderDetailsTable.order_id, order.id));
 
     const {
-      outletLat, outletLon, courierLat, courierLon, courierLocationAt, ...rest
+      outletLat, outletLon, courierLat, courierLon, courierLocationAt,
+      courierName, courierAvatar, courierVehiclePlate, courierPhone, ...rest
     } = order;
+
+    // Null until an order is actually assigned, so the UI can key the whole
+    // "your courier" card off its presence rather than on order status.
+    const courier = courierName
+      ? {
+          name: courierName,
+          avatar: courierAvatar,
+          vehiclePlate: courierVehiclePlate,
+          // Canonical 628… so the customer's WhatsApp button is a direct link;
+          // null when the stored number is unusable, and the button is hidden.
+          phone: normalizeIndonesianPhone(courierPhone),
+        }
+      : null;
 
     const eta = await deliveryEta({
       status: order.status,
@@ -214,7 +241,7 @@ export async function customerRoutes(app: FastifyInstance) {
       courierSeenAt: courierLocationAt,
     });
 
-    return { success: true, order: { ...rest, goodsTotal: Number(goodsTotal), ...eta } };
+    return { success: true, order: { ...rest, courier, goodsTotal: Number(goodsTotal), ...eta } };
   });
 
   app.get("/api/get-available-orders", async (request, reply) => {

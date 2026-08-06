@@ -13,7 +13,8 @@
     "db:clear": "tsx src/db/clear-test-data.ts",
     "db:backfill-subs": "tsx src/db/backfill-subscriptions.ts",
     "db:seed-materials": "tsx src/db/seed-building-materials.ts",
-    "db:seed-courier": "tsx src/db/seed-courier.ts"
+    "db:seed-courier": "tsx src/db/seed-courier.ts",
+    "db:seed-courier-week": "tsx src/db/seed-courier-week.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",

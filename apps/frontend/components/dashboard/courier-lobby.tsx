@@ -20,6 +20,7 @@ import {
   Wifi,
   Loader2,
   AlertTriangle,
+  MessageSquare,
 } from 'lucide-react';
 import QRCode from 'react-qr-code';
 import { acceptOrder, declineOrder } from '@/app/dashboard/lobby/actions';
@@ -82,6 +83,22 @@ function timeAgo(dateStr: string): string {
   return `${Math.floor(m / 60)}j lalu`;
 }
 
+/**
+ * Canonical 628… for a wa.me link, or null when the stored value can't be one.
+ *
+ * The backend hands this column over as typed — 0812…, +62 812…, 62-812… all
+ * occur — and wa.me only accepts international digits, so a raw value would
+ * open an empty chat. Mirrors normalizeIndonesianPhone on the backend.
+ */
+function waNumber(raw: string | null): string | null {
+  if (!raw) return null;
+  let digits = raw.replace(/\D/g, '');
+  if (digits.startsWith('62')) digits = digits.slice(2);
+  else if (digits.startsWith('0')) digits = digits.slice(1);
+  if (!digits.startsWith('8') || digits.length < 9) return null;
+  return `62${digits}`;
+}
+
 function noteStr(note: unknown): string | null {
   if (note == null) return null;
   const s = typeof note === 'string' ? note : JSON.stringify(note);
@@ -112,7 +129,7 @@ function LocationSection({ order }: { order: Order }) {
           <div className="flex items-start justify-between gap-2">
             <div className="space-y-0.5 min-w-0">
               <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest">
-                Pickup
+                Pengambilan
               </p>
               <p className="text-xs font-semibold truncate">
                 {order.outletName}
@@ -136,7 +153,7 @@ function LocationSection({ order }: { order: Order }) {
           <div className="flex items-start justify-between gap-2">
             <div className="space-y-0.5 min-w-0">
               <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">
-                Dropoff
+                Pengantaran
               </p>
               <p className="text-[11px] text-muted-foreground truncate">
                 {dropoff?.label ?? '—'}
@@ -591,11 +608,24 @@ function MyOrderCard({
           <div className="flex items-center gap-2 text-sm">
             <User className="h-4 w-4 text-muted-foreground shrink-0" />
             <span className="font-semibold">{order.customerName}</span>
-            {order.customerPhone && (
-              <span className="text-muted-foreground text-xs">
-                · {order.customerPhone}
-              </span>
-            )}
+            {order.customerPhone &&
+              (waNumber(order.customerPhone) ? (
+                <a
+                  href={`https://wa.me/${waNumber(order.customerPhone)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 rounded-full border border-[#25D366]/40 bg-[#25D366]/10 px-2 py-0.5 text-xs font-bold text-[#128C7E] transition-colors hover:bg-[#25D366]/20 dark:text-[#25D366]"
+                >
+                  <MessageSquare className="h-3 w-3 shrink-0" />
+                  {order.customerPhone}
+                </a>
+              ) : (
+                // Unusable number: still worth showing, but not as a link that
+                // would open a chat with nobody.
+                <span className="text-muted-foreground text-xs">
+                  · {order.customerPhone}
+                </span>
+              ))}
             {rating && (
               <p className="text-xs text-muted-foreground italic border-l-2 border-muted pl-3 leading-relaxed">
                 {`Rating pelanggan ${rating}⭐ dari ${review_count} ulasan`}

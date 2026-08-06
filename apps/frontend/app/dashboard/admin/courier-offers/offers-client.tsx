@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Bike, CheckCircle2, Clock, Loader2, ThumbsDown, TimerOff } from 'lucide-react';
+import { Bike, CheckCircle2, Clock, Loader2, ThumbsDown, TimerOff, X } from 'lucide-react';
 import { API_URL } from '@/lib/api-url';
 import { cn } from '@/lib/utils';
 
@@ -73,11 +73,16 @@ export function CourierOffersClient() {
   const [days, setDays] = useState(7);
   const [data, setData] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
+  // When set, the server aggregates and lists only this courier's offers
+  // instead of every courier in the window.
+  const [focusCourier, setFocusCourier] = useState<{ id: number; name: string } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/admin/courier-offers?days=${days}`, {
+      const params = new URLSearchParams({ days: String(days) });
+      if (focusCourier) params.set('courierId', String(focusCourier.id));
+      const res = await fetch(`${API_URL}/api/admin/courier-offers?${params}`, {
         cache: 'no-store',
         credentials: 'include',
       });
@@ -86,7 +91,7 @@ export function CourierOffersClient() {
     } finally {
       setLoading(false);
     }
-  }, [days]);
+  }, [days, focusCourier]);
 
   useEffect(() => {
     load();
@@ -110,6 +115,23 @@ export function CourierOffersClient() {
           </button>
         ))}
       </div>
+
+      {/* Active scope. Kept visible because every number on the page changes
+          meaning under it — totals included. */}
+      {focusCourier && (
+        <div className="flex w-fit items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm dark:border-blue-900/50 dark:bg-blue-950/40">
+          <span className="text-xs font-bold text-blue-700 dark:text-blue-300">
+            Hanya {focusCourier.name}
+          </span>
+          <button
+            onClick={() => setFocusCourier(null)}
+            className="text-blue-600 transition-opacity hover:opacity-70 dark:text-blue-300"
+            aria-label="Tampilkan semua kurir"
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+      )}
 
       {loading ? (
         <div className="flex justify-center py-20">
@@ -170,7 +192,18 @@ export function CourierOffersClient() {
                   {data.couriers.map((c) => {
                     const ignoreRate = pct(c.expired, c.offered);
                     return (
-                      <tr key={c.courierId} className={cn(ignoreRate >= 50 && 'bg-rose-50/50 dark:bg-rose-950/20')}>
+                      <tr
+                        key={c.courierId}
+                        onClick={() =>
+                          setFocusCourier((prev) =>
+                            prev?.id === c.courierId ? null : { id: c.courierId, name: c.name },
+                          )
+                        }
+                        className={cn(
+                          'cursor-pointer transition-colors hover:bg-muted/50',
+                          ignoreRate >= 50 && 'bg-rose-50/50 dark:bg-rose-950/20',
+                        )}
+                      >
                         <td className="px-4 py-3">
                           <p className="font-bold">{c.name}</p>
                           <p className="text-xs text-muted-foreground">{c.email}</p>

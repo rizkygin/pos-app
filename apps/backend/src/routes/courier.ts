@@ -106,6 +106,21 @@ export async function courierRoutes(app: FastifyInstance) {
     const courierId = await getCourierId(session.user.id);
     if (!courierId) return reply.status(403).send({ success: false, error: "Not a courier" });
 
+    // A courier holding an order cannot clock out of it. Going offline clears
+    // their reported position and ends the shift, which would leave a customer
+    // watching a delivery nobody is on shift for — the order has to be finished
+    // (or cancelled) first. Enforced here, not just in the UI, because the
+    // button is one fetch call away from being bypassed.
+    const availability = await getCourierAvailability(courierId);
+    if (availability.hasActiveOrder) {
+      return reply.status(409).send({
+        success: false,
+        error:
+          "Pian masih punya pesanan berjalan. Selesaikan dulu pengantarannya sebelum offline.",
+        hasActiveOrder: true,
+      });
+    }
+
     await closeOpenSessions(courierId);
 
     // Off shift means no deliveries in flight, so the stored position has no

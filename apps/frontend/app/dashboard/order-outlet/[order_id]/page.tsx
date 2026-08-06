@@ -6,6 +6,7 @@ import Link from "next/link";
 import { format } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
 import { DashboardHeader } from "@/components/dashboard-header";
+import { ReceiptModal, type ReceiptData } from "@/components/dashboard/receipt-modal";
 import { API_URL } from "@/lib/api-url";
 import {
     ChevronLeft,
@@ -27,6 +28,7 @@ import {
     ArrowLeftRight,
     Store,
     Globe,
+    Printer,
 } from "lucide-react";
 
 type OrderStatus = "pending" | "confirmed" | "preparing" | "ready" | "on_delivery" | "delivered" | "cancelled";
@@ -78,12 +80,62 @@ type OfflineNote = {
 
 type ApiResponse = {
     success: boolean;
-    outlet: { id: string; name: string };
+    outlet: { id: string; name: string; address: string; phone: string; avatar: string };
+    cashierName: string;
+    order: {
+        createdAt: string | null;
+        discountAmount: string | null;
+        deliveryFee: string | null;
+    };
     items: Item[];
     customer: Customer | null;
     isOfflineOrder: boolean;
     offlineNote: OfflineNote | null;
 };
+
+// Rebuild the checkout receipt from the stored order so the owner can reprint
+// an old one. Per-item discounts aren't stored on the order line, so the unit
+// price is recovered from the line total and printed with no strikethrough —
+// the paper still adds up to the same Total that was charged.
+function toReceipt(data: ApiResponse, orderId: string): ReceiptData {
+    const { items, offlineNote, isOfflineOrder } = data;
+    const subtotal = items.reduce((sum, i) => sum + Number(i.summaryPrice), 0);
+    const discountAmount = isOfflineOrder
+        ? offlineNote?.discountAmount ?? 0
+        : Number(data.order.discountAmount ?? 0);
+    const deliveryFee = isOfflineOrder ? 0 : Number(data.order.deliveryFee ?? 0);
+
+    return {
+        orderId,
+        customerName: (isOfflineOrder ? offlineNote?.customerName : data.customer?.name) || "",
+        items: items.map((i) => {
+            const qty = Number(i.quantity ?? 0);
+            return {
+                product_name: i.productName ?? "",
+                quantity: qty,
+                price: String(qty > 0 ? Math.round(Number(i.summaryPrice) / qty) : 0),
+                price_mark_down: "0",
+            };
+        }),
+        subtotal,
+        discountAmount,
+        discountLabel: "Diskon",
+        deliveryFee,
+        total: subtotal - discountAmount + deliveryFee,
+        // Offline orders carry the cash tendered in their note; online ones were
+        // never rung up at the counter, so the cash/change block is skipped.
+        paymentMethod: isOfflineOrder ? offlineNote?.paymentMethod ?? "cash" : undefined,
+        amountPaid: offlineNote?.amountPaid,
+        changeDue: offlineNote?.changeDue,
+        // The original order date, not now — this is a copy of an old receipt.
+        date: data.order.createdAt ? new Date(data.order.createdAt) : new Date(),
+        outletName: data.outlet.name,
+        outletAddress: data.outlet.address,
+        outletPhone: data.outlet.phone,
+        outletLogo: data.outlet.avatar,
+        cashierName: data.cashierName,
+    };
+}
 
 export default function OrderDetailPage() {
     const params = useParams<{ order_id: string }>();
@@ -93,6 +145,7 @@ export default function OrderDetailPage() {
 
     const [data, setData] = useState<ApiResponse | null>(null);
     const [loading, setLoading] = useState(true);
+    const [receipt, setReceipt] = useState<ReceiptData | null>(null);
 
     useEffect(() => {
         fetch(`${API_URL}/api/get-outlet-order-detail?order_id=${order_id}`, { credentials: 'include' })
@@ -157,10 +210,20 @@ export default function OrderDetailPage() {
                         description={`${outlet.name} · ${orderDate}`}
                     />
                 </div>
-                <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-black ${s.className}`}>
-                    <StatusIcon className="h-3.5 w-3.5" />
-                    {s.label}
-                </span>
+                <div className="flex items-center gap-3">
+                    <button
+                        type="button"
+                        onClick={() => setReceipt(toReceipt(data, order_id))}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-border/60 bg-card text-xs font-black hover:bg-muted transition-colors"
+                    >
+                        <Printer className="h-3.5 w-3.5" />
+                        Cetak Ulang Struk
+                    </button>
+                    <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-black ${s.className}`}>
+                        <StatusIcon className="h-3.5 w-3.5" />
+                        {s.label}
+                    </span>
+                </div>
             </div>
 
             <div className="grid gap-6 md:grid-cols-3">
@@ -307,6 +370,14 @@ export default function OrderDetailPage() {
                     </div>
                 </div>
             </div>
+
+            {receipt && (
+                <ReceiptModal
+                    data={receipt}
+                    heading="Cetak Ulang Struk"
+                    onClose={() => setReceipt(null)}
+                />
+            )}
         </main>
     );
 }

@@ -546,7 +546,7 @@ export function OrderClient({
         </div>
 
         {/* ── Products Grid ─────────────────────────────────────── */}
-        <section className="space-y-4">
+        <section className="space-y-4 pb-40">
           <div className="flex items-center justify-between">
             <h2 className="font-black text-lg capitalize">
               {isService

@@ -1267,10 +1267,28 @@ export async function adminRoutes(app: FastifyInstance) {
       return reply.status(403).send({ success: false, error: "Forbidden" });
     }
 
-    const { days = "7", limit = "50" } = request.query as Record<string, string>;
+    const {
+      days = "7",
+      limit = "50",
+      courierId: courierIdRaw,
+    } = request.query as Record<string, string>;
     const windowDays = Math.min(Math.max(Number(days) || 7, 1), 90);
     const logLimit = Math.min(Math.max(Number(limit) || 50, 1), 200);
     const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+
+    // Narrow to one courier when the admin is investigating a specific person,
+    // which is what this page is usually opened for. Both queries below then
+    // touch a fraction of the window instead of aggregating every courier.
+    const courierId = Number(courierIdRaw);
+    const onlyCourier = Number.isInteger(courierId) && courierId > 0 ? courierId : null;
+
+    const scope = onlyCourier
+      ? and(gte(orderOffersTable.offered_at, since), eq(orderOffersTable.courier_id, onlyCourier))
+      : gte(orderOffersTable.offered_at, since);
+
+    // Bounds the per-courier table. Rows are already ranked worst-first, so the
+    // cut only ever drops couriers the admin scrolled past anyway.
+    const SUMMARY_LIMIT = 50;
 
     const summary = await db
       .select({
@@ -1297,13 +1315,14 @@ export async function adminRoutes(app: FastifyInstance) {
       .from(orderOffersTable)
       .innerJoin(couriersTable, eq(orderOffersTable.courier_id, couriersTable.id))
       .innerJoin(usersTable, eq(couriersTable.user_id, usersTable.id))
-      .where(gte(orderOffersTable.offered_at, since))
+      .where(scope)
       .groupBy(couriersTable.id, usersTable.name, usersTable.email, usersTable.phone)
       // Most ignored first: that is the list an admin opened this page to see.
       .orderBy(
         desc(sql`COUNT(*) FILTER (WHERE ${orderOffersTable.state} = 'expired')`),
         desc(count()),
-      );
+      )
+      .limit(SUMMARY_LIMIT);
 
     const log = await db
       .select({
@@ -1323,21 +1342,31 @@ export async function adminRoutes(app: FastifyInstance) {
       .innerJoin(usersTable, eq(couriersTable.user_id, usersTable.id))
       .innerJoin(ordersTable, eq(orderOffersTable.order_id, ordersTable.id))
       .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))
-      .where(gte(orderOffersTable.offered_at, since))
+      .where(scope)
       .orderBy(desc(orderOffersTable.offered_at))
       .limit(logLimit);
 
-    const totals = summary.reduce(
-      (acc, row) => ({
-        offered: acc.offered + Number(row.offered ?? 0),
-        accepted: acc.accepted + Number(row.accepted ?? 0),
-        declined: acc.declined + Number(row.declined ?? 0),
-        expired: acc.expired + Number(row.expired ?? 0),
-      }),
-      { offered: 0, accepted: 0, declined: 0, expired: 0 },
-    );
+    // Aggregated in SQL rather than summed from `summary`: that list is capped
+    // at SUMMARY_LIMIT couriers, so folding it would silently under-report the
+    // headline figures the moment a 51st courier appears in the window.
+    const [totals] = await db
+      .select({
+        offered: count(),
+        accepted: sql<number>`COUNT(*) FILTER (WHERE ${orderOffersTable.state} = 'accepted')::int`,
+        declined: sql<number>`COUNT(*) FILTER (WHERE ${orderOffersTable.state} = 'declined')::int`,
+        expired: sql<number>`COUNT(*) FILTER (WHERE ${orderOffersTable.state} = 'expired')::int`,
+      })
+      .from(orderOffersTable)
+      .where(scope);
 
-    return reply.send({ success: true, windowDays, totals, couriers: summary, log });
+    return reply.send({
+      success: true,
+      windowDays,
+      courierId: onlyCourier,
+      totals: totals ?? { offered: 0, accepted: 0, declined: 0, expired: 0 },
+      couriers: summary,
+      log,
+    });
   });
 
   app.get("/api/admin/courier-sessions", async (request, reply) => {
