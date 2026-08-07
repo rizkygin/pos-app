@@ -1,6 +1,24 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, notInArray } from "drizzle-orm";
 import { db } from "../db";
 import { outletsTable, productsTable } from "../db/schema";
+
+/**
+ * Categories that exist only inside the owner's own dashboard: kitchen stock,
+ * raw ingredients, packaging. They are inventory, not merchandise.
+ *
+ * `products.is_for_sale` defaults to true, so an owner adding a sack of flour
+ * as "bahan" gets it published on the public menu unless something stops it —
+ * which is exactly how internal stock ended up on /menu/12. Public queries gate
+ * on this list as well as on is_for_sale, so the default can never leak.
+ *
+ * Note "bahan" (ingredients) is NOT "bahan bangunan" (building materials, a
+ * real browsable feature) — only the exact category string is internal.
+ */
+export const INTERNAL_CATEGORIES = ["bahan"];
+
+/** Drizzle predicate: exclude internal-only categories from a public listing. */
+export const notInternalCategory = () =>
+  notInArray(productsTable.category, INTERNAL_CATEGORIES);
 
 // Order feature slug <-> product category. Mirrors frontend lib/order-features.ts.
 //

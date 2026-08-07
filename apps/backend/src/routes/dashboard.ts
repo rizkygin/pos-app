@@ -32,6 +32,7 @@ import {
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 import { getOutletByUserId } from "../lib/outlet-id";
+import { notInternalCategory } from "../lib/outlet-features";
 import { getOutletAccess, hasPermission, parseActiveOutletId } from "../lib/outlet-access";
 import { getUTCRangeFromLocalDate, getUTCTime } from "../lib/timezone";
 import { getCurrentAdSlot } from "../lib/utils/ad-schedule";
@@ -512,6 +513,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
           eq(productsTable.is_recommended, true),
           eq(productsTable.isAvailable, true),
           eq(productsTable.is_for_sale, true),
+          notInternalCategory(),
           isNull(productsTable.deletedAt),
           eq(outletsTable.is_open, true),
         ),
