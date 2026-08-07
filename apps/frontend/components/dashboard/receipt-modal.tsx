@@ -151,11 +151,16 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
 
     push(ESC, 0x40); // initialize
 
-    align(1);
     if (logoBytes.length) {
+        // Left-aligned on purpose: the bitmap already spans the full paper
+        // width with the logo centered in white padding, so ESC a centering
+        // has nothing to do here — and firmware that "centers" a raster by
+        // rotating the row buffer would shift the logo off-center instead.
+        align(0);
         push(...logoBytes);
         push(0x0a);
     }
+    align(1);
     bold(true);
     size(0x11);
     line(data.outletName);
@@ -292,9 +297,13 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!" }: Props
   .row span:last-child { text-align: right; white-space: nowrap; }
   .item { margin: 3px 0; }
   .item .name { font-weight: bold; word-break: break-word; }
-  .logo { display: block; margin: 0 auto 2mm; width: 20mm; height: 20mm; object-fit: contain; }
+  /* Centered via a full-width text-align wrapper: auto margins on the img
+     alone drift on some print engines, which size the replaced element
+     before the @page width applies. */
+  .logo-wrap { width: 100%; text-align: center; margin-bottom: 2mm; }
+  .logo { display: inline-block; width: 20mm; height: 20mm; object-fit: contain; }
 </style></head><body>
-  ${logoSrc ? `<img class="logo" src="${logoSrc}" alt="">` : ""}
+  ${logoSrc ? `<div class="logo-wrap"><img class="logo" src="${logoSrc}" alt=""></div>` : ""}
   <div class="c b lg">${esc(data.outletName)}</div>
   ${data.outletAddress ? `<div class="c sm">${esc(data.outletAddress)}</div>` : ""}
   ${data.outletPhone ? `<div class="c sm">${esc(data.outletPhone)}</div>` : ""}
