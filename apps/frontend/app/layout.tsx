@@ -91,6 +91,8 @@ export default function RootLayout({
                   name: "Ulun Pesan",
                   url: "https://ulunpesan.com",
                   logo: "https://ulunpesan.com/icons/icon-512x512.png",
+                  // Claims the Instagram account as an official profile of this org.
+                  sameAs: ["https://www.instagram.com/ulunpesan"],
                 },
                 {
                   "@type": "WebSite",
