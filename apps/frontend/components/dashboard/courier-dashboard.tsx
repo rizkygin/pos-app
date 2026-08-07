@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useTransition, useEffect, useRef } from 'react';
+import React, { useCallback, useState, useTransition, useEffect, useRef } from 'react';
 import {
   Wallet,
   MapPin,
@@ -28,6 +28,7 @@ import { Button } from '@/components/ui/button';
 import { goOnline, goOffline } from '@/app/dashboard/courier-sessions/actions';
 import { API_URL } from '@/lib/api-url';
 import { useCourierLocationReporting } from '@/hooks/use-courier-location-reporting';
+import { getCurrentPosition, geolocationMessage } from '@/lib/geolocation';
 
 type Props = {
   dashboardValue: {
@@ -197,11 +198,6 @@ export const CourierDashboard = ({
   // the backend is the actual gate, and it reads the column directly.
   const isVerified = verificationStatus === 'approved';
 
-  // Report position for the whole shift, not just mid-delivery: dispatch offers
-  // orders nearest-first, so an online courier with no known position is ranked
-  // behind everyone who has one. Stops at go-offline, which also clears the
-  // stored point server-side.
-  useCourierLocationReporting(isOnline);
   // Today's accumulated online time. Ticks only while actually on shift —
   // previously it counted up regardless, so an offline courier's total kept
   // growing and was wrong the moment they came back online.
@@ -222,6 +218,30 @@ export const CourierDashboard = ({
   // order stays on shift until it is done.
   const hasActiveOrder = !!currentPickUp;
   const [history, setHistory] = useState<HistoryItem[]>([]);
+
+  // The device stopped producing positions mid-shift — GPS switched off, or the
+  // permission revoked. Being online without a position is the worst of both
+  // worlds: the courier believes they are working while dispatch ranks them
+  // last on every offer, so the shift ends rather than limps on.
+  //
+  // Not while carrying an order: go-offline would be refused anyway, and the
+  // customer still needs whatever ETA we can give. They get told instead.
+  const handleLocationLost = useCallback(
+    (message: string) => {
+      setOfflineError(`${message} Silakan online lagi setelah lokasi aktif.`);
+      if (hasActiveOrder) return;
+      void goOffline()
+        .then(() => setIsOnline(false))
+        .catch(() => {});
+    },
+    [hasActiveOrder],
+  );
+
+  // Report position for the whole shift, not just mid-delivery: dispatch offers
+  // orders nearest-first, so an online courier with no known position is ranked
+  // behind everyone who has one. Stops at go-offline, which also clears the
+  // stored point server-side.
+  useCourierLocationReporting(isOnline, handleLocationLost);
 
   useEffect(() => {
     fetch(`${API_URL}/api/get-courier-history`, { credentials: 'include' })
@@ -250,10 +270,27 @@ export const CourierDashboard = ({
       setShowConfirm(true);
       confirmTimeoutRef.current = setTimeout(() => setShowConfirm(false), 4000);
     } else {
-      startTransition(async () => {
-        await goOnline();
-        setIsOnline(true);
-      });
+      // Prove the device can locate before opening a shift. Going online with
+      // the GPS off produces a courier who looks available, is offered nothing,
+      // and has no way to tell why — cheaper to refuse here and say so.
+      setOfflineError(null);
+      getCurrentPosition(
+        () => {
+          startTransition(async () => {
+            try {
+              await goOnline();
+              setIsOnline(true);
+            } catch {
+              setOfflineError('Gagal online. Coba lagi.');
+            }
+          });
+        },
+        (err) => {
+          setOfflineError(geolocationMessage(err));
+          if (confirmTimeoutRef.current) clearTimeout(confirmTimeoutRef.current);
+          confirmTimeoutRef.current = setTimeout(() => setOfflineError(null), 6000);
+        },
+      );
     }
   };
 

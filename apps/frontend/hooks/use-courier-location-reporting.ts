@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import { API_URL } from '@/lib/api-url';
-import { GEOLOCATION_OPTIONS } from '@/lib/geolocation';
+import { GEOLOCATION_OPTIONS, geolocationMessage } from '@/lib/geolocation';
 
 /**
  * How often the courier's position is sent up.
@@ -13,6 +13,18 @@ import { GEOLOCATION_OPTIONS } from '@/lib/geolocation';
  * between 30-second samples, so it polls instead.
  */
 const REPORT_INTERVAL_MS = 30_000;
+
+/**
+ * Consecutive failed fixes tolerated before the shift is treated as untrackable.
+ *
+ * Not 1: a courier riding through a tunnel or a concrete basement loses the fix
+ * for a moment all the time, and ending their shift over that would be worse
+ * than the bug it fixes. Three ticks is ~90 seconds of no position at all,
+ * which is longer than the 5-minute staleness window matters for but short
+ * enough that they find out while they can still do something about it.
+ * A permission denial skips the count entirely — retrying it changes nothing.
+ */
+const MAX_CONSECUTIVE_FAILURES = 3;
 
 /**
  * Reports the courier's position while they are ON SHIFT.
@@ -29,24 +41,43 @@ const REPORT_INTERVAL_MS = 30_000;
  * Nothing is recorded outside a shift, and no trail is kept during one — the
  * column is overwritten in place.
  *
- * Silent by design — a failed report just means the customer's ETA falls back to
- * the outlet-based estimate, which is not worth interrupting someone riding a
- * motorcycle to tell them.
+ * A failed *upload* is silent — the customer's ETA just falls back to the
+ * outlet-based estimate, which is not worth interrupting someone riding a
+ * motorcycle to tell them. A failed *fix* is not: with no position the courier
+ * is still "online" but ranked last on every offer, quietly earning nothing.
+ * That case calls onUntrackable so the caller can end the shift.
+ *
+ * @param onUntrackable Called once per outage when the device stops producing
+ *   positions at all (GPS switched off, permission revoked mid-shift).
  */
-export function useCourierLocationReporting(active: boolean) {
+export function useCourierLocationReporting(
+  active: boolean,
+  onUntrackable?: (message: string) => void,
+) {
   // Held in a ref so the interval callback never closes over a stale value.
   const activeRef = useRef(active);
   activeRef.current = active;
+
+  // Same reason: the callback identity changes on every render of the caller,
+  // and re-running the effect for that would restart the interval each time.
+  const onUntrackableRef = useRef(onUntrackable);
+  onUntrackableRef.current = onUntrackable;
 
   useEffect(() => {
     if (!active || typeof navigator === 'undefined' || !navigator.geolocation) return;
 
     let cancelled = false;
+    let failures = 0;
+    // One report per outage, not one per tick — otherwise a courier parked in a
+    // basement gets the same banner every 30 seconds.
+    let reported = false;
 
     const report = () => {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           if (cancelled || !activeRef.current) return;
+          failures = 0;
+          reported = false;
           fetch(`${API_URL}/api/courier/location`, {
             method: 'POST',
             credentials: 'include',
@@ -60,8 +91,13 @@ export function useCourierLocationReporting(active: boolean) {
             keepalive: true,
           }).catch(() => {});
         },
-        () => {
-          /* No fix this round — the next tick tries again. */
+        (err) => {
+          if (cancelled || !activeRef.current || reported) return;
+          const fatal = err.code === err.PERMISSION_DENIED;
+          failures += 1;
+          if (!fatal && failures < MAX_CONSECUTIVE_FAILURES) return; // Next tick retries.
+          reported = true;
+          onUntrackableRef.current?.(geolocationMessage(err));
         },
         GEOLOCATION_OPTIONS,
       );
