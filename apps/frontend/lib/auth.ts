@@ -18,6 +18,15 @@ export const getSession = cache(async (): Promise<{ session: Session; user: User
     cache: "no-store",
   });
 
+  // Only a 401 means "not signed in". Treating every non-200 as a logout was
+  // silently evicting merchants: a 429 from the auth rate limiter, or any
+  // backend blip, looked exactly like an expired session and bounced them to
+  // /login mid-shift. Those are backend failures, so they surface as errors
+  // (nearest error boundary) and leave the session cookie alone.
+  if (!res.ok && res.status !== 401) {
+    throw new Error(`Session check failed: ${res.status} ${res.statusText}`);
+  }
+
   const data = res.ok ? await res.json() : null;
   if (!data || !data.user) {
     redirect("/login");
