@@ -14,7 +14,7 @@ import { getServiceArea } from "../lib/service-area";
 // gate (products.category) below are derived from one identical map — the local
 // copy that used to live here is what let "bahan bangunan" go missing and drop
 // out of browse while its outlets still advertised the feature.
-import { CATEGORY_FEATURE, FEATURE_CATEGORY } from "../lib/outlet-features";
+import { CATEGORY_FEATURE, FEATURE_CATEGORY, notInternalCategory } from "../lib/outlet-features";
 
 // Must not exceed the delivery cap in deliveryFeeFromDistance (orders.ts) —
 // listing an outlet nobody can actually order from is worse than omitting it.
@@ -166,6 +166,7 @@ export async function publicRoutes(app: FastifyInstance) {
           eq(productsTable.outlet_id, id),
           eq(productsTable.isAvailable, true),
           eq(productsTable.is_for_sale, true),
+          notInternalCategory(),
           isNull(productsTable.deletedAt),
         ),
       );
@@ -305,6 +306,7 @@ export async function publicRoutes(app: FastifyInstance) {
     const baseWhere = and(
       eq(productsTable.isAvailable, true),
       eq(productsTable.is_for_sale, true),
+      notInternalCategory(),
       isNull(productsTable.deletedAt),
       nameFilter,
       featureFilter,
@@ -412,6 +414,7 @@ export async function publicRoutes(app: FastifyInstance) {
         and(
           eq(productsTable.isAvailable, true),
           eq(productsTable.is_for_sale, true),
+          notInternalCategory(),
           isNull(productsTable.deletedAt),
           isNull(outletsTable.deletedAt),
           match,
@@ -591,6 +594,7 @@ export async function publicRoutes(app: FastifyInstance) {
           and(
             eq(productsTable.outlet_id, parseInt(outletIdParam, 10)),
             eq(productsTable.is_for_sale, true),
+            notInternalCategory(),
             isNull(productsTable.deletedAt),
           ),
         );

@@ -344,6 +344,27 @@
       "when": 1785579841199,
       "tag": "0048_courier_verification",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1785604394852,
+      "tag": "0049_courier_dispatch_offers",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1785611788810,
+      "tag": "0050_unique_live_role_per_user",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1785613430324,
+      "tag": "0051_courier_devices",
+      "breakpoints": true
     }
   ]
 }

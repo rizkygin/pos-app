@@ -8,9 +8,11 @@ import {
 } from '@/app/dashboard/activeorder/actions';
 import { useTransition, useState, useEffect, useCallback } from 'react';
 import QRCode from 'react-qr-code';
-import { QrCode, X, Lock, MapPin } from 'lucide-react';
+import { QrCode, X, Lock, MapPin, MessageCircle } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import Image from 'next/image';
 import { API_URL } from '@/lib/api-url';
+import { resolveUploadImage } from '@/lib/image-src';
 import { fmtIDR } from '@/lib/utils/format';
 import { DeliveryTrackingMapClient } from '@/components/order/delivery-tracking-map-client';
 
@@ -470,6 +472,7 @@ export function ActiveOrderAnimation({
   rejectedReason,
   deliveryFee,
   goodsTotal,
+  courier: initialCourier = null,
 }: {
   orderId: string;
   status: OrderStatus;
@@ -480,6 +483,12 @@ export function ActiveOrderAnimation({
   rejectedReason?: string | null;
   deliveryFee?: string | null;
   goodsTotal?: number | null;
+  courier?: {
+    name: string;
+    avatar: string | null;
+    vehiclePlate: string | null;
+    phone?: string | null;
+  } | null;
 }) {
   const router = useRouter();
   const isService = fulfillment === 'service';
@@ -505,6 +514,9 @@ export function ActiveOrderAnimation({
   // someone is genuinely on the way.
   const [courierPos, setCourierPos] = useState<{ lat: number; lon: number } | null>(null);
   const [destination, setDestination] = useState<{ lat: number; lon: number } | null>(null);
+  // Who took the order. Arrives on the same poll, so the card appears the moment
+  // a courier accepts rather than waiting for a page reload.
+  const [courier, setCourier] = useState(initialCourier);
   const cfg = STATUS_CONFIG[liveStatus];
   const [pending, startTransition] = useTransition();
   const [qrOpen, setQrOpen] = useState(false);
@@ -536,6 +548,7 @@ export function ActiveOrderAnimation({
       setEtaMinutes(data.order.etaMinutes ?? null);
       setEtaSource(data.order.etaSource ?? null);
       setCourierPos(data.order.courierPosition ?? null);
+      setCourier(data.order.courier ?? null);
       setDestination(data.order.destination ?? null);
       const next = data.order.status as OrderStatus;
       if (next !== liveStatus) {
@@ -615,6 +628,53 @@ export function ActiveOrderAnimation({
               {liveRejectedReason}
             </p>
           </div>
+        )}
+
+        {/* Who is bringing it. Present only once an order has been accepted, and
+            never on the no-courier lanes (jasa / bahan bangunan). */}
+        {!noCourier && courier && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="w-full rounded-2xl border border-border/40 bg-background/60 px-4 py-3 flex items-center gap-3"
+          >
+            <div className="relative size-12 shrink-0 overflow-hidden rounded-full bg-muted">
+              <Image
+                src={resolveUploadImage(courier.avatar)}
+                alt={courier.name}
+                fill
+                unoptimized
+                sizes="48px"
+                className="object-cover"
+              />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">
+                Kurir pian
+              </p>
+              <p className="truncate text-sm font-bold text-foreground">
+                {courier.name}
+              </p>
+              {courier.vehiclePlate && (
+                <p className="text-[11px] font-mono font-bold text-muted-foreground">
+                  {courier.vehiclePlate}
+                </p>
+              )}
+            </div>
+            {/* Only once the number is a usable 628… — the backend nulls it
+                otherwise, and a wa.me link built from junk opens a dead chat. */}
+            {courier.phone && (
+              <a
+                href={`https://wa.me/${courier.phone}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={`Chat ${courier.name} via WhatsApp`}
+                className="flex size-11 shrink-0 items-center justify-center rounded-full bg-[#25D366] text-white shadow-lg shadow-[#25D366]/25 transition-colors hover:bg-[#1DA851]"
+              >
+                <MessageCircle className="h-5 w-5" />
+              </a>
+            )}
+          </motion.div>
         )}
 
         {/* Live courier map. Rendered only when the backend hands over a fresh

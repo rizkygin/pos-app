@@ -59,6 +59,7 @@ import { authClient, useSession } from '@/lib/auth-client';
 import dynamic from 'next/dynamic';
 import { useCurrentUrl } from '@/hooks/use-current-url';
 import { cn } from '@/lib/utils';
+import { notifyLogout } from '@/lib/native-bridge';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { OutletSwitcher } from './outlet-switcher';
 import type { LucideIcon } from 'lucide-react';
@@ -292,6 +293,13 @@ const adminManageNavItems: NavItem[] = [
     iconColor: 'text-orange-600 dark:text-orange-400',
   },
   {
+    name: 'Tawaran Order',
+    url: '/dashboard/admin/courier-offers',
+    icon: ClipboardList,
+    iconBg: 'bg-violet-100 dark:bg-violet-950',
+    iconColor: 'text-violet-600 dark:text-violet-400',
+  },
+  {
     name: 'Sesi Kurir',
     url: '/dashboard/admin/courier-sessions',
     icon: Radio,
@@ -473,6 +481,11 @@ export function AppSidebar({
     : 'U';
 
   const signOut = async () => {
+    // Tells the courier app to stop its location service and revoke its
+    // device token (that revoke uses the device token itself, not this
+    // session, so it doesn't need to race the sign-out call below). No-op
+    // outside the app; see lib/native-bridge.
+    notifyLogout();
     await authClient.signOut({
       fetchOptions: {
         onSuccess: () => router.push('/login'),

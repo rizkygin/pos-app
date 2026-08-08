@@ -4,7 +4,6 @@ import { MapPin, Loader2, AlertCircle } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ORDER_FEATURES } from "@/lib/order-features";
 import { API_URL } from "@/lib/api-url";
 import { getCurrentPosition, geolocationMessage } from "@/lib/geolocation";
 import { haversineKm } from "@/lib/haversine";
@@ -241,15 +240,6 @@ const RegistrationForm = ({ role, onCancel }: { role: string; onCancel: () => vo
     const [formData, setFormData] = useState<Record<string, string>>(
         role === 'courier' ? { vehicle_type: 'motorcycle' } : {}
     );
-    const [selectedFeatures, setSelectedFeatures] = useState<string[]>([]);
-    const [featureError, setFeatureError] = useState(false);
-
-    const toggleFeature = (slug: string) =>
-        setSelectedFeatures((prev) => {
-            setFeatureError(false);
-            return prev.includes(slug) ? prev.filter((s) => s !== slug) : [...prev, slug];
-        });
-
     const currentRole = roles.find((r) => r.id === role);
 
     // Courier coverage circle, fetched once. Held as the shape rather than a
@@ -316,10 +306,6 @@ const RegistrationForm = ({ role, onCancel }: { role: string; onCancel: () => vo
         // while a click is already in flight reaches here without ever touching
         // the disabled attribute.
         if (loading) return;
-        if (role === 'owner' && selectedFeatures.length === 0) {
-            setFeatureError(true);
-            return;
-        }
         setSubmitError("");
         setLoading(true);
         try {
@@ -327,7 +313,7 @@ const RegistrationForm = ({ role, onCancel }: { role: string; onCancel: () => vo
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 credentials: "include",
-                body: JSON.stringify({ role, data: { ...formData, features: selectedFeatures } }),
+                body: JSON.stringify({ role, data: formData }),
             });
             if (res.ok) {
                 // Hard navigation (not router.push): the fresh role must
@@ -409,7 +395,7 @@ const RegistrationForm = ({ role, onCancel }: { role: string; onCancel: () => vo
                         </div>
                         <div className="grid grid-cols-2 gap-4">
                             <div className="space-y-2">
-                                <label className="text-sm font-medium">Whatsapp</label>
+                                <label className="text-sm font-medium">Whatsapp Outlet</label>
                                 <Input name="phone" onChange={handleChange} required placeholder="08..." className="rounded-xl" />
                             </div>
                             <div className="space-y-2">
@@ -452,42 +438,6 @@ const RegistrationForm = ({ role, onCancel }: { role: string; onCancel: () => vo
                             </div>
                         )}
 
-                        <div className="space-y-2 bg-amber-950 rounded-2xl p-1.5">
-                            <label className="text-sm font-medium text-white flex items-center justify-between">
-                                <span>Kategori Layanan <span className="text-red-400">*</span></span>
-                                {selectedFeatures.length > 0 && (
-                                    <span className="text-xs text-white/60 font-normal">{selectedFeatures.length} dipilih</span>
-                                )}
-                            </label>
-                            <div className="grid grid-cols-2 gap-2.5 ">
-                                {ORDER_FEATURES.filter((f) => f.isAvailable).map((f) => {
-                                    const Icon = f.icon;
-                                    const active = selectedFeatures.includes(f.slug);
-                                    return (
-                                        <button
-                                            key={f.slug}
-                                            type="button"
-                                            onClick={() => toggleFeature(f.slug)}
-                                            className={`flex items-center gap-3 px-3.5 py-3 rounded-xl border-2 text-left transition-all duration-150 ${
-                                                active
-                                                    ? "border-indigo-400 bg-indigo-500/30 shadow-lg shadow-indigo-500/20"
-                                                    : "border-white/30 bg-white/10 hover:border-white/50 hover:bg-white/20"
-                                            }`}
-                                        >
-                                            <div className={`h-8 w-8 rounded-lg flex items-center justify-center shrink-0 transition-colors ${active ? f.iconBg : "bg-white/20"}`}>
-                                                <Icon className={`h-4 w-4 ${active ? f.iconColor : "text-white"}`} />
-                                            </div>
-                                            <span className={`text-xs font-bold leading-tight transition-colors ${active ? "text-white" : "text-white/80"}`}>
-                                                {f.label}
-                                            </span>
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                            {featureError && (
-                                <p className="text-red-400 text-xs font-medium mt-1">Pilih minimal satu kategori layanan.</p>
-                            )}
-                        </div>
                     </>
                 )}
 

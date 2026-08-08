@@ -23,15 +23,15 @@ import { subscriptionRoutes } from "./routes/subscriptions";
 import { employeeRoutes } from "./routes/employees";
 import { pushRoutes } from "./routes/push";
 import { routingRoutes } from "./routes/routing";
+import { startDispatchScheduler } from "./lib/dispatch-scheduler";
+import { FRONTEND_ORIGINS } from "./lib/app-env";
 
 const PORT = Number(process.env.PORT ?? 4000);
-// FRONTEND_ORIGIN accepts a comma-separated list so apex + www (and any extra
-// origins) are all allowed. @fastify/cors reflects whichever request origin is
-// in the list, which credentialed (cookie) requests require.
-const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN ?? "http://localhost:3000";
-const ALLOWED_ORIGINS = FRONTEND_ORIGIN.split(",")
-  .map((o) => o.trim())
-  .filter(Boolean);
+// Derived from APP_ENV (lib/app-env), which also lists apex AND www for
+// production — @fastify/cors reflects whichever request origin is in the list,
+// which credentialed (cookie) requests require, and missing one reads as "the
+// site is down" to anyone who typed it that way.
+const ALLOWED_ORIGINS = FRONTEND_ORIGINS;
 
 async function main() {
   const app = Fastify({ logger: true });
@@ -115,6 +115,10 @@ async function main() {
   await app.register(routingRoutes);
 
   app.get("/health", async () => ({ ok: true }));
+
+  // The courier dispatch clock. Started after the routes are registered so a
+  // tick can never fire against a half-built app.
+  startDispatchScheduler(app);
 
   // Bind IPv6 "::" (dual-stack) so the server is reachable both over Railway's
   // private network (IPv6-only, e.g. backend.railway.internal) AND the public

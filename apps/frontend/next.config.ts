@@ -1,7 +1,29 @@
 import type { NextConfig } from "next";
 import path from "node:path";
+import { resolveAppUrls } from "./lib/app-env.mjs";
+
+// Resolved at BUILD time on purpose: NEXT_PUBLIC_* is inlined into the client
+// bundle, so the environment has to be known before compilation rather than
+// read from the container at boot. APP_ENV (or RAILWAY_ENVIRONMENT_NAME) is the
+// single input; every address below follows from it.
+const { appEnv, apiUrl, siteUrl, apiHost } = resolveAppUrls();
+
+console.log(`[env] building for ${appEnv} — api=${apiUrl} site=${siteUrl}`);
 
 const nextConfig: NextConfig = {
+  env: {
+    // NEXT_PUBLIC_* is inlined into the client bundle, so it must be resolved
+    // at build time. API_URL_INTERNAL is deliberately NOT listed here: putting
+    // any key in this `env` block makes Next.js statically replace every
+    // `process.env.KEY` reference at build time, server code included — the
+    // opposite of what lib/api-url.ts wants (a server-only value read fresh
+    // from the container's runtime env). The Dockerfile also has no
+    // corresponding ARG, so a baked-in value would always fall back to the
+    // derived default and silently ignore whatever is set on Railway.
+    NEXT_PUBLIC_API_URL: apiUrl,
+    NEXT_PUBLIC_SITE_URL: siteUrl,
+    NEXT_PUBLIC_APP_ENV: appEnv,
+  },
   // Emit a self-contained .next/standalone server with only the traced
   // node_modules, so the Docker runtime stage needs no `npm install`.
   output: "standalone",
@@ -13,6 +35,9 @@ const nextConfig: NextConfig = {
       // Backend serves user-uploaded files (avatars, products, ads) from its own origin.
       { protocol: "http", hostname: "localhost", port: "4000", pathname: "/**" },
       { protocol: "https", hostname: "api.ulunpesan.com", pathname: "/**" },
+      // Whichever backend THIS build talks to — a dev build serving images from
+      // api-dev would otherwise be blocked by next/image.
+      { protocol: "https", hostname: apiHost, pathname: "/**" },
     ],
   },
   allowedDevOrigins: ['192.168.1.7', 'breeder-enduring-manpower.ngrok-free.dev'],

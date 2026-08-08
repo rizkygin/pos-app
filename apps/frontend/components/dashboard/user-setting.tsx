@@ -26,7 +26,12 @@ import {
     Trash2,
     ChevronRight,
     Phone,
+    LogOut,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { authClient } from "@/lib/auth-client";
+import { notifyLogout } from "@/lib/native-bridge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -46,9 +51,9 @@ function Alert({ state }: { state: AlertState }) {
             initial={{ opacity: 0, y: -6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -6 }}
-            className={`flex items-center gap-2.5 px-4 py-3 rounded-2xl text-sm font-semibold ${state.ok
-                ? "bg-emerald-50 border border-emerald-200 text-emerald-700"
-                : "bg-rose-50 border border-rose-200 text-rose-700"
+            className={`flex items-center gap-2.5 rounded-xl px-4 py-3 text-sm font-medium ${state.ok
+                ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400"
+                : "bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-400"
                 }`}
         >
             {state.ok
@@ -57,6 +62,52 @@ function Alert({ state }: { state: AlertState }) {
             }
             {state.text}
         </motion.div>
+    );
+}
+
+/** One settings card. Header row is optional so bare cards stay quiet. */
+function Section({
+    icon: Icon,
+    title,
+    description,
+    children,
+    className = "",
+}: {
+    icon?: LucideIcon;
+    title?: string;
+    description?: string;
+    children: React.ReactNode;
+    className?: string;
+}) {
+    return (
+        <section className={`rounded-2xl border bg-card p-5 md:p-6 ${className}`}>
+            {title && (
+                <div className="mb-5 flex items-start gap-3">
+                    {Icon && (
+                        <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+                            <Icon className="size-4" />
+                        </span>
+                    )}
+                    <div className="space-y-0.5">
+                        <h2 className="text-sm font-semibold leading-tight">{title}</h2>
+                        {description && (
+                            <p className="text-xs text-muted-foreground">{description}</p>
+                        )}
+                    </div>
+                </div>
+            )}
+            {children}
+        </section>
+    );
+}
+
+function Field({ label, hint, children }: { label: string; hint?: React.ReactNode; children: React.ReactNode }) {
+    return (
+        <div className="space-y-1.5">
+            <label className="text-xs font-medium text-muted-foreground">{label}</label>
+            {children}
+            {hint}
+        </div>
     );
 }
 
@@ -77,12 +128,13 @@ function PasswordInput({
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
                 placeholder={placeholder}
-                className="flex h-10 w-full rounded-xl border border-input bg-background px-3 py-2 text-sm pr-10 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-0 placeholder:text-muted-foreground"
+                className="flex h-10 w-full rounded-xl border border-input bg-background px-3 py-2 pr-10 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
             />
             <button
                 type="button"
                 onClick={() => setShow((v) => !v)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                aria-label={show ? "Hide password" : "Show password"}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
             >
                 {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </button>
@@ -100,6 +152,23 @@ type TabId = (typeof TABS)[number]["id"];
 
 export function UserSetting({ user }: { user: UserProps }) {
     const [activeTab, setActiveTab] = useState<TabId>("profile");
+    const router = useRouter();
+
+    // Sign out state
+    const [signingOut, setSigningOut] = useState(false);
+
+    const signOut = async () => {
+        setSigningOut(true);
+        // Mirrors the sidebar's sign-out: tells the courier app to stop its
+        // location service and revoke its device token before the session goes.
+        notifyLogout();
+        await authClient.signOut({
+            fetchOptions: {
+                onSuccess: () => router.push("/login"),
+            },
+        });
+        setSigningOut(false);
+    };
 
     // Profile state
     const [name, setName] = useState(user.name);
@@ -209,22 +278,71 @@ export function UserSetting({ user }: { user: UserProps }) {
         });
     }
 
+    const initials = user.name
+        .split(" ")
+        .map((part) => part[0])
+        .filter(Boolean)
+        .join("")
+        .toUpperCase()
+        .slice(0, 2) || "U";
+
+    const phoneLocked = phoneState !== null && !phoneState.canChange;
+
     return (
-        <div className="px-4 md:px-6 pb-16 pt-6 max-w-3xl space-y-6">
-            {/* Page Header */}
-            <div>
-                <h1 className="text-2xl font-black">Account Settings</h1>
-                <p className="text-sm text-muted-foreground mt-1">Manage your profile, security, and account preferences.</p>
-            </div>
+        <div className="mx-auto max-w-3xl space-y-6 px-4 pb-16 pt-6 md:px-6">
+            {/* Identity header — who you're editing, before the controls. */}
+            <header className="flex flex-col gap-4 rounded-2xl border bg-card p-5 sm:flex-row sm:items-center md:p-6">
+                {user.image ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                        src={user.image}
+                        alt=""
+                        className="size-14 shrink-0 rounded-2xl object-cover"
+                    />
+                ) : (
+                    <span className="flex size-14 shrink-0 items-center justify-center rounded-2xl bg-rose-500 text-lg font-semibold text-white">
+                        {initials}
+                    </span>
+                )}
+
+                <div className="min-w-0 flex-1 space-y-1">
+                    <h1 className="truncate text-lg font-semibold leading-tight">{user.name}</h1>
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+                        <span className="truncate">{user.email}</span>
+                        {user.emailVerified ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400">
+                                <ShieldCheck className="size-3" /> Verified
+                            </span>
+                        ) : (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:bg-amber-950/40 dark:text-amber-400">
+                                <ShieldAlert className="size-3" /> Unverified
+                            </span>
+                        )}
+                    </div>
+                </div>
+
+                <Button
+                    variant="outline"
+                    onClick={signOut}
+                    disabled={signingOut}
+                    className="w-full rounded-xl sm:w-auto"
+                >
+                    {signingOut
+                        ? <Loader2 className="mr-1.5 size-4 animate-spin" />
+                        : <LogOut className="mr-1.5 size-4" />
+                    }
+                    Sign out
+                </Button>
+            </header>
 
             {/* Tab Navigation */}
-            <div className="flex gap-1 p-1 bg-muted/60 rounded-2xl w-fit">
+            <div className="grid grid-cols-3 gap-1 rounded-2xl bg-muted/60 p-1 sm:inline-grid sm:w-auto sm:grid-flow-col sm:auto-cols-max">
                 {TABS.map(({ id, label, icon: Icon }) => (
                     <button
                         key={id}
                         type="button"
                         onClick={() => setActiveTab(id)}
-                        className={`relative flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all duration-200 ${activeTab === id
+                        className={`relative flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-colors sm:min-w-28 ${activeTab === id
                             ? "text-foreground"
                             : "text-muted-foreground hover:text-foreground"
                             }`}
@@ -232,12 +350,12 @@ export function UserSetting({ user }: { user: UserProps }) {
                         {activeTab === id && (
                             <motion.div
                                 layoutId="tab-indicator"
-                                className="absolute inset-0 bg-background rounded-xl shadow-sm"
+                                className="absolute inset-0 rounded-xl bg-background shadow-sm"
                                 transition={{ type: "spring", bounce: 0.2, duration: 0.35 }}
                             />
                         )}
                         <span className="relative z-10 flex items-center gap-2">
-                            <Icon className="h-4 w-4" />
+                            <Icon className="size-4" />
                             {label}
                         </span>
                     </button>
@@ -255,68 +373,76 @@ export function UserSetting({ user }: { user: UserProps }) {
                         transition={{ duration: 0.2 }}
                         className="space-y-4"
                     >
-                        {/* Profile Info */}
-                        <div className="p-5 rounded-2xl border border-border/60 bg-card shadow-sm space-y-5">
-                            <p className="font-black text-sm flex items-center gap-2">
-                                <User className="h-4 w-4 text-rose-500" /> Profile Information
-                            </p>
-
-                            <div className="space-y-2">
-                                <label className="text-xs font-bold text-muted-foreground uppercase tracking-wide">Full Name</label>
-                                <Input
-                                    value={name}
-                                    onChange={(e) => setName(e.target.value)}
-                                    placeholder="Your name..."
-                                    className="rounded-xl"
-                                />
-                            </div>
-
-                            <div className="space-y-2">
-                                <label className="text-xs font-bold text-muted-foreground uppercase tracking-wide">Email Address</label>
-                                <div className="relative">
-                                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                        <Section
+                            icon={User}
+                            title="Profile information"
+                            description="How your name appears across the app."
+                        >
+                            <div className="space-y-5">
+                                <Field label="Full name">
                                     <Input
-                                        type="email"
-                                        value={user.email}
-                                        readOnly
-                                        className="rounded-xl pl-10 bg-muted/40 text-muted-foreground cursor-not-allowed"
+                                        value={name}
+                                        onChange={(e) => setName(e.target.value)}
+                                        placeholder="Your name..."
+                                        className="rounded-xl"
                                     />
-                                    <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                                        {user.emailVerified
-                                            ? <span className="flex items-center gap-1 text-xs font-bold text-emerald-600"><ShieldCheck className="h-3.5 w-3.5" /> Verified</span>
-                                            : <span className="flex items-center gap-1 text-xs font-bold text-amber-500"><ShieldAlert className="h-3.5 w-3.5" /> Unverified</span>
-                                        }
-                                    </div>
-                                </div>
-                                <p className="text-xs text-muted-foreground">Email cannot be changed here. Contact support if needed.</p>
-                            </div>
+                                </Field>
 
-                            {/* WhatsApp — rate-limited to one change a month. The
-                                limit is stated up front rather than sprung as an
-                                error after someone has already typed a new number. */}
-                            <div className="space-y-2">
-                                <label className="text-xs font-bold text-muted-foreground uppercase tracking-wide">
-                                    Nomor WhatsApp
-                                </label>
+                                <Field
+                                    label="Email address"
+                                    hint={<p className="text-xs text-muted-foreground">Email cannot be changed here. Contact support if needed.</p>}
+                                >
+                                    <div className="relative">
+                                        <Mail className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                                        <Input
+                                            type="email"
+                                            value={user.email}
+                                            readOnly
+                                            className="cursor-not-allowed rounded-xl bg-muted/40 pl-10 text-muted-foreground"
+                                        />
+                                    </div>
+                                </Field>
+
+                                <AnimatePresence>
+                                    {profileAlert && <Alert state={profileAlert} />}
+                                </AnimatePresence>
+
+                                <Button
+                                    onClick={handleSaveProfile}
+                                    disabled={profilePending}
+                                    className="w-full rounded-xl bg-rose-500 font-semibold text-white hover:bg-rose-600 sm:w-auto"
+                                >
+                                    {profilePending && <Loader2 className="mr-2 size-4 animate-spin" />}
+                                    {profilePending ? "Saving..." : "Save changes"}
+                                </Button>
+                            </div>
+                        </Section>
+
+                        {/* WhatsApp — rate-limited to one change a month. The
+                            limit is stated up front rather than sprung as an
+                            error after someone has already typed a new number. */}
+                        <Section
+                            icon={Phone}
+                            title="Nomor WhatsApp"
+                            description="Dipakai penjual & kurir untuk menghubungi pian soal pesanan."
+                        >
+                            <div className="space-y-3">
                                 <div className="relative">
-                                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                                    <Phone className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                                     <Input
                                         type="tel"
                                         inputMode="numeric"
                                         value={phone}
                                         onChange={(e) => setPhone(e.target.value)}
-                                        readOnly={phoneState !== null && !phoneState.canChange}
+                                        readOnly={phoneLocked}
                                         placeholder="08123456789"
-                                        className={`rounded-xl pl-10 ${
-                                            phoneState && !phoneState.canChange
-                                                ? "bg-muted/40 text-muted-foreground cursor-not-allowed"
-                                                : ""
-                                        }`}
+                                        className={`rounded-xl pl-10 ${phoneLocked ? "cursor-not-allowed bg-muted/40 text-muted-foreground" : ""}`}
                                     />
                                 </div>
-                                {phoneState && !phoneState.canChange && phoneState.nextChangeAt ? (
-                                    <p className="flex items-start gap-1.5 text-xs text-amber-600">
-                                        <Lock className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+
+                                {phoneLocked && phoneState?.nextChangeAt ? (
+                                    <p className="flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+                                        <Lock className="mt-0.5 size-3.5 shrink-0" />
                                         Nomor hanya bisa diubah sekali sebulan. Bisa diubah lagi{" "}
                                         {new Date(phoneState.nextChangeAt).toLocaleDateString("id-ID", {
                                             day: "numeric",
@@ -327,19 +453,21 @@ export function UserSetting({ user }: { user: UserProps }) {
                                     </p>
                                 ) : (
                                     <p className="text-xs text-muted-foreground">
-                                        Dipakai penjual &amp; kurir untuk menghubungi pian soal pesanan.
                                         Hanya bisa diubah sekali sebulan.
                                     </p>
                                 )}
+
                                 {phoneAlert && (
                                     <p
-                                        className={`text-xs font-medium ${
-                                            phoneAlert.type === "success" ? "text-emerald-600" : "text-rose-600"
-                                        }`}
+                                        className={`text-xs font-medium ${phoneAlert.type === "success"
+                                            ? "text-emerald-600 dark:text-emerald-400"
+                                            : "text-rose-600 dark:text-rose-400"
+                                            }`}
                                     >
                                         {phoneAlert.message}
                                     </p>
                                 )}
+
                                 {phoneState?.canChange && (
                                     <Button
                                         type="button"
@@ -349,24 +477,11 @@ export function UserSetting({ user }: { user: UserProps }) {
                                         onClick={handleSavePhone}
                                         className="rounded-xl"
                                     >
-                                        {phonePending ? "Menyimpan..." : "Simpan Nomor"}
+                                        {phonePending ? "Menyimpan..." : "Simpan nomor"}
                                     </Button>
                                 )}
                             </div>
-
-                            <AnimatePresence>
-                                {profileAlert && <Alert state={profileAlert} />}
-                            </AnimatePresence>
-
-                            <Button
-                                onClick={handleSaveProfile}
-                                disabled={profilePending}
-                                className="w-full rounded-xl bg-rose-500 hover:bg-rose-600 text-white font-black"
-                            >
-                                {profilePending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                                {profilePending ? "Saving..." : "Save Changes"}
-                            </Button>
-                        </div>
+                        </Section>
                     </motion.div>
                 )}
 
@@ -380,25 +495,34 @@ export function UserSetting({ user }: { user: UserProps }) {
                         className="space-y-4"
                     >
                         {/* Email Verification */}
-                        <div className={`p-5 rounded-2xl border shadow-sm ${user.emailVerified
-                            ? "bg-emerald-50/60 border-emerald-200/60"
-                            : "bg-amber-50/60 border-amber-200/60"
+                        <div className={`rounded-2xl border p-5 md:p-6 ${user.emailVerified
+                            ? "border-emerald-200/60 bg-emerald-50/60 dark:border-emerald-900/40 dark:bg-emerald-950/20"
+                            : "border-amber-200/60 bg-amber-50/60 dark:border-amber-900/40 dark:bg-amber-950/20"
                             }`}>
-                            <div className="flex items-start gap-4">
-                                <div className={`h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 ${user.emailVerified ? "bg-emerald-100" : "bg-amber-100"}`}>
+                            <div className="flex items-start gap-3">
+                                <span className={`flex size-9 shrink-0 items-center justify-center rounded-xl ${user.emailVerified
+                                    ? "bg-emerald-100 dark:bg-emerald-950/60"
+                                    : "bg-amber-100 dark:bg-amber-950/60"
+                                    }`}>
                                     {user.emailVerified
-                                        ? <ShieldCheck className="h-5 w-5 text-emerald-600" />
-                                        : <ShieldAlert className="h-5 w-5 text-amber-500" />
+                                        ? <ShieldCheck className="size-4 text-emerald-600 dark:text-emerald-400" />
+                                        : <ShieldAlert className="size-4 text-amber-500 dark:text-amber-400" />
                                     }
-                                </div>
+                                </span>
                                 <div className="flex-1 space-y-1">
-                                    <p className={`font-black text-sm ${user.emailVerified ? "text-emerald-700" : "text-amber-700"}`}>
-                                        Email {user.emailVerified ? "Verified" : "Not Verified"}
+                                    <p className={`text-sm font-semibold ${user.emailVerified
+                                        ? "text-emerald-700 dark:text-emerald-400"
+                                        : "text-amber-700 dark:text-amber-400"
+                                        }`}>
+                                        Email {user.emailVerified ? "verified" : "not verified"}
                                     </p>
-                                    <p className={`text-xs ${user.emailVerified ? "text-emerald-600" : "text-amber-600"}`}>
+                                    <p className={`text-xs ${user.emailVerified
+                                        ? "text-emerald-600 dark:text-emerald-500"
+                                        : "text-amber-600 dark:text-amber-500"
+                                        }`}>
                                         {user.emailVerified
                                             ? `Your email ${user.email} is verified and active.`
-                                            : `Please verify your email to unlock all features.`
+                                            : "Please verify your email to unlock all features."
                                         }
                                     </p>
 
@@ -408,9 +532,9 @@ export function UserSetting({ user }: { user: UserProps }) {
                                                 <motion.p
                                                     initial={{ opacity: 0 }}
                                                     animate={{ opacity: 1 }}
-                                                    className="flex items-center gap-1.5 text-xs font-bold text-emerald-600"
+                                                    className="flex items-center gap-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400"
                                                 >
-                                                    <CheckCircle2 className="h-4 w-4" />
+                                                    <CheckCircle2 className="size-4" />
                                                     Verification email sent! Check your inbox.
                                                 </motion.p>
                                             ) : (
@@ -418,10 +542,10 @@ export function UserSetting({ user }: { user: UserProps }) {
                                                     size="sm"
                                                     onClick={handleSendVerification}
                                                     disabled={verificationPending}
-                                                    className="rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold"
+                                                    className="rounded-xl bg-amber-500 font-semibold text-white hover:bg-amber-600"
                                                 >
-                                                    {verificationPending && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
-                                                    {verificationPending ? "Sending..." : "Send Verification Email"}
+                                                    {verificationPending && <Loader2 className="mr-1.5 size-3.5 animate-spin" />}
+                                                    {verificationPending ? "Sending..." : "Send verification email"}
                                                 </Button>
                                             )}
                                         </div>
@@ -431,102 +555,102 @@ export function UserSetting({ user }: { user: UserProps }) {
                         </div>
 
                         {/* Change Password */}
-                        <div className="p-5 rounded-2xl border border-border/60 bg-card shadow-sm space-y-5">
-                            <div>
-                                <p className="font-black text-sm flex items-center gap-2">
-                                    <Lock className="h-4 w-4 text-rose-500" /> Change Password
-                                </p>
-                                <p className="text-xs text-muted-foreground mt-1">Ensure your account uses a strong, unique password.</p>
+                        <Section
+                            icon={Lock}
+                            title="Change password"
+                            description="Ensure your account uses a strong, unique password."
+                        >
+                            <div className="space-y-5">
+                                <Field label="Current password">
+                                    <PasswordInput
+                                        placeholder="Enter current password..."
+                                        value={currentPassword}
+                                        onChange={setCurrentPassword}
+                                    />
+                                </Field>
+
+                                <div className="h-px bg-border/60" />
+
+                                <Field
+                                    label="New password"
+                                    hint={newPassword.length > 0 ? (
+                                        <div className="mt-1.5 flex items-center gap-1">
+                                            {[8, 12, 16].map((len, i) => (
+                                                <div
+                                                    key={len}
+                                                    className={`h-1 flex-1 rounded-full transition-colors ${newPassword.length >= len
+                                                        ? i === 0 ? "bg-rose-400" : i === 1 ? "bg-amber-400" : "bg-emerald-400"
+                                                        : "bg-muted"
+                                                        }`}
+                                                />
+                                            ))}
+                                            <span className="ml-1 text-xs text-muted-foreground">
+                                                {newPassword.length < 8 ? "Weak" : newPassword.length < 12 ? "Fair" : newPassword.length < 16 ? "Good" : "Strong"}
+                                            </span>
+                                        </div>
+                                    ) : undefined}
+                                >
+                                    <PasswordInput
+                                        placeholder="Enter new password..."
+                                        value={newPassword}
+                                        onChange={setNewPassword}
+                                    />
+                                </Field>
+
+                                <Field
+                                    label="Confirm new password"
+                                    hint={confirmPassword.length > 0 && newPassword !== confirmPassword ? (
+                                        <p className="flex items-center gap-1 text-xs font-medium text-rose-500">
+                                            <AlertTriangle className="size-3" /> Passwords do not match
+                                        </p>
+                                    ) : undefined}
+                                >
+                                    <PasswordInput
+                                        placeholder="Confirm new password..."
+                                        value={confirmPassword}
+                                        onChange={setConfirmPassword}
+                                    />
+                                </Field>
+
+                                <AnimatePresence>
+                                    {passwordAlert && <Alert state={passwordAlert} />}
+                                </AnimatePresence>
+
+                                <Button
+                                    onClick={handleChangePassword}
+                                    disabled={passwordPending}
+                                    className="w-full rounded-xl bg-rose-500 font-semibold text-white hover:bg-rose-600 sm:w-auto"
+                                >
+                                    {passwordPending && <Loader2 className="mr-2 size-4 animate-spin" />}
+                                    {passwordPending ? "Updating..." : "Update password"}
+                                </Button>
                             </div>
-
-                            <div className="space-y-2">
-                                <label className="text-xs font-bold text-muted-foreground uppercase tracking-wide">Current Password</label>
-                                <PasswordInput
-                                    placeholder="Enter current password..."
-                                    value={currentPassword}
-                                    onChange={setCurrentPassword}
-                                />
-                            </div>
-
-                            <div className="h-px bg-border/60" />
-
-                            <div className="space-y-2">
-                                <label className="text-xs font-bold text-muted-foreground uppercase tracking-wide">New Password</label>
-                                <PasswordInput
-                                    placeholder="Enter new password..."
-                                    value={newPassword}
-                                    onChange={setNewPassword}
-                                />
-                                {newPassword.length > 0 && (
-                                    <div className="flex gap-1 mt-1.5">
-                                        {[8, 12, 16].map((len, i) => (
-                                            <div
-                                                key={len}
-                                                className={`h-1 flex-1 rounded-full transition-colors ${newPassword.length >= [8, 12, 16][i]
-                                                    ? i === 0 ? "bg-rose-400" : i === 1 ? "bg-amber-400" : "bg-emerald-400"
-                                                    : "bg-muted"
-                                                    }`}
-                                            />
-                                        ))}
-                                        <span className="text-xs text-muted-foreground ml-1">
-                                            {newPassword.length < 8 ? "Weak" : newPassword.length < 12 ? "Fair" : newPassword.length < 16 ? "Good" : "Strong"}
-                                        </span>
-                                    </div>
-                                )}
-                            </div>
-
-                            <div className="space-y-2">
-                                <label className="text-xs font-bold text-muted-foreground uppercase tracking-wide">Confirm New Password</label>
-                                <PasswordInput
-                                    placeholder="Confirm new password..."
-                                    value={confirmPassword}
-                                    onChange={setConfirmPassword}
-                                />
-                                {confirmPassword.length > 0 && newPassword !== confirmPassword && (
-                                    <p className="text-xs text-rose-500 font-semibold flex items-center gap-1">
-                                        <AlertTriangle className="h-3 w-3" /> Passwords do not match
-                                    </p>
-                                )}
-                            </div>
-
-                            <AnimatePresence>
-                                {passwordAlert && <Alert state={passwordAlert} />}
-                            </AnimatePresence>
-
-                            <Button
-                                onClick={handleChangePassword}
-                                disabled={passwordPending}
-                                className="w-full rounded-xl bg-rose-500 hover:bg-rose-600 text-white font-black"
-                            >
-                                {passwordPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                                {passwordPending ? "Updating..." : "Update Password"}
-                            </Button>
-                        </div>
+                        </Section>
 
                         {/* Reset Password */}
-                        <div className="p-5 rounded-2xl border border-border/60 bg-card shadow-sm">
-                            <div className="flex items-center justify-between">
+                        <Section>
+                            <div className="flex flex-wrap items-center justify-between gap-3">
                                 <div className="space-y-0.5">
-                                    <p className="font-black text-sm flex items-center gap-2">
-                                        <KeyRound className="h-4 w-4 text-rose-500" /> Forgot Password?
+                                    <p className="flex items-center gap-2 text-sm font-semibold">
+                                        <KeyRound className="size-4 text-muted-foreground" /> Forgot your password?
                                     </p>
                                     <p className="text-xs text-muted-foreground">
-                                        Send a password reset link to <span className="font-semibold text-foreground">{user.email}</span>
+                                        Send a reset link to <span className="font-medium text-foreground">{user.email}</span>
                                     </p>
                                 </div>
                                 <button
                                     type="button"
                                     onClick={handleRequestPasswordReset}
                                     disabled={passwordPending}
-                                    className="flex items-center gap-1.5 text-xs font-bold text-rose-500 hover:text-rose-600 transition-colors disabled:opacity-50"
+                                    className="flex items-center gap-1 text-xs font-semibold text-rose-500 transition-colors hover:text-rose-600 disabled:opacity-50"
                                 >
                                     {passwordPending
-                                        ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                        : <>Send Link <ChevronRight className="h-3.5 w-3.5" /></>
+                                        ? <Loader2 className="size-3.5 animate-spin" />
+                                        : <>Send link <ChevronRight className="size-3.5" /></>
                                     }
                                 </button>
                             </div>
-                        </div>
+                        </Section>
                     </motion.div>
                 )}
 
@@ -540,51 +664,79 @@ export function UserSetting({ user }: { user: UserProps }) {
                         className="space-y-4"
                     >
                         {/* Account Info */}
-                        <div className="p-5 rounded-2xl border border-border/60 bg-card shadow-sm space-y-4">
-                            <p className="font-black text-sm flex items-center gap-2">
-                                <KeyRound className="h-4 w-4 text-rose-500" /> Account Details
-                            </p>
-                            <div className="space-y-3">
+                        <Section icon={KeyRound} title="Account details">
+                            <dl className="divide-y divide-border/50">
                                 {[
-                                    { label: "Full Name", value: user.name },
+                                    { label: "Full name", value: user.name },
                                     { label: "Email", value: user.email },
-                                    { label: "Email Status", value: user.emailVerified ? "Verified" : "Not Verified" },
+                                    { label: "Email status", value: user.emailVerified ? "Verified" : "Not verified" },
                                     { label: "WhatsApp", value: phoneState?.phoneDisplay ?? "—" },
                                 ].map(({ label, value }) => (
-                                    <div key={label} className="flex items-center justify-between py-2.5 border-b border-border/40 last:border-0">
-                                        <span className="text-xs font-bold text-muted-foreground uppercase tracking-wide">{label}</span>
-                                        <span className={`text-sm font-semibold ${label === "Email Status" && !user.emailVerified ? "text-amber-500" : label === "Email Status" ? "text-emerald-600" : ""}`}>
+                                    <div key={label} className="flex items-center justify-between gap-4 py-3 first:pt-0 last:pb-0">
+                                        <dt className="text-xs text-muted-foreground">{label}</dt>
+                                        <dd className={`truncate text-sm font-medium ${label !== "Email status"
+                                            ? ""
+                                            : user.emailVerified
+                                                ? "text-emerald-600 dark:text-emerald-400"
+                                                : "text-amber-500 dark:text-amber-400"
+                                            }`}>
                                             {value}
-                                        </span>
+                                        </dd>
                                     </div>
                                 ))}
+                            </dl>
+                        </Section>
+
+                        {/* Session */}
+                        <Section>
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                                <div className="space-y-0.5">
+                                    <p className="text-sm font-semibold">Sign out</p>
+                                    <p className="text-xs text-muted-foreground">End this session on this device.</p>
+                                </div>
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={signOut}
+                                    disabled={signingOut}
+                                    className="rounded-xl"
+                                >
+                                    {signingOut
+                                        ? <Loader2 className="mr-1.5 size-3.5 animate-spin" />
+                                        : <LogOut className="mr-1.5 size-3.5" />
+                                    }
+                                    Sign out
+                                </Button>
                             </div>
-                        </div>
+                        </Section>
 
                         {/* Danger Zone */}
-                        <div className="p-5 rounded-2xl border border-rose-200/60 bg-rose-50/40 shadow-sm space-y-4">
-                            <div>
-                                <p className="font-black text-sm text-rose-700 flex items-center gap-2">
-                                    <AlertTriangle className="h-4 w-4" /> Danger Zone
-                                </p>
-                                <p className="text-xs text-rose-500 mt-1">Irreversible actions. Proceed with caution.</p>
+                        <section className="rounded-2xl border border-rose-200/60 bg-rose-50/40 p-5 dark:border-rose-900/40 dark:bg-rose-950/20 md:p-6">
+                            <div className="mb-4 flex items-start gap-3">
+                                <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-rose-100 dark:bg-rose-950/60">
+                                    <AlertTriangle className="size-4 text-rose-600 dark:text-rose-400" />
+                                </span>
+                                <div className="space-y-0.5">
+                                    <h2 className="text-sm font-semibold text-rose-700 dark:text-rose-400">Danger zone</h2>
+                                    <p className="text-xs text-rose-500 dark:text-rose-500">Irreversible actions. Proceed with caution.</p>
+                                </div>
                             </div>
 
-                            <div className="flex items-center justify-between p-4 rounded-xl bg-background border border-rose-200/60">
+                            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-200/60 bg-background p-4 dark:border-rose-900/40">
                                 <div className="space-y-0.5">
-                                    <p className="text-sm font-bold">Delete Account</p>
+                                    <p className="text-sm font-semibold">Delete account</p>
                                     <p className="text-xs text-muted-foreground">Permanently delete your account and all associated data.</p>
                                 </div>
                                 <Button
                                     variant="outline"
                                     size="sm"
-                                    className="rounded-xl border-rose-300 text-rose-600 hover:bg-rose-50 hover:border-rose-400 font-bold"
+                                    className="rounded-xl border-rose-300 font-semibold text-rose-600 hover:border-rose-400 hover:bg-rose-50 dark:border-rose-900 dark:hover:bg-rose-950/40"
                                 >
-                                    <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                                    <Trash2 className="mr-1.5 size-3.5" />
                                     Delete
                                 </Button>
                             </div>
-                        </div>
+                        </section>
                     </motion.div>
                 )}
             </AnimatePresence>

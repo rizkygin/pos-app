@@ -300,6 +300,9 @@ export async function ownerRoutes(app: FastifyInstance) {
         .select({
           status: ordersTable.status,
           note: ordersTable.note,
+          discountAmount: ordersTable.discount_amount,
+          deliveryFee: ordersTable.delivery_fee,
+          createdAt: ordersTable.createdAt,
           customerName: usersTable.name,
           customerEmail: usersTable.email,
           customerPhone: usersTable.phone,
@@ -335,7 +338,24 @@ export async function ownerRoutes(app: FastifyInstance) {
 
       return {
         success: true,
-        outlet: { id: String(outlet.id), name: outlet.name },
+        // Address/phone/avatar are here for the reprint slip, which rebuilds the
+        // same receipt the cashier printed at checkout and needs the full header.
+        outlet: {
+          id: String(outlet.id),
+          name: outlet.name,
+          address: outlet.address,
+          phone: outlet.phone,
+          avatar: outlet.avatar,
+        },
+        // Whoever is reprinting, not whoever originally rang it up: the order
+        // rows don't record a cashier, and the slip's "Kasir" line is only ever
+        // read as "who handed me this paper".
+        cashierName: session.user.name ?? "",
+        order: {
+          createdAt: order.createdAt,
+          discountAmount: order.discountAmount,
+          deliveryFee: order.deliveryFee,
+        },
         items: rows.map((i) => ({
           ...i,
           detailId: String(i.detailId),

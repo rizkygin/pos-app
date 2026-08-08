@@ -974,7 +974,16 @@ export function SalesClient() {
                           >
                             <Minus className="size-3.5" />
                           </button>
-                          <span className="min-w-8 text-center text-sm font-semibold tabular-nums">{i.quantity}</span>
+                          <Input
+                            inputMode="numeric"
+                            value={formatNumberInput(String(i.quantity))}
+                            onChange={(e) => {
+                              const raw = parseNumberInput(e.target.value);
+                              if (raw === "") return;
+                              setQty(i.product.id, Number(raw));
+                            }}
+                            className="h-8 min-w-8 flex-1 border-0 text-center text-sm font-semibold tabular-nums shadow-none focus-visible:ring-0"
+                          />
                           <button
                             className="grid size-8 place-items-center rounded-r-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                             onClick={() => setQty(i.product.id, i.quantity + 1)}

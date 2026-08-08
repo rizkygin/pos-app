@@ -12,6 +12,7 @@ import {
   numeric,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import { timestamps } from './columns.helper';
 
 export const VEHICLE_TYPE = pgEnum('vechile_type', ['car', 'motorcycle']);
@@ -24,6 +25,19 @@ export const COURIER_VERIFICATION_STATUS = pgEnum('courier_verification_status',
   'pending',
   'approved',
   'rejected',
+]);
+
+// A dispatch offer's life. 'superseded' is separate from 'expired' on purpose:
+// expired means a courier was given the order and let the clock run out (which
+// belongs in their record), superseded means dispatch moved on for a reason
+// that isn't their fault — the order was cancelled, or somebody else got there
+// first through the open pool.
+export const OFFER_STATE = pgEnum('offer_state', [
+  'offered',
+  'accepted',
+  'declined',
+  'expired',
+  'superseded',
 ]);
 
 // The exact set an applicant must produce. Fixed slots, not a free-form gallery:
@@ -180,15 +194,32 @@ export const adminsTable = pgTable('admins', {
   ...timestamps,
 });
 
-export const customersTable = pgTable('customers', {
-  id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
-  user_id: text('user_id')
-    .notNull()
-    .references(() => usersTable.id),
-  ratings: numeric('ratings', { precision: 3, scale: 2 }).default('5'),
-  review_count: integer('review_count').default(0).notNull(),
-  ...timestamps,
-});
+export const customersTable = pgTable(
+  'customers',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    user_id: text('user_id')
+      .notNull()
+      .references(() => usersTable.id),
+    ratings: numeric('ratings', { precision: 3, scale: 2 }).default('5'),
+    review_count: integer('review_count').default(0).notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    // One LIVE customer row per account, enforced in the database rather than
+    // only in the handler. /api/register-role checks first, but that is
+    // check-then-insert: two submits landing together can both pass the check.
+    // The form's disabled button and the endpoint's guard are the friendly
+    // errors; this is the one that cannot be raced.
+    //
+    // Partial, because removal is soft here. A full unique index would outlaw
+    // the perfectly normal history of "registered, removed by an admin,
+    // registered again" — real rows in the dev database look exactly like that.
+    uniqueIndex('customers_user_id_uq')
+      .on(table.user_id)
+      .where(sql`deleted_at IS NULL`),
+  ],
+);
 
 /**
  * The area Ulun Pesan's couriers actually serve, as a centre + radius.
@@ -217,7 +248,9 @@ export const serviceAreaTable = pgTable('service_area', {
   ...timestamps,
 });
 
-export const couriersTable = pgTable('couriers', {
+export const couriersTable = pgTable(
+  'couriers',
+  {
   id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
   user_id: text('user_id')
     .notNull()
@@ -255,7 +288,17 @@ export const couriersTable = pgTable('couriers', {
   verified_at: timestamp('verified_at', { withTimezone: true }),
   verified_by: text('verified_by').references((): AnyPgColumn => usersTable.id),
   ...timestamps,
-});
+},
+  (table) => [
+    // Same reasoning, same partial condition as customers_user_id_uq. The
+    // register-role guard applies the identical "live rows only" rule: the two
+    // must never disagree, or a submit the handler waves through dies on a
+    // constraint violation instead of getting a readable 409.
+    uniqueIndex('couriers_user_id_uq')
+      .on(table.user_id)
+      .where(sql`deleted_at IS NULL`),
+  ],
+);
 
 /**
  * The photos an applicant submits, one row per required slot.
@@ -382,6 +425,11 @@ export const ordersTable = pgTable(
     note: json('note'),
     rejected_by: REJECTED_BY('rejected_by'),
     rejected_reason: varchar('rejected_reason', { length: 255 }),
+    // Set when sequential dispatch has run out of couriers to offer this order
+    // to. From that moment it falls back to the old free-for-all lobby, visible
+    // to everyone who is online — a stuck order helps nobody, so exhausting the
+    // queue must degrade to "anyone can take it", never to silence.
+    offer_pool_opened_at: timestamp('offer_pool_opened_at', { withTimezone: true }),
     ...timestamps,
   },
   (table) => [
@@ -391,6 +439,53 @@ export const ordersTable = pgTable(
     index('outlet_id_idx').on(table.outlet_id),
     index('orders_outlet_status_idx').on(table.outlet_id, table.status),
     index('orders_courier_status_idx').on(table.courier_id, table.status),
+  ],
+);
+
+/**
+ * One order offered to one courier, with a clock on it.
+ *
+ * This replaces first-come-first-served. Under the old rule every online
+ * courier saw every confirmed order and the fastest tap won, which meant the
+ * only way to earn was to sit staring at the lobby — the exact behaviour that
+ * makes couriers keep the app open in traffic.
+ *
+ * Offers are sequential: at most one live offer per order, enforced by the
+ * partial unique index below. When it expires or is declined the next courier
+ * gets it, and when the queue is exhausted the order falls back to the open
+ * pool (orders.offer_pool_opened_at).
+ *
+ * Rows are kept after they resolve. Who was offered what, and who let the clock
+ * run out, is the record behind any later argument about fairness.
+ */
+export const orderOffersTable = pgTable(
+  'order_offers',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    order_id: text('order_id')
+      .notNull()
+      .references(() => ordersTable.id, { onDelete: 'cascade' }),
+    courier_id: integer('courier_id')
+      .notNull()
+      .references(() => couriersTable.id, { onDelete: 'cascade' }),
+    state: OFFER_STATE('state').notNull().default('offered'),
+    // Which pass through the courier list this was. A second round happens only
+    // after everyone has been asked once, so it doubles as "how hard is this
+    // order to place" — useful when an outlet keeps getting passed over.
+    round: integer('round').notNull().default(1),
+    offered_at: timestamp('offered_at', { withTimezone: true }).defaultNow().notNull(),
+    expires_at: timestamp('expires_at', { withTimezone: true }).notNull(),
+    responded_at: timestamp('responded_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    // The core invariant: an order can have only one offer in flight. Two live
+    // offers would recreate the race this whole table exists to remove.
+    uniqueIndex('order_offers_one_live_per_order')
+      .on(table.order_id)
+      .where(sql`${table.state} = 'offered'`),
+    index('order_offers_courier_state_idx').on(table.courier_id, table.state),
+    index('order_offers_expiry_idx').on(table.state, table.expires_at),
   ],
 );
 
@@ -1210,6 +1305,49 @@ export const pushSubscriptionsTable = pgTable(
       .notNull(),
   },
   (t) => [index('push_subscriptions_user_idx').on(t.user_id)],
+);
+
+/**
+ * One install of the courier app.
+ *
+ * Two credentials live here and they do different jobs. `fcm_token` is how the
+ * server reaches the phone. `device_token_hash` is how the phone proves who it
+ * is on the few endpoints the native side calls WITHOUT the WebView — the
+ * location service outlives the WebView by design, so it cannot borrow that
+ * component's session cookie.
+ *
+ * The device token is stored hashed, never in the clear. It is a bearer
+ * credential sitting in app storage on a phone that gets lost, so the database
+ * should not be a second place it can leak from; the plaintext is returned once
+ * at registration and never again.
+ */
+export const courierDevicesTable = pgTable(
+  'courier_devices',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    courier_id: integer('courier_id')
+      .notNull()
+      .references(() => couriersTable.id, { onDelete: 'cascade' }),
+    // Rotated by FCM whenever it feels like it; the app re-registers on
+    // onNewToken, which moves this row rather than creating a second one.
+    fcm_token: text('fcm_token').notNull(),
+    device_token_hash: text('device_token_hash').notNull(),
+    platform: varchar('platform', { length: 20 }).notNull().default('android'),
+    app_version: varchar('app_version', { length: 30 }),
+    last_seen_at: timestamp('last_seen_at', { withTimezone: true }),
+    // Set on logout. Kept rather than deleted so "this phone was signed out at
+    // 14:02" is answerable when a courier says they never got an offer.
+    revoked_at: timestamp('revoked_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    // A physical phone belongs to one courier. If a device is handed over, the
+    // new courier's registration MOVES the row instead of leaving the previous
+    // owner subscribed to offers they can no longer see.
+    uniqueIndex('courier_devices_fcm_token_uq').on(table.fcm_token),
+    uniqueIndex('courier_devices_token_hash_uq').on(table.device_token_hash),
+    index('courier_devices_courier_idx').on(table.courier_id),
+  ],
 );
 
 // Owner-defined menu sections for the public /menu/[outlet_id] page, e.g.

@@ -10,6 +10,7 @@ import MessageChatComponent from "@/components/message/message-components"
 import { AppContent } from '@/components/app-content';
 import { AppShell } from '@/components/app-shell';
 import { AppSidebarHeader } from "@/components/app-sidebar-header"
+import { ThemeToggle } from "@/components/theme-toggle"
 import { SubscriptionWarningBanner } from "@/components/subscription-warning-banner"
 import { IncomingOrderAlarm } from "@/components/dashboard/incoming-order-alarm"
 import { PushNotificationNudge } from "@/components/dashboard/push-notification-nudge"
@@ -68,7 +69,13 @@ const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
                         "h-svh overflow-x-hidden overflow-y-auto",
                         // Room for the fixed bottom nav, so the last card of any
                         // page clears it instead of hiding behind it.
-                        isSettledCustomer && "max-md:portrait:pb-20",
+                        //
+                        // Must match the nav's real height, which is h-16 PLUS
+                        // the safe-area inset it pads itself with — on a phone
+                        // with a gesture bar that is ~98px, and a flat pb-20
+                        // (80px) left the last stripe of every page underneath.
+                        isSettledCustomer &&
+                            "max-md:portrait:pb-[calc(4rem+env(safe-area-inset-bottom))]",
                     )}
                 >
                     <header className="animated-gradient header-shine sticky top-0 z-30 flex h-12 shrink-0 items-center gap-2 overflow-hidden border-b border-white/10 px-3 shadow-sm md:h-10">
@@ -83,6 +90,10 @@ const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
                             <span className="inline-block size-1.5 animate-pulse rounded-full bg-emerald-300 shadow-[0_0_8px_rgba(110,231,183,0.9)]" />
                             {isAdmin ? 'Hello Admin' : isOwner ? 'Dashboard' : isCourier ? 'Kurir' : isEmployee ? 'Karyawan' : 'Dashboard'}
                         </span>
+                        {/* Sits on the gradient bar, so it borrows the trigger's
+                            light-on-color treatment rather than the default
+                            foreground token. */}
+                        <ThemeToggle className="relative z-10 ml-auto size-11 text-amber-50 hover:bg-white/15 hover:text-white md:size-7" />
                     </header>
 
                     {/* Subscription reminder for owners on every dashboard page.

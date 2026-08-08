@@ -2,6 +2,10 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
+/* Drive `dark:` off an explicit `.dark` class instead of Tailwind's default
+   prefers-color-scheme. next-themes owns that class, so the OS can suggest a
+   theme but the user always gets the final say via the toggle. */
+@custom-variant dark (&:where(.dark, .dark *));
 
 :root {
   --background: oklch(1 0 0);
@@ -36,6 +40,40 @@
   --sidebar-accent-foreground: oklch(0.145 0 0);
   --sidebar-border: oklch(0.9 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 18%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.32 0 0);
+  --chart-2: oklch(0.44 0 0);
+  --chart-3: oklch(0.56 0 0);
+  --chart-4: oklch(0.68 0 0);
+  --chart-5: oklch(0.8 0 0);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.922 0 0);
+  --sidebar-primary-foreground: oklch(0.205 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 12%);
+  --sidebar-ring: oklch(0.556 0 0);
 }
 
 @theme inline {
@@ -93,6 +131,15 @@ body {
   * {
     @apply border-border outline-ring/50;
   }
+  /* Tells the browser to render native chrome — scrollbars, date/time pickers,
+     autofill, form controls — in the matching scheme. Without this they stay
+     stubbornly white on a dark page. */
+  :root {
+    color-scheme: light;
+  }
+  .dark {
+    color-scheme: dark;
+  }
   body {
     @apply bg-background text-foreground;
   }
@@ -123,6 +170,11 @@ body {
 .promo-tour-popover .driver-popover-prev-btn {
   background-color: #f1f5f9;
   color: #0f172a;
+}
+
+.dark .promo-tour-popover .driver-popover-prev-btn {
+  background-color: #1e293b;
+  color: #f1f5f9;
 }
 /* Animated panning gradient — used on the dashboard header so it's not static. */
 @keyframes gradient-pan {

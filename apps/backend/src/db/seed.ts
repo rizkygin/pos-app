@@ -16,6 +16,7 @@ import {
   scheduleProductAdsTable,
 } from './schema';
 import { CATEGORY_IN, CATEGORY_OUT } from '../lib/cashflow-categories';
+import { DEFAULT_COORDS } from '../lib/utils/coords';
 import { email } from 'zod';
 
 const main = async () => {
@@ -82,8 +83,11 @@ const main = async () => {
           email: res.user.email,
           address: 'Jakarta, Indonesia',
           user_id: res.user.id,
-          lat: '-3.3199',
-          lon: '114.5907',
+          // Pangkalan Bun: inside the delivery area AND inside the OSRM
+          // extract's bbox, so a freshly seeded database can actually exercise
+          // road distance. See DEFAULT_COORDS in lib/utils/coords.
+          lat: String(DEFAULT_COORDS.lat),
+          lon: String(DEFAULT_COORDS.lon),
         });
         await addProductstoOutlets(res.user.id);
       } else if (user.name === 'courier_test') {

@@ -19,6 +19,15 @@ RUN rm -f package-lock.json && npm install
 # Copy the rest of the source
 COPY . .
 
+# Which world this image is built for. NEXT_PUBLIC_* is inlined into the client
+# bundle, so this has to be known HERE — a Docker build sees none of Railway's
+# runtime variables, and without it every deployment silently bakes the local
+# development URLs (http://localhost:4000) into a production bundle.
+ARG APP_ENV
+ARG RAILWAY_ENVIRONMENT_NAME
+ENV APP_ENV=${APP_ENV}
+ENV RAILWAY_ENVIRONMENT_NAME=${RAILWAY_ENVIRONMENT_NAME}
+
 ARG REDIS_URL
 ARG BETTER_AUTH_SECRET
 ARG BETTER_AUTH_URL

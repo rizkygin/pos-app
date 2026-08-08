@@ -3,6 +3,7 @@ import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { RegisterServiceWorker } from "@/components/register-service-worker";
+import { ThemeProvider } from "@/components/theme-provider";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -63,7 +64,10 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0a0a0a",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
+  ],
 };
 
 export default function RootLayout({
@@ -91,6 +95,8 @@ export default function RootLayout({
                   name: "Ulun Pesan",
                   url: "https://ulunpesan.com",
                   logo: "https://ulunpesan.com/icons/icon-512x512.png",
+                  // Claims the Instagram account as an official profile of this org.
+                  sameAs: ["https://www.instagram.com/ulunpesan"],
                 },
                 {
                   "@type": "WebSite",
@@ -102,8 +108,10 @@ export default function RootLayout({
             }),
           }}
         />
-        <RegisterServiceWorker />
-        {children}
+        <ThemeProvider>
+          <RegisterServiceWorker />
+          {children}
+        </ThemeProvider>
       </body>
     </html>
   );

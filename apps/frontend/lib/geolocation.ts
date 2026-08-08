@@ -7,6 +7,16 @@
 // gave up, the location forms were left holding empty coordinates and saved
 // them anyway; see lib/coords.ts for the damage that caused.
 
+/**
+ * Where a map opens when it has nothing valid to show.
+ *
+ * Pangkalan Bun — the town these outlets serve. It was Banjarmasin (-3.3199,
+ * 114.5907) 350 km east, which meant an owner whose browser refused to locate
+ * them started their shop's location pin in a different city. Mirrors
+ * DEFAULT_COORDS in the backend's lib/utils/coords.
+ */
+export const FALLBACK_COORDS = { lat: -2.6847, lon: 111.6236 } as const;
+
 const isMobile = () =>
   typeof navigator !== 'undefined' &&
   /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);

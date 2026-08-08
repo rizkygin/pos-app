@@ -32,12 +32,15 @@ import {
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 import { getOutletByUserId } from "../lib/outlet-id";
+import { notInternalCategory } from "../lib/outlet-features";
 import { getOutletAccess, hasPermission, parseActiveOutletId } from "../lib/outlet-access";
 import { getUTCRangeFromLocalDate, getUTCTime } from "../lib/timezone";
 import { getCurrentAdSlot } from "../lib/utils/ad-schedule";
 import { getCourierRatingInfo, MAX_SHIFT_HOURS, staleShiftCutoff } from "../lib/utils/courier-availability";
 import { formatCurrency } from "../lib/utils/format";
 import { haversineKm } from "../lib/utils/geo";
+import { normalizeIndonesianPhone } from "../lib/utils/phone";
+import { parseCoordPair } from "../lib/utils/coords";
 
 // Role-specific dashboard payloads, composed server-side (was direct DB access
 // in the frontend dashboard/page.tsx). Each endpoint returns exactly the props
@@ -309,7 +312,34 @@ export async function dashboardRoutes(app: FastifyInstance) {
     const lastWeekEarnings = lastWeekStats?.total ?? 0;
     const thisWeekOrders = thisWeekStats?.orders ?? 0;
 
+    // Per-day earnings for the sparkline on the courier's weekly card. Bucketed
+    // in JS rather than with date_trunc: the week boundaries above come from
+    // getUTCTime()'s shifted clock, and grouping raw created_at in Postgres
+    // would slice the days on a different edge than the totals they sit under.
+    const weekOrders = await db
+      .select({ createdAt: ordersTable.createdAt, fee: ordersTable.delivery_fee })
+      .from(ordersTable)
+      .where(
+        and(
+          eq(ordersTable.courier_id, courier.id),
+          eq(ordersTable.status, "delivered"),
+          gte(ordersTable.createdAt, thisWeekStart),
+        ),
+      );
+
+    const DAY_LABELS = ["Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Min"];
+    const dailyTotals = new Array(7).fill(0);
+    for (const order of weekOrders) {
+      if (!order.createdAt) continue;
+      const dayIndex = Math.floor(
+        (order.createdAt.getTime() - thisWeekStart.getTime()) / 86_400_000,
+      );
+      if (dayIndex >= 0 && dayIndex < 7) dailyTotals[dayIndex] += Number(order.fee ?? 0);
+    }
+    const daily = DAY_LABELS.map((label, i) => ({ label, amount: dailyTotals[i] }));
+
     const weeklyPerformance = {
+      daily,
       totalEarnings: formatCurrency(thisWeekEarnings),
       percentageChange:
         lastWeekEarnings > 0
@@ -325,8 +355,11 @@ export async function dashboardRoutes(app: FastifyInstance) {
       .select({
         id: ordersTable.id,
         name_customer: usersTable.name,
+        customer_phone: usersTable.phone,
         pickup: outletsTable.name,
         dropoff: locationsTable.address,
+        dropoffLat: locationsTable.lat,
+        dropoffLon: locationsTable.lon,
         delivery_fee: ordersTable.delivery_fee,
         status: ordersTable.status,
       })
@@ -360,8 +393,17 @@ export async function dashboardRoutes(app: FastifyInstance) {
       ? {
           id: activeOrder.id,
           name_customer: activeOrder.name_customer,
+          // Canonical 628… so the courier UI can drop it straight into a wa.me
+          // link. Null when the stored number is unusable — the UI hides the
+          // contact buttons rather than opening a chat with a bad number.
+          customer_phone: normalizeIndonesianPhone(activeOrder.customer_phone),
           pickup: activeOrder.pickup,
           dropoff: activeOrder.dropoff ?? "-",
+          // Drop-off point for the courier's "Lihat Peta" link. Null when the
+          // stored pair is junk ('' / 'NaN' both fit the varchar column), so the
+          // UI can fall back to searching the address text instead of routing
+          // the rider to 0,0.
+          dropoffCoords: parseCoordPair(activeOrder.dropoffLat, activeOrder.dropoffLon),
           items: currentPickUpItems,
           amount: formatCurrency(parseFloat(activeOrder.delivery_fee ?? "0")),
           status: activeOrder.status,
@@ -471,6 +513,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
           eq(productsTable.is_recommended, true),
           eq(productsTable.isAvailable, true),
           eq(productsTable.is_for_sale, true),
+          notInternalCategory(),
           isNull(productsTable.deletedAt),
           eq(outletsTable.is_open, true),
         ),

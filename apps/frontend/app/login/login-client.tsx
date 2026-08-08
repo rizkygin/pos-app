@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Eye, EyeOff } from "lucide-react";
 import { authClient } from "@/lib/auth-client";
 import { AboutUlunPesan } from "@/components/about-ulun-pesan";
+import { notifyLogin } from "@/lib/native-bridge";
 
 export default function LoginPage() {
   const [isLogin, setIsLogin] = useState(true);
@@ -29,7 +30,11 @@ export default function LoginPage() {
         });
 
         if (error) throw new Error(error.message);
-        // Handle successful login
+        // Inside the courier app this is the one moment a session cookie is
+        // guaranteed fresh — tell the shell to mint its device token now,
+        // rather than relying on it to notice on the next page load.
+        // No-op in a plain browser; see lib/native-bridge.
+        notifyLogin();
       } else {
         const { data, error } = await authClient.signUp.email({
           email,

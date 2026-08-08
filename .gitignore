@@ -50,3 +50,6 @@ apps/backend/uploads/
 # keeps its 400MB+ Electron dist/ out of the `railway up` upload archive (the
 # root Dockerfile does `COPY . .`, so anything uploaded lands in the image).
 apps/desktop-cashier/
+
+# Firebase config for the courier app — belongs in its own repo, never this one
+google-services*.json

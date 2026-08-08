@@ -291,7 +291,12 @@ export function OrderClient({
   const wishlistedProducts = products?.filter((p) => wishlistStore.has(p.id));
 
   return (
-    <div className="min-h-screen bg-background pb-32">
+    // pb-32 clears the floating basket bar on desktop. On a phone in portrait
+    // there are TWO fixed overlays stacked at the bottom — the customer bottom
+    // nav (h-16 + safe area) and the basket bar lifted to bottom-24, whose top
+    // edge lands ~144px up — so the page has to reserve more than the bar alone
+    // needs, or the last row of products sits under both.
+    <div className="min-h-screen bg-background pb-32 max-md:portrait:pb-44">
       {/* ── Back link ────────────────────────────────────────────── */}
       <div className="px-5 pt-4">
         <Link
@@ -541,7 +546,7 @@ export function OrderClient({
         </div>
 
         {/* ── Products Grid ─────────────────────────────────────── */}
-        <section className="space-y-4">
+        <section className="space-y-4 pb-40">
           <div className="flex items-center justify-between">
             <h2 className="font-black text-lg capitalize">
               {isService
@@ -596,8 +601,12 @@ export function OrderClient({
               </AnimatePresence>
             </motion.div>
           )}
-          <div className='min-h-52 flex justify-center'>
-              Kedida yang pian cari? 
+          {/* Footer prompt. The 13rem min-height it used to carry was doing the
+              job of bottom padding — badly, since it left a large blank gap on
+              desktop while still not clearing the phone's two overlays. The
+              clearance now lives on the page root where it can be per-viewport. */}
+          <div className="flex justify-center pt-8 pb-2 text-sm text-muted-foreground">
+            Kedida yang pian cari?
           </div>
         </section>
       </div>
@@ -615,7 +624,7 @@ export function OrderClient({
             <motion.button
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
-              className="relative flex items-center gap-2 px-5 py-3.5 rounded-full bg-white border border-border shadow-xl shadow-black/10 font-bold text-sm hover:bg-rose-50 transition-colors"
+              className="relative flex items-center gap-2 px-5 py-3.5 rounded-full bg-card text-card-foreground border border-border shadow-xl shadow-black/10 font-bold text-sm hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
             >
               <Heart className="h-5 w-5 text-rose-500" />
               <span>Wishlist</span>
