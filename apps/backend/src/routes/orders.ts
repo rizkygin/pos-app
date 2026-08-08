@@ -101,6 +101,7 @@ async function materialsFeeCap(orderId: string): Promise<number> {
   }, 0);
 }
 
+//SEARCH:: customer cancel order
 // Grace window before a customer can cancel their own order — gives the owner
 // a few minutes to start acting on it first. Mirrors the lock in
 // active-order-animation.tsx (CANCEL_LOCK_SECONDS).
@@ -121,13 +122,13 @@ const CUSTOMER_CANCEL_LOCK_MS = 5 * 60 * 1000;
 // can be charged is a customer who can be served, and vice versa. Mirrored by
 // MAX_DELIVERY_KM in routes/public.ts, which hides out-of-range outlets from
 // browse; this is the enforcement, that is the courtesy.
-const MAX_DELIVERY_KM = 50;
+const MAX_DELIVERY_KM = 30;
 
 function deliveryFeeFromDistance(km: number): number {
   const MAX_KM = MAX_DELIVERY_KM;
-  const BASE_FEE = 10_000; // tarif dasar untuk jarak <= 5 km
-  const BASE_KM = 5; // jarak yang sudah tercover base fee
-  const RATE_PER_KM = 1_800; // tarif tambahan per km setelah base
+  const BASE_FEE = 9_000; // tarif dasar untuk jarak <= 1 km
+  const BASE_KM = 1; // jarak yang sudah tercover base fee
+  const RATE_PER_KM = 2_200; // tarif tambahan per km setelah base
   const ROUNDING = 500; // dibulatkan ke atas ke kelipatan ini
 
   // Finite check, not just `< 0`: NaN fails every comparison below, so it would

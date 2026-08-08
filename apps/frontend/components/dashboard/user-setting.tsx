@@ -278,7 +278,9 @@ export function UserSetting({ user }: { user: UserProps }) {
         });
     }
 
-    const initials = user.name
+    const [imageFailed, setImageFailed] = useState(false);
+
+    const initials = (user.name ?? "")
         .split(" ")
         .map((part) => part[0])
         .filter(Boolean)
@@ -292,15 +294,20 @@ export function UserSetting({ user }: { user: UserProps }) {
         <div className="mx-auto max-w-3xl space-y-6 px-4 pb-16 pt-6 md:px-6">
             {/* Identity header — who you're editing, before the controls. */}
             <header className="flex flex-col gap-4 rounded-2xl border bg-card p-5 sm:flex-row sm:items-center md:p-6">
-                {user.image ? (
+                {/* Initials avatar matches the sidebar's (same gradient, same
+                    two-letter rule) so the same person reads as the same person
+                    in both places. Also covers a set-but-broken image URL, which
+                    otherwise renders as the browser's broken-image icon. */}
+                {user.image && !imageFailed ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
                         src={user.image}
                         alt=""
+                        onError={() => setImageFailed(true)}
                         className="size-14 shrink-0 rounded-2xl object-cover"
                     />
                 ) : (
-                    <span className="flex size-14 shrink-0 items-center justify-center rounded-2xl bg-rose-500 text-lg font-semibold text-white">
+                    <span className="flex size-14 shrink-0 items-center justify-center rounded-2xl bg-linear-to-br from-indigo-500 to-violet-600 text-lg font-semibold text-white">
                         {initials}
                     </span>
                 )}
