@@ -134,7 +134,7 @@ function WeeklyEarningsChart({
   const peak = Math.max(...daily.map((d) => d.amount), 0);
 
   return (
-    <div className="mb-8 flex h-24 items-stretch gap-1.5">
+    <div className="mb-6 flex h-24 items-stretch gap-1 sm:mb-8 sm:gap-1.5">
       {daily.map((day, i) => {
         // Floored so a day with earnings always shows something; a 1px sliver
         // next to a big day would otherwise be indistinguishable from zero.
@@ -405,7 +405,9 @@ export const CourierDashboard = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        {/* Wraps: the badge and the toggle together just clear a 360px phone,
+            and nothing wider is guaranteed. */}
+        <div className="flex flex-wrap items-center gap-3">
           {/* Status badge */}
           <motion.div
             animate={
@@ -555,7 +557,7 @@ export const CourierDashboard = ({
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-400">
             <AlertTriangle className="h-4 w-4" />
           </div>
-          <div>
+          <div className="min-w-0">
             <p className="text-sm font-bold text-amber-700 dark:text-amber-400">
               Kamu sedang tidak menjadi prioritas
             </p>
@@ -574,24 +576,29 @@ export const CourierDashboard = ({
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.06 }}
-            className="rounded-2xl border bg-card/50 p-4 backdrop-blur-sm transition-shadow hover:shadow-md"
+            className="min-w-0 rounded-2xl border bg-card/50 p-4 backdrop-blur-sm transition-shadow hover:shadow-md"
           >
             <div className="mb-3 flex items-center gap-2.5">
               <div className={`rounded-lg p-2 ${stat.bg} ${stat.color}`}>
                 <stat.icon className="h-4 w-4" />
               </div>
-              <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">
+              <span className="min-w-0 text-[10px] font-black uppercase tracking-widest text-muted-foreground">
                 {stat.label}
               </span>
             </div>
-            <p className="text-2xl font-black tabular-nums">{stat.value}</p>
+            {/* Half-width tile on a phone: a day's earnings in rupiah is the
+                longest value here and must be allowed to shrink, not push. */}
+            <p className="truncate text-xl font-black tabular-nums sm:text-2xl">{stat.value}</p>
           </motion.div>
         ))}
       </div>
 
-      <div className="grid items-start gap-5 lg:grid-cols-3">
+      {/* min-w-0 on both tracks, not just the grid: a grid item's default
+          min-width is `auto`, so any unshrinkable content inside widens its
+          track past the viewport and scrolls the whole page sideways. */}
+      <div className="grid w-full items-start gap-5 lg:grid-cols-3">
         {/* Active Delivery Section */}
-        <div className="space-y-5 lg:col-span-2">
+        <div className="min-w-0 space-y-5 lg:col-span-2">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-black uppercase tracking-widest text-muted-foreground">
               Pengantaran Aktif
@@ -605,16 +612,20 @@ export const CourierDashboard = ({
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
-                className="group relative overflow-hidden rounded-2xl border border-blue-100/60 bg-linear-to-br from-blue-600/5 to-transparent p-5 shadow-sm sm:p-6 dark:border-blue-900/40"
+                className="group relative overflow-hidden rounded-2xl border border-blue-100/60 bg-linear-to-br from-blue-600/5 to-transparent p-4 shadow-sm sm:p-6 dark:border-blue-900/40"
               >
-                <div className="absolute top-0 right-0 p-6 opacity-[0.07] transition-opacity group-hover:opacity-15">
+                {/* Decorative only, and it sits under the header text — hidden on
+                    phones where there is no spare width for it to sit in. */}
+                <div className="absolute top-0 right-0 hidden p-6 opacity-[0.07] transition-opacity group-hover:opacity-15 sm:block">
                   <Bike className="h-28 w-28 -rotate-12" />
                 </div>
 
-                <div className="relative z-10 space-y-6">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
+                <div className="relative z-10 space-y-5 sm:space-y-6">
+                  {/* Stacked on phones: side by side, the customer name and the
+                      fee each got half a narrow screen and both wrapped badly. */}
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="px-3 py-1 rounded-full bg-blue-600 text-white text-[10px] font-black uppercase tracking-tighter">
                           Pesanan Aktif
                         </span>
@@ -622,44 +633,46 @@ export const CourierDashboard = ({
                           #{currentPickUp.id.slice(-6).toUpperCase()}
                         </span>
                       </div>
-                      <h3 className="truncate text-2xl font-black">
+                      <h3 className="truncate text-xl font-black sm:text-2xl">
                         {currentPickUp.name_customer}
                       </h3>
                     </div>
-                    <div className="shrink-0 text-right">
+                    <div className="flex shrink-0 items-baseline justify-between gap-2 sm:block sm:text-right">
                       <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">
                         Ongkos Kirim
                       </p>
-                      <p className="text-2xl font-black text-emerald-600">
+                      <p className="text-xl font-black text-emerald-600 sm:text-2xl">
                         {currentPickUp.amount}
                       </p>
                     </div>
                   </div>
 
-                  <div className="grid gap-6 border-t pt-5 md:grid-cols-2">
+                  <div className="grid gap-5 border-t pt-5 md:grid-cols-2 md:gap-6">
                     {/* Timeline. Each stop owns its own marker row, and the
                         connector stretches to whatever that row's height turns
                         out to be — the old fixed-height rail drifted out of
                         alignment as soon as a stop grew an extra line. */}
                     <div>
-                      <div className="flex gap-4">
+                      <div className="flex gap-3 sm:gap-4">
                         <div className="flex flex-col items-center">
                           <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-blue-600">
                             <MapPin className="h-3 w-3 text-white" />
                           </div>
                           <div className="w-0.5 flex-1 bg-linear-to-b from-blue-600 to-emerald-600" />
                         </div>
+                        {/* Two lines on phones: one line of a narrow column cuts
+                            most Banjar addresses off before the street name. */}
                         <div className="min-w-0 flex-1 pb-5">
                           <p className="text-[10px] font-black leading-6 text-muted-foreground uppercase tracking-widest">
                             Pengambilan
                           </p>
-                          <p className="text-sm font-bold line-clamp-1">
+                          <p className="text-sm font-bold line-clamp-2 wrap-break-word md:line-clamp-1">
                             {currentPickUp.pickup}
                           </p>
                         </div>
                       </div>
 
-                      <div className="flex gap-4">
+                      <div className="flex gap-3 sm:gap-4">
                         <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-600">
                           <Navigation className="h-3 w-3 text-white" />
                         </div>
@@ -667,7 +680,7 @@ export const CourierDashboard = ({
                           <p className="text-[10px] font-black leading-6 text-muted-foreground uppercase tracking-widest">
                             Pengiriman ke
                           </p>
-                          <p className="text-sm font-bold line-clamp-1">
+                          <p className="text-sm font-bold line-clamp-2 wrap-break-word md:line-clamp-1">
                             {currentPickUp.dropoff}
                           </p>
                           <a
@@ -677,7 +690,7 @@ export const CourierDashboard = ({
                             )}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="mt-1.5 inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-bold text-blue-600 transition-colors hover:bg-blue-100 dark:border-blue-900/50 dark:bg-blue-950/40"
+                            className="mt-2 inline-flex min-h-9 items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-4 py-1.5 text-xs font-bold text-blue-600 transition-colors hover:bg-blue-100 dark:border-blue-900/50 dark:bg-blue-950/40"
                           >
                             <MapPin className="h-3.5 w-3.5 shrink-0" />
                             Lihat Peta
@@ -693,9 +706,12 @@ export const CourierDashboard = ({
                         Sudah sampai? Hubungi customer:
                       </p>
                       {/* Hidden when the customer has no usable number: a
-                          wa.me link built from a bad one opens a dead chat. */}
+                          wa.me link built from a bad one opens a dead chat.
+                          Stacked below sm: side by side, both labels wrapped or
+                          clipped on a 360px phone, which is the width most
+                          couriers actually hold this screen at. */}
                       {currentPickUp.customer_phone && (
-                        <div className="flex gap-2">
+                        <div className="flex flex-col gap-2 sm:flex-row">
                           <Button
                             asChild
                             className="flex-1 rounded-xl h-12 font-bold bg-[#25D366] text-white hover:bg-[#1DA851] shadow-lg shadow-[#25D366]/20"
@@ -744,7 +760,7 @@ export const CourierDashboard = ({
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
-                className="relative flex flex-col items-center justify-center space-y-4 overflow-hidden rounded-2xl border border-blue-100/60 bg-linear-to-br from-blue-600/5 to-indigo-600/5 p-10 text-center dark:border-blue-900/40"
+                className="relative flex flex-col items-center justify-center space-y-4 overflow-hidden rounded-2xl border border-blue-100/60 bg-linear-to-br from-blue-600/5 to-indigo-600/5 px-5 py-8 text-center sm:p-10 dark:border-blue-900/40"
               >
                 <motion.div
                   animate={{ scale: [1, 1.08, 1], opacity: [0.6, 1, 0.6] }}
@@ -761,7 +777,7 @@ export const CourierDashboard = ({
                 </div>
                 <Link
                   href="/dashboard/lobby"
-                  className="inline-flex items-center gap-2 rounded-full bg-blue-600 px-6 py-2.5 text-sm font-black text-white shadow-lg shadow-blue-600/20 transition-colors hover:bg-blue-700"
+                  className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full bg-blue-600 px-6 py-2.5 text-sm font-black text-white shadow-lg shadow-blue-600/20 transition-colors hover:bg-blue-700"
                 >
                   <Navigation className="h-4 w-4" />
                   Ke Ruang Tunggu Orderan
@@ -773,7 +789,7 @@ export const CourierDashboard = ({
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
-                className="flex flex-col items-center justify-center space-y-4 rounded-2xl border border-dashed p-10 text-center"
+                className="flex flex-col items-center justify-center space-y-4 rounded-2xl border border-dashed px-5 py-8 text-center sm:p-10"
               >
                 <motion.div
                   animate={{ scale: [1, 1.08, 1], opacity: [0.5, 1, 0.5] }}
@@ -799,7 +815,7 @@ export const CourierDashboard = ({
                   whileHover={{ scale: 1.04 }}
                   disabled={isPending}
                   onClick={handleToggle}
-                  className="flex items-center gap-2 px-8 py-2.5 rounded-full font-black text-sm bg-emerald-500 text-white shadow-lg shadow-emerald-500/30 hover:bg-emerald-600 transition-colors disabled:opacity-60"
+                  className="flex min-h-11 items-center justify-center gap-2 px-8 py-2.5 rounded-full font-black text-sm bg-emerald-500 text-white shadow-lg shadow-emerald-500/30 hover:bg-emerald-600 transition-colors disabled:opacity-60"
                 >
                   {isPending ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -818,7 +834,7 @@ export const CourierDashboard = ({
               <h2 className="text-sm font-black uppercase tracking-widest text-muted-foreground">
                 Pengantaran Terakhir
               </h2>
-              <Button asChild variant="link" className="h-auto p-0 text-xs font-bold">
+              <Button asChild variant="link" className="h-auto min-h-9 shrink-0 p-0 pl-3 text-xs font-bold">
                 <Link href="/dashboard/activeorder">Lihat Semua</Link>
               </Button>
             </div>
@@ -831,26 +847,31 @@ export const CourierDashboard = ({
                 history.map((item) => (
                   <div
                     key={item.id}
-                    className="flex items-center justify-between gap-4 p-4 transition-colors hover:bg-muted/40"
+                    className="flex items-center justify-between gap-3 p-3 transition-colors hover:bg-muted/40 sm:gap-4 sm:p-4"
                   >
-                    <div className="flex min-w-0 items-center gap-3">
+                    <div className="flex min-w-0 flex-1 items-center gap-3">
                       <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${statusBg(item.status)}`}>
                         {statusIcon(item.status)}
                       </div>
                       <div className="min-w-0">
                         <p className="truncate text-sm font-bold">{item.dropoff ?? item.outletName}</p>
+                        {/* Wraps rather than truncates: the status word alone can
+                            fill a phone row, and the timestamp is the half a
+                            courier is actually scanning for. */}
                         <p className="text-[10px] text-muted-foreground uppercase font-black tracking-widest">
                           {item.status} • {item.timestamp ? relativeTime(item.timestamp) : '—'}
                         </p>
                       </div>
                     </div>
-                    <div className="shrink-0 text-right">
+                    {/* Capped, not `shrink-0`: an unbounded right column let a
+                        long customer name push the address out of the row. */}
+                    <div className="min-w-0 max-w-[40%] shrink-0 text-right">
                       <p className="text-sm font-bold tabular-nums">
                         {item.deliveryFee
                           ? new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(parseFloat(item.deliveryFee))
                           : '—'}
                       </p>
-                      <p className="text-[10px] text-muted-foreground font-bold">
+                      <p className="truncate text-[10px] text-muted-foreground font-bold">
                         {item.customerName}
                       </p>
                     </div>
@@ -862,10 +883,10 @@ export const CourierDashboard = ({
         </div>
 
         {/* Sidebar Stats */}
-        <div className="space-y-5">
+        <div className="min-w-0 space-y-5">
           {/* Performance Card */}
-          <div className="rounded-2xl bg-linear-to-br from-purple-600 to-indigo-700 p-5 text-white shadow-lg shadow-indigo-600/20">
-            <div className="mb-5 flex items-center justify-between">
+          <div className="rounded-2xl bg-linear-to-br from-purple-600 to-indigo-700 p-4 text-white shadow-lg shadow-indigo-600/20 sm:p-5">
+            <div className="mb-4 flex items-center justify-between sm:mb-5">
               <h2 className="text-[10px] font-black uppercase tracking-widest opacity-80">
                 Minggu Ini
               </h2>
@@ -873,7 +894,9 @@ export const CourierDashboard = ({
             </div>
             <div className="mb-5 space-y-2">
               <p className="text-xs font-bold opacity-60">Total Pendapatan</p>
-              <p className="text-3xl font-black tabular-nums">{weeklyPerformance.totalEarnings}</p>
+              {/* A full week of rupiah is a long number; it shrinks a step on
+                  phones rather than overflowing the card. */}
+              <p className="text-2xl font-black tabular-nums sm:text-3xl">{weeklyPerformance.totalEarnings}</p>
               <p className="w-fit rounded-full bg-white/20 px-2 py-0.5 text-[10px] font-bold">
                 {(weeklyPerformance.percentageChange ?? 0) >= 0 ? '+' : ''}
                 {(weeklyPerformance.percentageChange ?? 0).toFixed(1)}% dari minggu lalu
@@ -883,7 +906,7 @@ export const CourierDashboard = ({
               <WeeklyEarningsChart daily={weeklyPerformance.daily} />
             )}
 
-            <div className="grid grid-cols-2 gap-4 border-t border-white/15 pt-5">
+            <div className="grid grid-cols-2 gap-3 border-t border-white/15 pt-5 sm:gap-4">
               <div>
                 <p className="mb-1 text-[10px] font-bold uppercase tracking-widest opacity-60">
                   Jumlah Pesanan

@@ -18,7 +18,7 @@ import { CATEGORY_FEATURE, FEATURE_CATEGORY, notInternalCategory } from "../lib/
 
 // Must not exceed the delivery cap in deliveryFeeFromDistance (orders.ts) —
 // listing an outlet nobody can actually order from is worse than omitting it.
-const MAX_DELIVERY_KM = 50;
+const MAX_DELIVERY_KM = 30;
 
 // How many nearest outlets get real routing. One /table call either way, so this
 // is about response size and OSRM's max-table-size, not request count. Well
