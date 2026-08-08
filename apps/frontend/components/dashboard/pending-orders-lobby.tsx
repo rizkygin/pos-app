@@ -1072,19 +1072,19 @@ function QRScannerBar({
                 setError(null);
               }}
               placeholder="Ketik Order ID atau 8 karakter terakhir…"
-              className="flex-1 px-3 py-2 text-sm rounded-lg border bg-muted/30 focus:outline-none focus:ring-2 focus:ring-emerald-400/50 focus:border-emerald-400 transition-all"
+              className="flex-1 min-w-0 px-3 py-2 text-sm rounded-lg border bg-muted/30 focus:outline-none focus:ring-2 focus:ring-emerald-400/50 focus:border-emerald-400 transition-all"
             />
             <button
               type="submit"
               disabled={!input.trim()}
-              className="px-4 py-2 rounded-lg text-sm font-bold bg-emerald-500 text-white hover:bg-emerald-600 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="shrink-0 px-4 py-2 rounded-lg text-sm font-bold bg-emerald-500 text-white hover:bg-emerald-600 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Konfirmasi
             </button>
             <button
               type="button"
               onClick={() => setScanning((v) => !v)}
-              className={`px-3 py-2 rounded-lg border text-sm font-bold transition-colors ${
+              className={`shrink-0 px-3 py-2 rounded-lg border text-sm font-bold transition-colors ${
                 scanning
                   ? 'bg-red-50 border-red-200 text-red-600 hover:bg-red-100 dark:bg-red-950/20 dark:border-red-900/30'
                   : 'bg-muted/30 border-border hover:bg-muted/60 text-foreground'
