@@ -624,7 +624,7 @@ export function OrderClient({
             <motion.button
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
-              className="relative flex items-center gap-2 px-5 py-3.5 rounded-full bg-white border border-border shadow-xl shadow-black/10 font-bold text-sm hover:bg-rose-50 transition-colors"
+              className="relative flex items-center gap-2 px-5 py-3.5 rounded-full bg-card text-card-foreground border border-border shadow-xl shadow-black/10 font-bold text-sm hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
             >
               <Heart className="h-5 w-5 text-rose-500" />
               <span>Wishlist</span>

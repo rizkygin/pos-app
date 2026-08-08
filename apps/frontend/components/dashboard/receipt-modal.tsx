@@ -9,6 +9,11 @@ type ReceiptItem = {
     quantity: number;
     price: string;
     price_mark_down: string;
+    /**
+     * Kitchen instruction for this line ("jangan pedas"). Device-local: it rides
+     * along to the printer and is never persisted with the order.
+     */
+    note?: string | null;
 };
 
 export type ReceiptData = {
@@ -39,6 +44,13 @@ export type ReceiptData = {
     outletPhone: string;
     outletLogo: string;
     cashierName: string;
+    /**
+     * Number written on the buzzer/pager handed to the customer, so staff know
+     * which one to ring when the food is up. Device-local like the notes below.
+     */
+    pagerNumber?: string;
+    /** Whole-order kitchen instruction, printed at the foot of the kitchen ticket. */
+    orderNote?: string;
 };
 
 type Props = {
@@ -46,6 +58,13 @@ type Props = {
     onClose: () => void;
     /** Modal title. "Order Placed!" is wrong for a courier pickup slip. */
     heading?: string;
+    /**
+     * "kitchen" prints the prep ticket instead of the customer receipt: no logo,
+     * no prices, no discounts, no totals — just who it's for, the pager number,
+     * what to make, and the notes. Money on a kitchen ticket is noise the cooks
+     * have to read past, and it invites the ticket being handed over as a bill.
+     */
+    variant?: "customer" | "kitchen";
 };
 
 const fmt = (n: number) =>
@@ -60,14 +79,27 @@ const PAPER_KEY = "pos_paper_width";
 // Font A characters per line: 32 on 58mm paper, 48 on 80mm.
 const LINE_CHARS: Record<PaperWidth, number> = { "58": 32, "80": 48 };
 
-// Full print-head width in dots at 203dpi: 384 on 58mm paper, 576 on 80mm.
+// Full print-head width in dots at 203dpi. Only the 58mm entry is relied on:
+// 384 is near-universal for that head, whereas the nominal 576 for 80mm is not
+// (many are 512), which is why the 80mm logo isn't padded to it.
 const PAPER_DOTS: Record<PaperWidth, number> = { "58": 384, "80": 576 };
 
 // Rasterize the outlet logo into an ESC/POS "GS v 0" raster block (1-bit).
-// The bitmap spans the full paper width with the logo centered in white
+//
+// On 58mm the bitmap spans the full paper width with the logo centered in white
 // padding: ESC a centering is firmware-dependent for raster images (cheap
 // boards rotate the row buffer instead of padding it, smearing the logo), so
 // the centering is baked into the pixels and the printer has nothing to shift.
+// 384 dots is near-universal for a 58mm head, so that assumption holds.
+//
+// On 80mm it doesn't: plenty of "80mm" printers ship a 512-dot head rather than
+// the nominal 576, and padding to the wrong width pushes the logo off-center by
+// however far the guess missed (right-of-center on a 512-dot head, hard against
+// the right edge if the paper setting is wrong altogether). So 80mm emits a
+// raster only as wide as the logo and lets ESC a center it against the width
+// the printer actually knows — a 192-dot block leaves real margin either side,
+// so the row-buffer-rotation quirk above has nothing to smear.
+//
 // Throws when the logo can't be loaded or read (missing, CORS-tainted canvas);
 // the caller treats that as "print without a logo".
 async function buildLogoEscposBytes(src: string, paper: PaperWidth): Promise<number[]> {
@@ -80,7 +112,9 @@ async function buildLogoEscposBytes(src: string, paper: PaperWidth): Promise<num
     });
 
     const logoWidth = 192; // dots (~24mm at 203dpi) — header-sized on both papers
-    const width = PAPER_DOTS[paper];
+    // 58mm: pad to the full head width and bake the centering into the pixels.
+    // 80mm: no padding, the printer centers the block itself (see above).
+    const width = paper === "80" ? logoWidth : PAPER_DOTS[paper];
     const height = Math.max(8, Math.round(((img.height || logoWidth) / (img.width || logoWidth)) * logoWidth));
     const canvas = document.createElement("canvas");
     canvas.width = width;
@@ -152,11 +186,13 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
     push(ESC, 0x40); // initialize
 
     if (logoBytes.length) {
-        // Left-aligned on purpose: the bitmap already spans the full paper
-        // width with the logo centered in white padding, so ESC a centering
-        // has nothing to do here — and firmware that "centers" a raster by
-        // rotating the row buffer would shift the logo off-center instead.
-        align(0);
+        // 58mm: left-aligned on purpose. The bitmap already spans the full
+        // paper width with the logo centered in white padding, so ESC a
+        // centering has nothing to do here — and firmware that "centers" a
+        // raster by rotating the row buffer would shift it off-center instead.
+        // 80mm: the bitmap is only as wide as the logo (the head width can't be
+        // assumed there), so the printer has to do the centering.
+        align(paper === "80" ? 1 : 0);
         push(...logoBytes);
         push(0x0a);
     }
@@ -177,6 +213,9 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
     row("Jam", data.date.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }));
     row("Kasir", data.cashierName);
     if (data.customerName) row("Pelanggan", data.customerName);
+    // Also on the customer's copy: if they mislay the buzzer, the number is
+    // still in their hand.
+    if (data.pagerNumber) row("Pager", data.pagerNumber);
     divider();
 
     for (const item of data.items) {
@@ -231,7 +270,124 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
     return btoa(bin);
 }
 
-export function ReceiptModal({ data, onClose, heading = "Order Placed!" }: Props) {
+// Greedy word wrap so a long note doesn't get chopped mid-word by the printer's
+// own hard wrap. Words longer than the line are hard-split rather than dropped.
+function wrapText(s: string, width: number): string[] {
+    const out: string[] = [];
+    for (const paragraph of String(s ?? "").split(/\r?\n/)) {
+        let current = "";
+        for (const word of paragraph.trim().split(/\s+/).filter(Boolean)) {
+            let w = word;
+            while (w.length > width) {
+                if (current) {
+                    out.push(current);
+                    current = "";
+                }
+                out.push(w.slice(0, width));
+                w = w.slice(width);
+            }
+            if (!current) current = w;
+            else if (current.length + 1 + w.length <= width) current += ` ${w}`;
+            else {
+                out.push(current);
+                current = w;
+            }
+        }
+        if (current) out.push(current);
+    }
+    return out;
+}
+
+// Kitchen prep ticket: the same ESC/POS transport as the receipt, but a
+// deliberately money-free layout. Everything on it exists to answer "what do I
+// cook and who gets it" — pager number, customer, items, notes. Quantities are
+// printed double-height because that's the one field a misread ruins.
+function buildKitchenEscposBase64(data: ReceiptData, paper: PaperWidth): string {
+    const LINE = LINE_CHARS[paper];
+    const ESC = 0x1b;
+    const GS = 0x1d;
+    const bytes: number[] = [];
+    const push = (...b: number[]) => bytes.push(...b);
+
+    const ascii = (s: string) =>
+        String(s ?? "")
+            .replace(/ /g, " ")
+            .normalize("NFKD")
+            .replace(/[̀-ͯ]/g, "")
+            .replace(/[^\x20-\x7e]/g, "?");
+    const text = (s: string) => {
+        for (const ch of ascii(s)) push(ch.charCodeAt(0));
+    };
+    const line = (s = "") => {
+        text(s);
+        push(0x0a);
+    };
+    const align = (n: 0 | 1 | 2) => push(ESC, 0x61, n);
+    const bold = (on: boolean) => push(ESC, 0x45, on ? 1 : 0);
+    const size = (n: number) => push(GS, 0x21, n);
+    const divider = () => line("-".repeat(LINE));
+    const row = (left: string, right: string) => {
+        const l = ascii(left);
+        const r = ascii(right);
+        const gap = Math.max(1, LINE - l.length - r.length);
+        line(l + " ".repeat(gap) + r);
+    };
+
+    push(ESC, 0x40); // initialize
+
+    align(1);
+    bold(true);
+    size(0x11);
+    line("PESANAN DAPUR");
+    size(0x00);
+    bold(false);
+
+    if (data.pagerNumber) {
+        // The single most-scanned field on the ticket: quadruple size, centered.
+        bold(true);
+        size(0x22);
+        line(`PAGER ${data.pagerNumber}`);
+        size(0x00);
+        bold(false);
+    }
+    divider();
+
+    align(0);
+    row("Jam", data.date.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }));
+    row("Kasir", data.cashierName);
+    if (data.customerName) row("Pelanggan", data.customerName);
+    divider();
+
+    for (const item of data.items) {
+        bold(true);
+        size(0x01); // double height — quantity is the field a misread ruins
+        line(`${item.quantity}x ${item.product_name}`);
+        size(0x00);
+        bold(false);
+        if (item.note) {
+            // Indented so a note can never be mistaken for another item.
+            for (const l of wrapText(item.note, LINE - 4)) line(`   * ${l}`);
+        }
+    }
+
+    if (data.orderNote) {
+        divider();
+        bold(true);
+        line("CATATAN:");
+        bold(false);
+        for (const l of wrapText(data.orderNote, LINE)) line(l);
+    }
+
+    push(0x0a, 0x0a, 0x0a);
+    push(GS, 0x56, 0x00); // full cut
+
+    let bin = "";
+    for (const b of bytes) bin += String.fromCharCode(b & 0xff);
+    return btoa(bin);
+}
+
+export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant = "customer" }: Props) {
+    const isKitchen = variant === "kitchen";
     const shortId = data.orderId.split("-")[0].toUpperCase();
 
     // Outlet logo, or null while it's still the placeholder avatar.
@@ -313,6 +469,7 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!" }: Props
   <div class="row sm"><span>Jam</span><span>${data.date.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}</span></div>
   <div class="row sm"><span>Kasir</span><span>${esc(data.cashierName)}</span></div>
   ${data.customerName ? `<div class="row sm"><span>Pelanggan</span><span>${esc(data.customerName)}</span></div>` : ""}
+  ${data.pagerNumber ? `<div class="row sm"><span>Pager</span><span class="b">${esc(data.pagerNumber)}</span></div>` : ""}
   <div class="dv"></div>
   ${itemsHtml}
   <div class="dv"></div>
@@ -326,6 +483,58 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!" }: Props
   <div class="c sm">Silakan datang kembali ^^</div>
   <div class="dv"></div>
   <div class="c sm">Dibuat oleh ulunpesan.com</div>
+  <script>window.onload=function(){window.focus();window.print();window.onafterprint=function(){window.close();};setTimeout(function(){try{window.close();}catch(e){}},2000);};</script>
+</body></html>`;
+
+        const w = window.open("", "_blank", "width=360,height=640");
+        if (!w) {
+            alert("Popup diblokir. Izinkan popup untuk situs ini agar struk bisa dicetak.");
+            return;
+        }
+        w.document.write(html);
+        w.document.close();
+    };
+
+    // Desktop/iOS fallback for the kitchen ticket. Mirrors the ESC/POS layout
+    // above: no logo, no prices, no totals.
+    const printKitchenViaBrowser = () => {
+        const mm = `${paperWidth}mm`;
+        const itemsHtml = data.items
+            .map(
+                (item) =>
+                    `<div class="item"><div class="name">${item.quantity}x ${esc(item.product_name)}</div>` +
+                    (item.note ? `<div class="note">* ${esc(item.note)}</div>` : "") +
+                    `</div>`,
+            )
+            .join("");
+
+        const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Dapur${data.pagerNumber ? ` #${esc(data.pagerNumber)}` : ""}</title>
+<style>
+  @page { size: ${mm} auto; margin: 0; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: ${mm}; }
+  body { font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.35; color: #000; padding: 3mm 2mm; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .c { text-align: center; }
+  .b { font-weight: bold; }
+  .lg { font-size: 15px; }
+  .xl { font-size: 26px; letter-spacing: 1px; }
+  .sm { font-size: 11px; }
+  .dv { border-top: 1px dashed #000; margin: 5px 0; }
+  .row { display: flex; justify-content: space-between; gap: 6px; }
+  .row span:last-child { text-align: right; white-space: nowrap; }
+  .item { margin: 4px 0; }
+  .item .name { font-weight: bold; font-size: 15px; word-break: break-word; }
+  .item .note { padding-left: 4mm; word-break: break-word; }
+</style></head><body>
+  <div class="c b lg">PESANAN DAPUR</div>
+  ${data.pagerNumber ? `<div class="c b xl">PAGER ${esc(data.pagerNumber)}</div>` : ""}
+  <div class="dv"></div>
+  <div class="row sm"><span>Jam</span><span>${data.date.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}</span></div>
+  <div class="row sm"><span>Kasir</span><span>${esc(data.cashierName)}</span></div>
+  ${data.customerName ? `<div class="row sm"><span>Pelanggan</span><span>${esc(data.customerName)}</span></div>` : ""}
+  <div class="dv"></div>
+  ${itemsHtml}
+  ${data.orderNote ? `<div class="dv"></div><div class="b">CATATAN:</div><div>${esc(data.orderNote)}</div>` : ""}
   <script>window.onload=function(){window.focus();window.print();window.onafterprint=function(){window.close();};setTimeout(function(){try{window.close();}catch(e){}},2000);};</script>
 </body></html>`;
 
@@ -369,6 +578,13 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!" }: Props
     // handler, so use the browser print dialog.
     const handlePrint = async () => {
         if (/android/i.test(navigator.userAgent)) {
+            // Kitchen ticket carries no logo, so it skips the raster step entirely.
+            if (isKitchen) {
+                const b64 = buildKitchenEscposBase64(data, paperWidth);
+                const b64url = b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+                openPrintApp(`thermalbridge://print?back=1&data=${b64url}`, `rawbt:base64,${b64}`);
+                return;
+            }
             let logoBytes: number[] = [];
             if (logoSrc) {
                 try {
@@ -381,6 +597,8 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!" }: Props
             // base64url: query-string safe ("+" would decode to a space).
             const b64url = b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
             openPrintApp(`thermalbridge://print?back=1&data=${b64url}`, `rawbt:base64,${b64}`);
+        } else if (isKitchen) {
+            printKitchenViaBrowser();
         } else {
             printViaBrowser();
         }
@@ -402,6 +620,56 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!" }: Props
 
                 {/* Receipt body — scrollable */}
                 <div className="overflow-y-auto flex-1 px-5 py-4">
+                    {isKitchen ? (
+                        <div className="font-mono text-[13px] text-gray-800">
+                            <p className="text-center font-bold text-base tracking-wide">PESANAN DAPUR</p>
+                            {data.pagerNumber && (
+                                <p className="text-center font-black text-3xl tracking-wider mt-1">
+                                    PAGER {data.pagerNumber}
+                                </p>
+                            )}
+
+                            <div className="border-t border-dashed border-gray-300 my-3" />
+
+                            <div className="flex justify-between text-xs mb-1">
+                                <span className="text-gray-500">Time</span>
+                                <span>{data.date.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}</span>
+                            </div>
+                            <div className="flex justify-between text-xs mb-1">
+                                <span className="text-gray-500">Cashier</span>
+                                <span>{data.cashierName}</span>
+                            </div>
+                            {data.customerName && (
+                                <div className="flex justify-between text-xs mb-1">
+                                    <span className="text-gray-500">Customer</span>
+                                    <span className="font-semibold">{data.customerName}</span>
+                                </div>
+                            )}
+
+                            <div className="border-t border-dashed border-gray-300 my-3" />
+
+                            <div className="space-y-2">
+                                {data.items.map((item, i) => (
+                                    <div key={i}>
+                                        <p className="font-bold text-[15px] leading-tight">
+                                            {item.quantity}x {item.product_name}
+                                        </p>
+                                        {item.note && (
+                                            <p className="pl-4 text-xs text-gray-600">* {item.note}</p>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+
+                            {data.orderNote && (
+                                <>
+                                    <div className="border-t border-dashed border-gray-300 my-3" />
+                                    <p className="font-bold text-xs">CATATAN:</p>
+                                    <p className="text-xs whitespace-pre-wrap wrap-break-word">{data.orderNote}</p>
+                                </>
+                            )}
+                        </div>
+                    ) : (
                     <div id="receipt-printable" className="font-mono text-[13px] text-gray-800">
                         {/* Outlet header */}
                         <div className="text-center mb-3">
@@ -441,6 +709,12 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!" }: Props
                             <div className="flex justify-between text-xs mb-1">
                                 <span className="text-gray-500">Customer</span>
                                 <span className="font-semibold">{data.customerName}</span>
+                            </div>
+                        )}
+                        {data.pagerNumber && (
+                            <div className="flex justify-between text-xs mb-1">
+                                <span className="text-gray-500">Pager</span>
+                                <span className="font-bold">{data.pagerNumber}</span>
                             </div>
                         )}
 
@@ -531,6 +805,7 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!" }: Props
                         <p className="text-center text-xs text-gray-400">Thank you for your purchase!</p>
                         <p className="text-center text-xs text-gray-400">Please come again 🙏</p>
                     </div>
+                    )}
                 </div>
 
                 {/* Actions */}

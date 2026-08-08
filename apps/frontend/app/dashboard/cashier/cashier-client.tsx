@@ -19,6 +19,10 @@ import {
   ChevronDown,
   Layers,
   Barcode,
+  StickyNote,
+  Bell,
+  Printer,
+  ChefHat,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatCurrency } from '@/lib/utils/format';
@@ -45,6 +49,12 @@ type Product = {
 type CartItem = {
   product: Product;
   quantity: number;
+  /**
+   * Kitchen instruction for this line ("jangan pedas", "es sedikit"). Lives in
+   * the held tab only — it's prep guidance for the next ten minutes, printed on
+   * the kitchen ticket and then gone. Never sent to the backend.
+   */
+  note?: string;
 };
 
 // A parked/held order kept in localStorage so a cashier can juggle several open
@@ -54,6 +64,14 @@ type HeldTab = {
   label: string;
   cart: CartItem[];
   customerName: string;
+  /**
+   * Number marker-written on the buzzer handed to the customer. It's a handle
+   * on a physical device, not a location: the same number comes back around all
+   * day as pagers are returned, so it's per-tab and dies with the tab.
+   */
+  pagerNumber: string;
+  /** Whole-order kitchen instruction. Device-local, same as the item notes. */
+  orderNote: string;
   discountType: 'percentage' | 'amount';
   discountInput: string;
   paymentMethod: 'cash' | 'non_cash';
@@ -65,6 +83,8 @@ const newHeldTab = (label: string): HeldTab => ({
   label,
   cart: [],
   customerName: '',
+  pagerNumber: '',
+  orderNote: '',
   discountType: 'percentage',
   discountInput: '',
   paymentMethod: 'cash',
@@ -121,12 +141,26 @@ export const CashierClient = ({
   const barcodeInputDesktopRef = useRef<HTMLInputElement>(null);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
-  const [receipt, setReceipt] = useState<ReceiptData | null>(null);
+  // One modal serves both slips; `variant` picks the customer receipt or the
+  // money-free kitchen ticket.
+  const [receipt, setReceipt] = useState<{
+    data: ReceiptData;
+    variant: 'customer' | 'kitchen';
+    heading: string;
+  } | null>(null);
   const [discountType, setDiscountType] = useState<'percentage' | 'amount'>(
     'percentage',
   );
   const [discountInput, setDiscountInput] = useState('');
   const [customerName, setCustomerName] = useState('');
+  const [pagerNumber, setPagerNumber] = useState('');
+  const [orderNote, setOrderNote] = useState('');
+  // Which note is being edited, if any: a cart line or the whole order. The
+  // draft is held apart from the cart so cancelling leaves nothing behind.
+  const [noteTarget, setNoteTarget] = useState<
+    { kind: 'item'; id: string; name: string } | { kind: 'order' } | null
+  >(null);
+  const [noteDraft, setNoteDraft] = useState('');
   const [amountPaidInput, setAmountPaidInput] = useState('0');
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'non_cash'>(
     'cash',
@@ -191,6 +225,8 @@ export const CashierClient = ({
   const applyTab = useCallback((t: HeldTab) => {
     setCart(t.cart);
     setCustomerName(t.customerName);
+    setPagerNumber(t.pagerNumber);
+    setOrderNote(t.orderNote);
     setDiscountType(t.discountType);
     setDiscountInput(t.discountInput);
     setPaymentMethod(t.paymentMethod);
@@ -205,7 +241,13 @@ export const CashierClient = ({
       const raw = localStorage.getItem(tabsKey);
       const parsed = raw ? JSON.parse(raw) : null;
       if (Array.isArray(parsed?.tabs)) {
-        loaded = parsed.tabs;
+        // Tabs parked before pager/notes existed are missing those keys; fill
+        // them in so the inputs below never go uncontrolled.
+        loaded = parsed.tabs.map((t: HeldTab) => ({
+          ...t,
+          pagerNumber: t.pagerNumber ?? '',
+          orderNote: t.orderNote ?? '',
+        }));
         activeId = parsed.activeId ?? '';
       }
     } catch {
@@ -231,6 +273,8 @@ export const CashierClient = ({
             ...t,
             cart,
             customerName,
+            pagerNumber,
+            orderNote,
             discountType,
             discountInput,
             paymentMethod,
@@ -243,6 +287,8 @@ export const CashierClient = ({
   }, [
     cart,
     customerName,
+    pagerNumber,
+    orderNote,
     discountType,
     discountInput,
     paymentMethod,
@@ -458,6 +504,40 @@ export const CashierClient = ({
     setCart([]);
     setDiscountInput('');
     setAmountPaidInput('0');
+    setOrderNote('');
+  };
+
+  // ── Kitchen notes: per-item and per-order, both device-local ──
+  const openItemNote = (item: CartItem) => {
+    setNoteDraft(item.note ?? '');
+    setNoteTarget({
+      kind: 'item',
+      id: item.product.id,
+      name: item.product.product_name,
+    });
+  };
+
+  const openOrderNote = () => {
+    setNoteDraft(orderNote);
+    setNoteTarget({ kind: 'order' });
+  };
+
+  const saveNote = () => {
+    if (!noteTarget) return;
+    const value = noteDraft.trim();
+    if (noteTarget.kind === 'order') {
+      setOrderNote(value);
+    } else {
+      const { id } = noteTarget;
+      setCart((prev) =>
+        prev.map((item) =>
+          // Empty means "remove the note" — drop the key rather than storing "".
+          item.product.id === id ? { ...item, note: value || undefined } : item,
+        ),
+      );
+    }
+    setNoteTarget(null);
+    setNoteDraft('');
   };
 
   // Calculations
@@ -495,6 +575,91 @@ export const CashierClient = ({
     amountPaid < finalTotal;
   const checkoutDisabled = cart.length === 0 || isInsufficient;
 
+  // Two live orders on one buzzer is exactly the mix-up the number is meant to
+  // prevent, so surface the clash instead of silently allowing it.
+  const pagerClash = useMemo(() => {
+    const n = pagerNumber.trim();
+    if (!n) return false;
+    return tabs.some((t) => t.id !== activeTabId && t.pagerNumber.trim() === n);
+  }, [pagerNumber, tabs, activeTabId]);
+
+  // Shared slip payload. Before checkout there's no server order id yet, so the
+  // active tab's id stands in — stable across reprints of the same tab, which
+  // keeps a reprinted struk matching the first one. It is NOT the final order
+  // number: that's only minted when Checkout posts the order.
+  const buildReceiptData = useCallback(
+    (): ReceiptData => ({
+      orderId: activeTabId || crypto.randomUUID(),
+      customerName: customerName.trim(),
+      pagerNumber: pagerNumber.trim(),
+      orderNote: orderNote.trim(),
+      items: cart.map((i) => ({
+        product_name: i.product.product_name,
+        quantity: i.quantity,
+        price: i.product.price,
+        price_mark_down: i.product.price_mark_down,
+        note: i.note,
+      })),
+      subtotal: cartTotal,
+      discountAmount,
+      discountLabel,
+      total: finalTotal,
+      paymentMethod,
+      amountPaid:
+        paymentMethod === 'cash' && amountPaid > 0 ? amountPaid : finalTotal,
+      changeDue,
+      date: new Date(),
+      outletName,
+      outletAddress,
+      outletPhone,
+      outletLogo,
+      cashierName,
+    }),
+    [
+      activeTabId,
+      cart,
+      cartTotal,
+      customerName,
+      pagerNumber,
+      orderNote,
+      discountAmount,
+      discountLabel,
+      finalTotal,
+      paymentMethod,
+      amountPaid,
+      changeDue,
+      outletName,
+      outletAddress,
+      outletPhone,
+      outletLogo,
+      cashierName,
+    ],
+  );
+
+  // Customer pays up front: print the struk and take the cash, but leave the
+  // tab standing — the order isn't finished until the food is handed over and
+  // the pager comes back, which is what Checkout marks.
+  const printCustomerReceipt = () => {
+    if (cart.length === 0 || isInsufficient) return;
+    setReceipt({
+      data: buildReceiptData(),
+      variant: 'customer',
+      heading: 'Struk Pelanggan',
+    });
+  };
+
+  // Kitchen ticket. Printable at any point and as often as needed — a reprint
+  // is the normal fix for a lost or smudged ticket, so nothing here is gated on
+  // payment.
+  const printKitchenTicket = () => {
+    if (cart.length === 0) return;
+    setReceipt({
+      data: buildReceiptData(),
+      variant: 'kitchen',
+      heading: 'Tiket Dapur',
+    });
+  };
+
   const handleCheckout = useCallback(async () => {
     if (cart.length === 0 || isInsufficient) return;
     // Guard against duplicate submissions (double-click / Cmd+Enter key-repeat):
@@ -509,6 +674,7 @@ export const CashierClient = ({
     const snapshotDiscountLabel = discountLabel;
     const snapshotFinalTotal = finalTotal;
     const snapshotCustomerName = customerName.trim();
+    const snapshotPagerNumber = pagerNumber.trim();
     const snapshotPaymentMethod = paymentMethod;
     const snapshotAmountPaid =
       snapshotPaymentMethod === 'cash' && amountPaid > 0
@@ -545,27 +711,32 @@ export const CashierClient = ({
       // resets cart, customer, discount, and payment for the new active tab.
       completeActiveTab();
       setReceipt({
-        orderId: data.orderId ?? crypto.randomUUID(),
-        customerName: snapshotCustomerName,
-        items: snapshot.map((i) => ({
-          product_name: i.product.product_name,
-          quantity: i.quantity,
-          price: i.product.price,
-          price_mark_down: i.product.price_mark_down,
-        })),
-        subtotal: snapshotTotal,
-        discountAmount: snapshotDiscountAmount,
-        discountLabel: snapshotDiscountLabel,
-        total: snapshotFinalTotal,
-        paymentMethod: snapshotPaymentMethod,
-        amountPaid: snapshotAmountPaid,
-        changeDue: snapshotChangeDue,
-        date: new Date(),
-        outletName,
-        outletAddress,
-        outletPhone,
-        outletLogo,
-        cashierName,
+        variant: 'customer',
+        heading: 'Order Placed!',
+        data: {
+          orderId: data.orderId ?? crypto.randomUUID(),
+          customerName: snapshotCustomerName,
+          pagerNumber: snapshotPagerNumber,
+          items: snapshot.map((i) => ({
+            product_name: i.product.product_name,
+            quantity: i.quantity,
+            price: i.product.price,
+            price_mark_down: i.product.price_mark_down,
+          })),
+          subtotal: snapshotTotal,
+          discountAmount: snapshotDiscountAmount,
+          discountLabel: snapshotDiscountLabel,
+          total: snapshotFinalTotal,
+          paymentMethod: snapshotPaymentMethod,
+          amountPaid: snapshotAmountPaid,
+          changeDue: snapshotChangeDue,
+          date: new Date(),
+          outletName,
+          outletAddress,
+          outletPhone,
+          outletLogo,
+          cashierName,
+        },
       });
     } catch (error: any) {
       alert(error.message);
@@ -578,6 +749,7 @@ export const CashierClient = ({
     cartTotal,
     amountPaid,
     customerName,
+    pagerNumber,
     discountAmount,
     discountLabel,
     finalTotal,
@@ -842,13 +1014,21 @@ export const CashierClient = ({
             const activeTab = tabs.find((t) => t.id === activeTabId);
             const activeLabel =
               activeTab?.customerName.trim() || activeTab?.label || 'Pesanan';
+            const activePager = activeTab?.pagerNumber.trim();
             return (
               <button
                 onClick={() => setTabsMenuOpen((v) => !v)}
                 className="flex w-full items-center justify-between gap-2 rounded-lg border bg-background px-3 py-2 text-sm font-bold transition-colors hover:bg-muted"
               >
                 <span className="flex min-w-0 items-center gap-2">
-                  <Layers className="h-4 w-4 shrink-0 text-blue-600" />
+                  {activePager ? (
+                    <span className="flex h-5 shrink-0 items-center gap-1 rounded-full bg-blue-600 px-2 text-[11px] font-black text-white">
+                      <Bell className="h-3 w-3" />
+                      {activePager}
+                    </span>
+                  ) : (
+                    <Layers className="h-4 w-4 shrink-0 text-blue-600" />
+                  )}
                   <span className="truncate">{activeLabel}</span>
                   <span className="shrink-0 rounded-full bg-blue-50 px-1.5 text-[10px] text-blue-700">
                     {tabs.length} tab
@@ -886,6 +1066,17 @@ export const CashierClient = ({
                           : 'hover:bg-muted'
                       }`}
                     >
+                      {/* Pager number leads: when the kitchen calls out a
+                          number, this list is what gets scanned. */}
+                      <span
+                        className={`flex h-6 w-8 shrink-0 items-center justify-center rounded-md text-xs font-black tabular-nums ${
+                          t.pagerNumber.trim()
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-muted text-muted-foreground/50'
+                        }`}
+                      >
+                        {t.pagerNumber.trim() || '--'}
+                      </span>
                       <span className="flex-1 truncate">{label}</span>
                       {count > 0 && (
                         <span className="shrink-0 rounded-full bg-muted px-1.5 text-[10px] font-semibold">
@@ -921,11 +1112,36 @@ export const CashierClient = ({
 
         {/* Cart Header */}
         <div className="p-4 border-b bg-background/80 backdrop-blur-md sticky top-0 z-20">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-blue-50 text-blue-600 rounded-xl">
-                <ShoppingCart className="h-5 w-5" />
-              </div>
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              {/* The pager box takes the slot the decorative cart icon used to
+                  occupy, so the number is always on screen without costing a
+                  row in an already-tight sidebar. */}
+              <label
+                className={`flex shrink-0 flex-col items-center rounded-xl border-2 px-1.5 py-1 transition-colors ${
+                  pagerClash
+                    ? 'border-rose-400 bg-rose-50'
+                    : pagerNumber.trim()
+                      ? 'border-blue-500 bg-blue-50'
+                      : 'border-transparent bg-muted/50'
+                }`}
+                title="Nomor pager"
+              >
+                <Bell
+                  className={`h-3 w-3 ${pagerClash ? 'text-rose-500' : 'text-blue-600'}`}
+                />
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  aria-label="Nomor pager"
+                  value={pagerNumber}
+                  onChange={(e) =>
+                    setPagerNumber(e.target.value.replace(/\D/g, '').slice(0, 3))
+                  }
+                  placeholder="--"
+                  className="w-8 bg-transparent text-center text-base font-black tabular-nums outline-none placeholder:font-bold placeholder:text-muted-foreground/50"
+                />
+              </label>
               <div className="min-w-0 flex-1">
                 <input
                   type="text"
@@ -939,15 +1155,39 @@ export const CashierClient = ({
                 </p>
               </div>
             </div>
-            {cart.length > 0 && (
+            <div className="flex shrink-0 flex-col items-stretch gap-1">
+              {cart.length > 0 && (
+                <button
+                  onClick={clearCart}
+                  className="text-xs font-bold text-rose-500 hover:text-rose-600 hover:bg-rose-50 px-3 py-1.5 rounded-lg transition-colors"
+                >
+                  Clear
+                </button>
+              )}
               <button
-                onClick={clearCart}
-                className="text-xs font-bold text-rose-500 hover:text-rose-600 hover:bg-rose-50 px-3 py-1.5 rounded-lg transition-colors"
+                onClick={openOrderNote}
+                className={`flex items-center justify-center gap-1 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
+                  orderNote.trim()
+                    ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                }`}
+                title="Catatan pesanan (dapur)"
               >
-                Clear
+                <StickyNote className="h-3.5 w-3.5" />
+                Catatan
               </button>
-            )}
+            </div>
           </div>
+          {pagerClash && (
+            <p className="mt-1 text-[11px] font-semibold text-rose-500">
+              Pager {pagerNumber.trim()} sedang dipakai tab lain.
+            </p>
+          )}
+          {orderNote.trim() && (
+            <p className="mt-1 line-clamp-2 rounded-lg bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
+              {orderNote}
+            </p>
+          )}
         </div>
 
         {/* Cart Items */}
@@ -996,13 +1236,32 @@ export const CashierClient = ({
                       <h4 className="font-bold text-sm line-clamp-2 leading-tight">
                         {item.product.product_name}
                       </h4>
-                      <button
-                        onClick={() => removeFromCart(item.product.id)}
-                        className="text-muted-foreground hover:text-rose-500 transition-colors p-1"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                      <div className="flex shrink-0 items-center">
+                        <button
+                          onClick={() => openItemNote(item)}
+                          aria-label={`Catatan ${item.product.product_name}`}
+                          title="Catatan untuk item ini"
+                          className={`p-1 transition-colors ${
+                            item.note
+                              ? 'text-amber-600 hover:text-amber-700'
+                              : 'text-muted-foreground hover:text-amber-600'
+                          }`}
+                        >
+                          <StickyNote className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => removeFromCart(item.product.id)}
+                          className="text-muted-foreground hover:text-rose-500 transition-colors p-1"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
                     </div>
+                    {item.note && (
+                      <p className="mt-1 line-clamp-2 rounded bg-amber-50 px-1.5 py-0.5 text-[11px] text-amber-800">
+                        {item.note}
+                      </p>
+                    )}
 
                     <div className="flex items-center justify-between mt-2">
                       <span className="font-bold text-blue-600 text-sm">
@@ -1204,6 +1463,32 @@ export const CashierClient = ({
             </div>
           )}
 
+          {/* Pay-first flow: take the money and print both slips while the tab
+              stays open, so the pager number and notes remain on screen until
+              the food is handed over. Checkout below is what ends the order. */}
+          <div className="mb-2 flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={printCustomerReceipt}
+              disabled={checkoutDisabled}
+              className="h-11 flex-1 rounded-2xl border-2 text-sm font-bold"
+            >
+              <Printer className="mr-1.5 h-4 w-4" />
+              Struk
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={printKitchenTicket}
+              disabled={cart.length === 0}
+              className="h-11 flex-1 rounded-2xl border-2 text-sm font-bold"
+            >
+              <ChefHat className="mr-1.5 h-4 w-4" />
+              Dapur
+            </Button>
+          </div>
+
           <div className="flex gap-2">
             {isInsufficient && (
               <Button
@@ -1230,9 +1515,83 @@ export const CashierClient = ({
         </div>
       </div>
 
-      {/* Receipt modal */}
+      {/* Receipt / kitchen ticket modal */}
       {receipt && (
-        <ReceiptModal data={receipt} onClose={() => setReceipt(null)} />
+        <ReceiptModal
+          data={receipt.data}
+          variant={receipt.variant}
+          heading={receipt.heading}
+          onClose={() => setReceipt(null)}
+        />
+      )}
+
+      {/* Kitchen note editor — one small dialog for both the per-item and the
+          whole-order note. Notes never leave this device. */}
+      {noteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-2xl bg-background p-5 shadow-2xl">
+            <div className="mb-1 flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h3 className="text-base font-bold">
+                  {noteTarget.kind === 'order'
+                    ? 'Catatan Pesanan'
+                    : 'Catatan Item'}
+                </h3>
+                <p className="truncate text-xs text-muted-foreground">
+                  {noteTarget.kind === 'order'
+                    ? 'Berlaku untuk seluruh pesanan'
+                    : noteTarget.name}
+                </p>
+              </div>
+              <button
+                onClick={() => setNoteTarget(null)}
+                className="p-1 text-muted-foreground hover:text-foreground"
+                aria-label="Tutup"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <textarea
+              autoFocus
+              value={noteDraft}
+              onChange={(e) => setNoteDraft(e.target.value.slice(0, 200))}
+              onKeyDown={(e) => {
+                // Enter saves; Shift+Enter for a second line.
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  saveNote();
+                } else if (e.key === 'Escape') {
+                  setNoteTarget(null);
+                }
+              }}
+              rows={3}
+              placeholder="cth. jangan pedas, es sedikit"
+              className="mt-2 w-full resize-none rounded-xl border-2 bg-background p-3 text-sm outline-none focus:border-blue-500"
+            />
+            <p className="mt-1 text-right text-[11px] text-muted-foreground">
+              {noteDraft.length}/200
+            </p>
+
+            <div className="mt-3 flex gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setNoteTarget(null)}
+                className="h-11 flex-1 rounded-xl border-2 font-bold"
+              >
+                Batal
+              </Button>
+              <Button
+                type="button"
+                onClick={saveNote}
+                className="h-11 flex-1 rounded-xl bg-blue-600 font-bold hover:bg-blue-700"
+              >
+                Simpan
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Mobile backdrop */}
