@@ -14,7 +14,10 @@ import { ThemeToggle } from "@/components/theme-toggle"
 import { SubscriptionWarningBanner } from "@/components/subscription-warning-banner"
 import { IncomingOrderAlarm } from "@/components/dashboard/incoming-order-alarm"
 import { PushNotificationNudge } from "@/components/dashboard/push-notification-nudge"
+import { CourierGpsGuard } from "@/components/dashboard/courier-gps-guard"
 import { EmailVerificationGate } from "@/components/dashboard/email-verification-gate"
+import { PhoneVerificationGate } from "@/components/dashboard/phone-verification-gate"
+import { formatIndonesianPhone } from "@/lib/utils/phone"
 import { CustomerBottomNav } from "@/components/customer-bottom-nav"
 import { cn } from "@/lib/utils"
 
@@ -57,6 +60,16 @@ const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
     // /api/orders/create enforces the same rule server-side as a backstop.
     const emailUnverified =
         !!role && role.role === "customer" && !session.user.emailVerified;
+
+    // Second identity check, same enforcement point and same reasoning: a
+    // customer's WhatsApp number is how a courier settles an errand price and
+    // how an outlet reaches them mid-delivery, so an unproven number is an
+    // uncontactable person placing real orders. Checked AFTER email — email
+    // costs nothing to send, a WhatsApp template is billed per message, so the
+    // cheaper challenge goes first. The backend enforces the same rule on the
+    // endpoints that depend on it.
+    const phoneUnverified =
+        !!role && role.role === "customer" && !emailUnverified && !role.phoneVerified;
 
     return (
         <>
@@ -109,8 +122,17 @@ const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
                         the alarm above only rings while a tab is open. */}
                     {isOwner && <PushNotificationNudge />}
 
+                    {/* Couriers only: every part of the job needs a location
+                        fix, so a dead GPS is caught here rather than at the
+                        customer's door with a disabled button. */}
+                    {isCourier && <CourierGpsGuard />}
+
                     {emailUnverified ? (
                         <EmailVerificationGate email={session.user.email} />
+                    ) : phoneUnverified ? (
+                        <PhoneVerificationGate
+                            phoneDisplay={role.phone ? formatIndonesianPhone(role.phone) : null}
+                        />
                     ) : (
                         children
                     )}

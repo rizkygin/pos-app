@@ -87,8 +87,12 @@ const dashboardPage = async () => {
   }
 
   if (role.role === 'customer') {
-    const res = await serverFetch('/api/dashboard/customer');
+    const [res, errandRes] = await Promise.all([
+      serverFetch('/api/dashboard/customer'),
+      serverFetch('/api/errands/active'),
+    ]);
     const data = res.ok ? await res.json() : { ok: false, lastOrders: [], recommend: [], ads: [], hasLocation: false };
+    const errandData = errandRes.ok ? await errandRes.json() : null;
 
     return (
       <CustomerDashboard
@@ -97,6 +101,7 @@ const dashboardPage = async () => {
         ads={data.ads}
         hasLocation={data.hasLocation}
         location={data.location ?? null}
+        hasActiveErrand={Boolean(errandData?.errand)}
       />
     );
   }

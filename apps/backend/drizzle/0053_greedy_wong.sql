@@ -1,0 +1,1 @@
+ALTER TYPE "public"."errand_status" ADD VALUE 'rejected_by_customer' BEFORE 'cancelled_by_customer';

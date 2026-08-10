@@ -51,11 +51,19 @@ export function geolocationMessage(err: GeolocationPositionError): string {
 }
 
 /**
- * getCurrentPosition with one automatic retry on POSITION_UNAVAILABLE.
+ * getCurrentPosition with one automatic retry on POSITION_UNAVAILABLE or
+ * TIMEOUT.
  *
  * The retry is what makes the transient CoreLocation failure invisible to the
- * user. Permission denials and timeouts are NOT retried — the first answer is
- * already final, and retrying a denial just delays the error message.
+ * user. Only PERMISSION_DENIED is treated as final: the user answered, and
+ * asking again just delays the error message.
+ *
+ * TIMEOUT used to be final too, on the reasoning that "the first answer is
+ * already final". It isn't — a timeout is the absence of an answer, not an
+ * answer, and it is the case a second attempt is most likely to fix. It also
+ * had the worst consequence of the three: the courier go-online button gates a
+ * whole shift on a fresh fix, so a 15-second stall left couriers unable to
+ * start work at all, with "coba lagi" as the only advice.
  */
 export function getCurrentPosition(
   onSuccess: PositionCallback,
@@ -63,14 +71,16 @@ export function getCurrentPosition(
   options: PositionOptions = GEOLOCATION_OPTIONS,
 ): void {
   navigator.geolocation.getCurrentPosition(onSuccess, (err) => {
-    if (err.code !== err.POSITION_UNAVAILABLE) {
+    if (err.code === err.PERMISSION_DENIED) {
       onError(err);
       return;
     }
-    // Second attempt: allow a slightly staler cached fix, since any real
-    // position beats failing outright on a form the user is trying to submit.
+    // Second attempt, more patient than the first on both axes: a longer window
+    // to get a fix, and a staler cached one accepted if it comes to that. Any
+    // real position beats failing outright on an action the user is waiting on.
     navigator.geolocation.getCurrentPosition(onSuccess, onError, {
       ...options,
+      timeout: Math.max(options.timeout ?? 0, 30_000),
       maximumAge: 300_000,
     });
   }, options);

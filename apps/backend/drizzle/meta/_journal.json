@@ -365,6 +365,41 @@
       "when": 1785613430324,
       "tag": "0051_courier_devices",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1786265947501,
+      "tag": "0052_errand_orders",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1786330141872,
+      "tag": "0053_greedy_wong",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1786416541872,
+      "tag": "0054_errand_destination_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1786502941872,
+      "tag": "0055_phone_verification",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1786589341872,
+      "tag": "0056_backfill_phone_verified",
+      "breakpoints": true
     }
   ]
 }

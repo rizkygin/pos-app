@@ -22,6 +22,11 @@ export const getRole = cache(async () => {
     return {
         role: me.role as "admin" | "customer" | "courier" | "owner" | "employee",
         data: me.data,
+        // Contact state, for the WhatsApp verification gate in the dashboard
+        // layout. Null phone and unverified are different states: one needs a
+        // number typed in, the other needs the link tapped.
+        phone: (me.phone ?? null) as string | null,
+        phoneVerified: !!me.phoneVerified,
         // Subscription gate (owner/employee only): { alive, status, features }.
         gate: me.gate as { alive: boolean; status: string; features: Record<string, unknown> } | undefined,
     };

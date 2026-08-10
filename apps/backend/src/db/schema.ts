@@ -10,6 +10,7 @@ import {
   index,
   uniqueIndex,
   numeric,
+  check,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
@@ -77,6 +78,26 @@ export const ORDER_FULFILLMENT = pgEnum('order_fulfillment', [
   'service',
   'materials',
 ]);
+// "Suruh Kurir": a courier hired directly, with no outlet and no products in
+// the picture. Deliberately its OWN enum and its own table rather than a fourth
+// ORDER_FULFILLMENT value — an errand has no outlet_id, no order_details and no
+// cash-in, so folding it into orders would have meant making outlet_id nullable
+// and auditing every innerJoin(outletsTable) in the codebase for rows that
+// would otherwise vanish silently rather than error.
+//
+// Three distinct rejection states, not one 'cancelled' plus a reason string:
+// the courier declining (before any price exists), the customer turning down
+// the price he quoted, and the customer backing out of a job already under way
+// have different consequences — only the last starts the customer's cooldown —
+// and a status can be indexed where a reason cannot.
+export const ERRAND_STATUS = pgEnum('errand_status', [
+  'pending',
+  'on_delivery',
+  'delivered',
+  'rejected_by_courier',
+  'rejected_by_customer',
+  'cancelled_by_customer',
+]);
 export const RECIEPENT = pgEnum('receipt', [
   'customer',
   'courier',
@@ -127,7 +148,21 @@ export const usersTable = pgTable('users', {
   // Canonical 628… form — see lib/utils/phone.ts. Everything that writes here
   // must go through normalizeIndonesianPhone, or the column drifts back into
   // holding six spellings of one number.
-  phone: varchar('phone', { length: 255 }).default('082222222222'),
+  // Unique since "Suruh Kurir": a courier identifies the customer he is about
+  // to deal with by looking their number up, and a number shared by two
+  // accounts makes that lookup meaningless.
+  //
+  // The DEFAULT is gone on purpose. It used to be the literal '082222222222',
+  // which under a unique constraint means the first signup succeeds and every
+  // signup after it dies on a constraint violation. Nullable rather than
+  // notNull because Postgres allows unlimited NULLs under UNIQUE — that is what
+  // the placeholder rows were migrated to. A user with a null phone simply
+  // cannot be reached, and cannot use Suruh Kurir until they set one.
+  phone: varchar('phone', { length: 255 }).unique(),
+  // Proof the number is actually reachable on WhatsApp, established by the OTP
+  // flow in routes/phone-verification.ts. Resets to false on every change of
+  // `phone` — a verified flag left standing over a new number certifies nothing.
+  phone_verified: boolean('phone_verified').default(false).notNull(),
   // When the user last CHANGED their number, gating the one-per-month limit.
   // Null means never changed, so the first edit is free: a typo caught right
   // after signup shouldn't cost someone a month of being uncontactable.
@@ -138,6 +173,46 @@ export const usersTable = pgTable('users', {
   image: text('image').default('avatar.png'),
   ...timestamps,
 });
+
+/**
+ * Pending WhatsApp verification links, mirroring how email verification works:
+ * we send a one-time link, the user taps it, the number is proven reachable.
+ *
+ * The token is stored HASHED. It is a bearer secret — whoever holds it can mark
+ * a number verified — so a dump of this table in plaintext would hand over every
+ * pending verification. The link carries the raw token; only its SHA-256 lands
+ * here, exactly like a password reset token.
+ *
+ * Rows are kept after use (consumed_at set) rather than deleted: `sent_at` is
+ * what the resend cooldown and the daily send cap are counted from, and deleting
+ * the row would reset both — which is the whole cost control, since every send
+ * is a billed WhatsApp template message.
+ */
+export const phoneVerificationsTable = pgTable(
+  'phone_verifications',
+  {
+    id: text('id').primaryKey(),
+    user_id: text('user_id')
+      .notNull()
+      .references(() => usersTable.id),
+    // The number this link was sent to, canonical 628…. Checked again when the
+    // link is opened: a user who edits their number after requesting a link
+    // must not be able to verify the new one with the old link.
+    phone: varchar('phone', { length: 255 }).notNull(),
+    token_hash: varchar('token_hash', { length: 128 }).notNull(),
+    expires_at: timestamp('expires_at', { withTimezone: true }).notNull(),
+    consumed_at: timestamp('consumed_at', { withTimezone: true }),
+    sent_at: timestamp('sent_at', { withTimezone: true }).notNull().defaultNow(),
+    ...timestamps,
+  },
+  (table) => [
+    index('phone_verifications_user_idx').on(table.user_id, table.sent_at),
+    // The lookup the verify endpoint does: hash the token from the URL, find
+    // its row. Unique because a collision here would be two users' links
+    // resolving to one record.
+    uniqueIndex('phone_verifications_token_uq').on(table.token_hash),
+  ],
+);
 
 export const locationsTable = pgTable('locations', {
   id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
@@ -489,6 +564,78 @@ export const orderOffersTable = pgTable(
   ],
 );
 
+/**
+ * A courier hired directly by a customer — "Suruh Kurir".
+ *
+ * Mirrors ordersTable in spirit but shares none of its machinery. There is no
+ * outlet, no products, no order_details, no promo and no cash-in: the courier
+ * names his own price, collects it himself, and the platform takes nothing.
+ * That is why errands are absent from every revenue and outlet report — not an
+ * oversight, a deliberate exclusion.
+ *
+ * It also never enters dispatch. Regular orders are broadcast to a ranked queue
+ * of couriers (see orderOffersTable); an errand is aimed at ONE courier the
+ * customer picked by name, so there is nothing to rank and no queue to exhaust.
+ *
+ * The negotiation itself happens on WhatsApp, outside the app. What lands here
+ * is only the outcome: the courier accepts with a price, or declines.
+ */
+export const errandOrdersTable = pgTable(
+  'errand_orders',
+  {
+    id: text('id').primaryKey(),
+    // Straight to users, not customers. An errand needs a name, a phone and a
+    // saved address — all of which live on users — and nothing customersTable
+    // adds. Skipping it also means a courier can hire another courier.
+    user_id: text('user_id')
+      .notNull()
+      .references(() => usersTable.id),
+    courier_id: integer('courier_id')
+      .notNull()
+      .references(() => couriersTable.id),
+    status: ERRAND_STATUS('status').notNull().default('pending'),
+    // What the customer wants done, in their own words.
+    note: text('note'),
+    // The courier's own quote, written when he accepts. Null while pending —
+    // nobody, including the system, knows the price before then. varchar to
+    // match orders.delivery_fee rather than introduce a second money type.
+    price: varchar('price', { length: 15 }),
+    rejected_reason: varchar('rejected_reason', { length: 255 }),
+    // Where the courier rides TO: a SNAPSHOT of the customer's default saved
+    // location (locationsTable), not a reference to it. A location row is
+    // editable: pointing at it would let a customer renaming "Rumah" months
+    // later silently rewrite where a finished errand was delivered.
+    //
+    // Named pickup_* until migration 0054, which was a misnomer — an errand has
+    // no outlet to collect from, so this is the destination and nothing else.
+    //
+    // numeric, like couriers.last_lat/lon and deliberately NOT the varchar used
+    // by outlets and locations — those columns accepted '' and the literal
+    // 'NaN', which is how coordinates poisoned the map picker (migration 0041).
+    destination_address: varchar('destination_address', { length: 255 }),
+    destination_lat: numeric('destination_lat', { precision: 10, scale: 7 }),
+    destination_lon: numeric('destination_lon', { precision: 10, scale: 7 }),
+    accepted_at: timestamp('accepted_at', { withTimezone: true }),
+    delivered_at: timestamp('delivered_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    // Exclusivity, enforced by Postgres rather than by a handler. A courier
+    // holds at most one pending request at a time, so two customers tapping the
+    // same courier in the same instant resolve to one winner and one 409. A
+    // read-then-write check in application code cannot win that race.
+    //
+    // Only 'pending' is constrained: once accepted the job moves to
+    // on_delivery, and the courier is then held busy by getCourierAvailability
+    // instead — see lib/utils/courier-availability.ts.
+    uniqueIndex('errand_orders_courier_pending_uq')
+      .on(table.courier_id)
+      .where(sql`status = 'pending'`),
+    index('errand_orders_user_status_idx').on(table.user_id, table.status),
+    index('errand_orders_courier_status_idx').on(table.courier_id, table.status),
+  ],
+);
+
 export const orderDetailsTable = pgTable(
   'orderDetails',
   {
@@ -518,9 +665,22 @@ export const ratingsTable = pgTable(
   'ratings',
   {
     id: text('id').primaryKey(),
-    order_details_id: integer('order_details_id')
-      .notNull()
-      .references(() => orderDetailsTable.id),
+    // Nullable since errands were added: an errand has no products, therefore
+    // no orderDetails row to hang a rating on. Exactly one of
+    // order_details_id / errand_order_id is set, enforced by a CHECK in the
+    // migration.
+    //
+    // Errand ratings deliberately live in THIS table rather than one of their
+    // own, because getCourierRatingInfo() reads the last N rows here to decide
+    // probation. A separate table would have meant either a UNION in that hot
+    // path or — far worse, and silently — errand behaviour never counting
+    // against a courier at all.
+    order_details_id: integer('order_details_id').references(
+      () => orderDetailsTable.id,
+    ),
+    errand_order_id: text('errand_order_id').references(
+      () => errandOrdersTable.id,
+    ),
     ratings: numeric('ratings', { precision: 3, scale: 2 }).default('5'),
     comment: text('comment'),
     reviewer: text('reviewer_id')
@@ -533,6 +693,15 @@ export const ratingsTable = pgTable(
     ...timestamps,
   },
   (table) => [
+    // Exactly one target, never both and never neither. order_details_id was
+    // mandatory until errands existed; making it nullable without this would
+    // quietly permit ratings attached to nothing at all.
+    check(
+      'ratings_one_target_chk',
+      sql`(${table.order_details_id} IS NOT NULL AND ${table.errand_order_id} IS NULL)
+        OR (${table.order_details_id} IS NULL AND ${table.errand_order_id} IS NOT NULL)`,
+    ),
+    index('ratings_errand_order_id_idx').on(table.errand_order_id),
     index('ratings_outlet_id_idx').on(table.outlet_id),
     index('ratings_product_id_idx').on(table.product_id),
     index('ratings_reciepent_idx').on(table.reciepent),

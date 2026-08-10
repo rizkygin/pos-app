@@ -43,6 +43,19 @@ export async function meRoutes(app: FastifyInstance) {
 
     const userId = session.user.id;
 
+    // Contact state travels with every role, so the dashboard layout can gate on
+    // it without a second round-trip. Only customers are gated today, but the
+    // number is equally real for a courier or an owner.
+    const [contact] = await db
+      .select({ phone: usersTable.phone, phoneVerified: usersTable.phone_verified })
+      .from(usersTable)
+      .where(eq(usersTable.id, userId))
+      .limit(1);
+    const phone = {
+      phone: contact?.phone ?? null,
+      phoneVerified: contact?.phoneVerified ?? false,
+    };
+
     const probes: { role: Role; row: () => Promise<unknown> }[] = [
       { role: "admin", row: () => db.query.adminsTable.findFirst({ where: eq(adminsTable.user_id, userId) }) },
       { role: "customer", row: () => db.query.customersTable.findFirst({ where: eq(customersTable.user_id, userId) }) },
@@ -57,9 +70,9 @@ export async function meRoutes(app: FastifyInstance) {
         // plan-bound pages (Faktur/Stok/...) without extra round-trips.
         if (probe.role === "owner") {
           const gate = await getSubscriptionGate(userId);
-          return reply.send({ role: probe.role, data, gate });
+          return reply.send({ role: probe.role, data, gate, ...phone });
         }
-        return reply.send({ role: probe.role, data });
+        return reply.send({ role: probe.role, data, ...phone });
       }
     }
 
@@ -76,6 +89,7 @@ export async function meRoutes(app: FastifyInstance) {
       return reply.send({
         role: "employee",
         gate,
+        ...phone,
         data: {
           id: employment.employee.id,
           outlet_id: employment.outlet.id,
@@ -100,7 +114,11 @@ export async function meRoutes(app: FastifyInstance) {
     if (!session?.user) return reply.status(401).send({ success: false });
 
     const [row] = await db
-      .select({ phone: usersTable.phone, changedAt: usersTable.phone_changed_at })
+      .select({
+        phone: usersTable.phone,
+        changedAt: usersTable.phone_changed_at,
+        verified: usersTable.phone_verified,
+      })
       .from(usersTable)
       .where(eq(usersTable.id, session.user.id))
       .limit(1);
@@ -110,6 +128,7 @@ export async function meRoutes(app: FastifyInstance) {
     return reply.send({
       success: true,
       phone: row?.phone ?? null,
+      phoneVerified: row?.verified ?? false,
       // Local 08… form for display; the column holds canonical 628…
       phoneDisplay: row?.phone ? formatIndonesianPhone(row.phone) : null,
       canChange: nextChangeAt === null,
@@ -152,9 +171,11 @@ export async function meRoutes(app: FastifyInstance) {
       });
     }
 
+    // A new number is an unproven number: carrying the old flag over would let
+    // anyone verify once and then swap in a number they don't own.
     await db
       .update(usersTable)
-      .set({ phone, phone_changed_at: new Date() })
+      .set({ phone, phone_changed_at: new Date(), phone_verified: false })
       .where(eq(usersTable.id, session.user.id));
 
     return reply.send({

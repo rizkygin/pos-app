@@ -15,6 +15,7 @@ import {
 } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
+import { hasVerifiedPhone, PHONE_NOT_VERIFIED } from "../lib/utils/verified-contact";
 import { getOutletAccess, hasPermission, parseActiveOutletId, getSubscriptionGate, gateBlocks } from "../lib/outlet-access";
 import { CATEGORY_IN } from "../lib/cashflow-categories";
 import { roadDistance, billableKm } from "../lib/utils/road-distance";
@@ -253,15 +254,19 @@ export async function orderRoutes(app: FastifyInstance) {
     // Backstop for the frontend gate (dashboard/layout.tsx renders
     // EmailVerificationGate instead of any page content for an unverified
     // customer). Enforced here too since a customer could hit this endpoint
-    // directly and skip that screen. There is no WhatsApp/phone verification in
-    // this app, so a verified email is the only identity check before money
-    // changes hands.
+    // directly and skip that screen.
     if (!session.user.emailVerified) {
       return reply.status(403).send({
         success: false,
         error: "Verifikasi email kamu terlebih dahulu sebelum membuat pesanan.",
         code: "EMAIL_NOT_VERIFIED",
       });
+    }
+
+    // Same backstop for the second identity check: an outlet or courier calls
+    // this number mid-delivery, so an unproven one is an order nobody can chase.
+    if (!(await hasVerifiedPhone(session.user.id))) {
+      return reply.status(403).send(PHONE_NOT_VERIFIED);
     }
 
     const data = request.body as CreateOrderBody;

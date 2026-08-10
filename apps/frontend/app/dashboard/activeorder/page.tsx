@@ -6,6 +6,7 @@ import { getSession } from '@/lib/auth';
 import { serverFetch } from '@/lib/server-fetch';
 import { ActiveOrderAnimation } from '@/components/order/active-order-animation';
 import { PendingOrdersLobby } from '@/components/dashboard/pending-orders-lobby';
+import { ErrandTracking } from '@/components/errand/errand-tracking';
 
 export default async function ActiveOrderPage() {
   const role = await getRole();
@@ -63,6 +64,21 @@ export default async function ActiveOrderPage() {
           outletLogo={outlet?.avatar ?? ''}
           cashierName={session?.user?.name ?? 'Owner'}
         />
+      </main>
+    );
+  }
+
+  // An errand ("Suruh Kurir") is checked before the outlet order, because it
+  // lives in its own table and a customer can only ever have one live job of
+  // either kind. Checked first rather than last so the redirect below — which
+  // assumes "no active order means nothing is happening" — cannot bounce a
+  // customer away from an errand that is very much in progress.
+  const errandRes = await serverFetch('/api/errands/active');
+  const errandData = errandRes.ok ? await errandRes.json() : null;
+  if (errandData?.errand) {
+    return (
+      <main className="px-4 pb-12">
+        <ErrandTracking initial={errandData.errand} />
       </main>
     );
   }

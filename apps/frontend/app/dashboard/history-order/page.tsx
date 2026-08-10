@@ -22,6 +22,7 @@ import {
   Truck,
 } from 'lucide-react';
 import { API_URL } from '@/lib/api-url';
+import { HistorySwitcher } from '@/components/history-switcher';
 
 function fmtIDR(n: number) {
   return new Intl.NumberFormat('id-ID', {
@@ -242,8 +243,15 @@ export default function HistoryOrderPage() {
           </div>
         </div>
 
-        {/* List */}
+        {/* Reaching the errand history from a phone: the bottom nav is capped at
+            five tabs and the sidebar is hidden in portrait, so this is the only
+            route to it on the device most customers use. */}
         <div className="mt-5">
+          <HistorySwitcher active="order" />
+        </div>
+
+        {/* List */}
+        <div className="mt-1">
           {orders === null ? (
             <div className="flex min-h-[30vh] items-center justify-center text-muted-foreground">
               <Loader2 className="size-6 animate-spin" />

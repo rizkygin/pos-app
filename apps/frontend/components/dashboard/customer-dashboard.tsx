@@ -32,6 +32,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { formatCurrency } from "@/lib/utils/format";
 import { resolveProductImage, resolveBannerImage, isBackendImage } from "@/lib/image-src";
+import { API_URL } from "@/lib/api-url";
 import { CustomerHero, type ActiveLocation } from "@/components/dashboard/customer-hero";
 
 type LastOrder = {
@@ -66,7 +67,10 @@ type AdBanner = {
 
 function getOutletAvatarSrc(avatar: string): string {
     if (!avatar || avatar === "avatar.png") return "/avatar.png";
-    if (avatar.startsWith("http") || avatar.startsWith("/")) return avatar;
+    if (avatar.startsWith("http")) return avatar;
+    // Backend-served uploads live on the API origin, not the frontend public dir.
+    if (avatar.startsWith("/uploads/")) return `${API_URL}${avatar}`;
+    if (avatar.startsWith("/")) return avatar;
     return `/avatars/${avatar}`;
 }
 
@@ -84,9 +88,10 @@ type CustomerDashboardProps = {
     ads?: AdBanner[];
     hasLocation?: boolean;
     location?: ActiveLocation;
+    hasActiveErrand?: boolean;
 };
 
-export const CustomerDashboard = ({ lastOrders = [], recommend = [], ads = [], hasLocation = true, location = null }: CustomerDashboardProps) => {
+export const CustomerDashboard = ({ lastOrders = [], recommend = [], ads = [], hasLocation = true, location = null, hasActiveErrand = false }: CustomerDashboardProps) => {
     const [adIndex, setAdIndex] = useState(0);
 
     useEffect(() => {
@@ -105,7 +110,10 @@ export const CustomerDashboard = ({ lastOrders = [], recommend = [], ads = [], h
         { name: "Mart", icon: ShoppingBag,url: 'mart', color: "bg-emerald-100 text-emerald-600" , available: 'available'},
         { name: "Minuman", icon: Coffee, url: 'drink', color: "bg-amber-100 text-amber-800" , available: 'available'},
         { name: "Jasa", icon: Wrench, url: 'service', color: "bg-amber-100 text-amber-800", available: 'available' },
-        { name: "Send", icon: Truck, url:'send', color: "bg-blue-100 text-blue-600" , available: 'non'},
+        // Suruh Kurir hires a courier directly, so it does NOT live under
+        // /dashboard/order/<slug> like the category tiles around it — hence the
+        // explicit href.
+        { name: "Suruh Kurir", icon: Truck, url:'suruh-kurir', href: '/dashboard/suruh-kurir', color: "bg-blue-100 text-blue-600" , available: 'available', badge: hasActiveErrand},
         { name: "Ride", icon: Bike, url: 'ride',color: "bg-purple-100 text-purple-600" , available: 'non'},
     ];
 
@@ -188,9 +196,26 @@ export const CustomerDashboard = ({ lastOrders = [], recommend = [], ads = [], h
 
                     const content = (
                         <>
-                            <div className={`w-16 h-16 md:w-20 md:h-20 rounded-3xl ${isAvailable ? cat.color : "bg-muted text-muted-foreground"} flex items-center justify-center shadow-sm transition-all duration-300 ${isAvailable ? "group-hover:shadow-md group-hover:-translate-y-1" : "opacity-50"}`}>
-                                <cat.icon className="h-8 w-8" />
-                            </div>
+                            {/* The whole tile hops while an errand is live, so
+                                the badge is noticed even at a glance. */}
+                            <motion.div
+                                className="relative"
+                                animate={cat.badge ? { y: [0, -7, 0] } : { y: 0 }}
+                                transition={cat.badge ? { duration: 0.9, repeat: Infinity, ease: "easeInOut" } : { duration: 0.2 }}
+                            >
+                                <div className={`w-16 h-16 md:w-20 md:h-20 rounded-3xl ${isAvailable ? cat.color : "bg-muted text-muted-foreground"} flex items-center justify-center shadow-sm transition-all duration-300 ${isAvailable ? "group-hover:shadow-md group-hover:-translate-y-1" : "opacity-50"}`}>
+                                    <cat.icon className="h-8 w-8" />
+                                </div>
+                                {/* Live errand: a red dot is the only thing that
+                                    pulls the eye back to the tile the customer
+                                    needs to reopen. */}
+                                {cat.badge && (
+                                    <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5">
+                                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-500 opacity-75" />
+                                        <span className="relative inline-flex h-3.5 w-3.5 rounded-full bg-red-600 ring-2 ring-background" />
+                                    </span>
+                                )}
+                            </motion.div>
                             <span className={`text-xs font-black uppercase tracking-widest transition-colors ${isAvailable ? "text-muted-foreground group-hover:text-foreground" : "text-muted-foreground/50"}`}>{cat.name}</span>
                         </>
                     );
@@ -204,7 +229,7 @@ export const CustomerDashboard = ({ lastOrders = [], recommend = [], ads = [], h
                         >
                             {isAvailable ? (
                                 <Link
-                                    href={`/dashboard/order/${cat.url}`}
+                                    href={cat.href ?? `/dashboard/order/${cat.url}`}
                                     className="flex flex-col items-center gap-3 group"
                                 >
                                     {content}
@@ -305,6 +330,7 @@ export const CustomerDashboard = ({ lastOrders = [], recommend = [], ads = [], h
                                     <div className="relative h-12 w-12 rounded-2xl overflow-hidden border border-border/50 shrink-0">
                                         <Image
                                             src={getOutletAvatarSrc(order.outletAvatar)}
+                                            unoptimized={isBackendImage(order.outletAvatar)}
                                             alt={order.outletName}
                                             fill
                                             className="object-cover"
