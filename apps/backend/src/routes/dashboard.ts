@@ -520,7 +520,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
       )
       .groupBy(outletsTable.id, productsTable.id)
       .orderBy(desc(productsTable.review_count))
-      .limit(3);
+      .limit(6);
 
     // label/address ride along for the dashboard's delivery-address header —
     // same default-address row the distances below are measured from, so what
