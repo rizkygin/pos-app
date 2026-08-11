@@ -146,7 +146,7 @@ export function AdminErrandsClient() {
       ) : errands.length === 0 ? (
         <div className="rounded-2xl border border-dashed py-16 text-center">
           <PackageSearch className="mx-auto mb-3 h-8 w-8 text-muted-foreground/40" />
-          <p className="text-sm font-semibold">Belum ada pesanan Suruh Kurir</p>
+          <p className="text-sm font-semibold">Belum ada pesanan Tugas Kurir</p>
           <p className="mt-0.5 text-xs text-muted-foreground">
             Pesanan muncul di sini begitu pelanggan menunjuk seorang kurir.
           </p>

@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils';
  *
  * Exists because the bottom nav is full: it caps at five tabs by design ("a
  * sixth makes each target narrower than a thumb"), and the sidebar — which does
- * carry a Riwayat Suruh Kurir row — is hidden on portrait phones. Without this
+ * carry a Riwayat Tugas Kurir row — is hidden on portrait phones. Without this
  * control the errand history would be desktop-only, which is backwards for a
  * feature whose customers are on phones.
  *
@@ -19,7 +19,7 @@ import { cn } from '@/lib/utils';
 export function HistorySwitcher({ active }: { active: 'order' | 'errand' }) {
   const items = [
     { key: 'order' as const, label: 'Pesanan', href: '/dashboard/history-order', icon: Receipt },
-    { key: 'errand' as const, label: 'Suruh Kurir', href: '/dashboard/history-errand', icon: Truck },
+    { key: 'errand' as const, label: 'Tugaskan Kurir', href: '/dashboard/history-errand', icon: Truck },
   ];
 
   return (

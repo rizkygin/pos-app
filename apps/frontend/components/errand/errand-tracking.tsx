@@ -3,13 +3,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import {
   Loader2,
   MapPin,
   MessageCircle,
   Star,
   UserRound,
+  UserX,
   X,
 } from 'lucide-react';
 import { API_URL } from '@/lib/api-url';
@@ -40,6 +41,13 @@ type Errand = {
   canCancel: boolean;
 };
 
+/** How the errand ended, when it ended in a way the customer did not choose. */
+type Rejection = {
+  status: 'rejected_by_courier';
+  courierName: string;
+  reason: string | null;
+};
+
 const POLL_MS = 4000;
 
 export function ErrandTracking({ initial }: { initial: Errand }) {
@@ -51,6 +59,9 @@ export function ErrandTracking({ initial }: { initial: Errand }) {
   // Ticks locally between polls so the countdown moves every second instead of
   // jumping in four-second steps.
   const [secondsLeft, setSecondsLeft] = useState(initial.cancellableInSeconds);
+  // Set once the courier declines; holds this screen in place until the customer
+  // has read it and chosen what to do next.
+  const [rejection, setRejection] = useState<Rejection | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -61,9 +72,17 @@ export function ErrandTracking({ initial }: { initial: Errand }) {
       const data = await res.json();
       if (!data.success) return;
       if (!data.errand) {
-        // Finished, rejected or cancelled while this screen was open. The
-        // server decides what comes next; a refresh re-runs its guards rather
-        // than this component guessing which of the three happened.
+        // A rejection is the one ending the customer did not ask for, so it is
+        // told rather than navigated away from: the screen would otherwise blink
+        // back to an empty order page with no explanation. Everything else
+        // (delivered, their own cancel) they already know about.
+        if (data.outcome?.status === 'rejected_by_courier') {
+          setRejection(data.outcome);
+          return;
+        }
+        // Finished or cancelled while this screen was open. The server decides
+        // what comes next; a refresh re-runs its guards rather than this
+        // component guessing which of the two happened.
         router.refresh();
         return;
       }
@@ -75,9 +94,12 @@ export function ErrandTracking({ initial }: { initial: Errand }) {
   }, [router]);
 
   useEffect(() => {
+    // Nothing left to watch once the job is over — and a poll that kept running
+    // would re-set the same rejection under the customer's fingers.
+    if (rejection) return;
     const id = setInterval(load, POLL_MS);
     return () => clearInterval(id);
-  }, [load]);
+  }, [load, rejection]);
 
   useEffect(() => {
     if (secondsLeft <= 0) return;
@@ -245,7 +267,7 @@ export function ErrandTracking({ initial }: { initial: Errand }) {
 
         {errand.note && (
           <p className="mt-3 rounded-xl bg-muted px-3 py-2.5 text-sm">
-            <span className="font-semibold">Suruhan: </span>
+            <span className="font-semibold">Tugas: </span>
             {errand.note}
           </p>
         )}
@@ -294,6 +316,58 @@ export function ErrandTracking({ initial }: { initial: Errand }) {
           Beri kurir waktu buat menjawab dulu sebelum membatalkan.
         </p>
       )}
+
+      {/* Not dismissable by tapping outside: this is the answer the customer has
+          been waiting for, and closing it by accident puts them back on a screen
+          that no longer explains anything. Both ways out are buttons. */}
+      <AnimatePresence>
+        {rejection && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          >
+            <motion.div
+              initial={{ y: 40, scale: 0.98 }}
+              animate={{ y: 0, scale: 1 }}
+              className="w-full max-w-sm rounded-3xl bg-background p-5 text-center"
+            >
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-50 dark:bg-rose-950/30">
+                <UserX className="h-7 w-7 text-rose-500" />
+              </div>
+              <h2 className="mt-3 text-lg font-black">
+                {rejection.courierName} Tidak Bisa Ambil
+              </h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Kurir menolak tugas pian. Tenang, kurir lain masih bisa dipilih.
+                catatan dan tujuan pian ulun simpankan.
+              </p>
+              {rejection.reason && (
+                <p className="mt-3 rounded-xl bg-muted px-3 py-2.5 text-left text-sm">
+                  <span className="font-semibold">Alasan: </span>
+                  {rejection.reason}
+                </p>
+              )}
+
+              <button
+                type="button"
+                onClick={() => router.push('/dashboard/suruh-kurir')}
+                className="mt-4 w-full rounded-full bg-rose-500 px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-rose-600"
+              >
+                Pilih Kurir Lain
+              </button>
+              <button
+                type="button"
+                onClick={() => router.push('/dashboard/order')}
+                className="mt-2 w-full rounded-full border px-4 py-3 text-sm font-bold"
+              >
+                Nanti Saja
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

@@ -255,7 +255,7 @@ const customerNavItems: NavItem[] = [
     // outlet, no items and no total, so it shares none of that screen's
     // columns — and a customer looking for "the thing I asked the courier to
     // do" is looking for the note, which only exists here.
-    name: 'Riwayat Suruh Kurir',
+    name: 'Riwayat Tugas Kurir',
     url: '/dashboard/history-errand',
     icon: Truck,
     iconBg: 'bg-blue-100 dark:bg-blue-950',
@@ -297,7 +297,7 @@ const adminManageNavItems: NavItem[] = [
     iconColor: 'text-sky-600 dark:text-sky-400',
   },
   {
-    name: 'Suruh Kurir',
+    name: 'Tugaskan Kurir',
     url: '/dashboard/admin/errand',
     icon: Bike,
     iconBg: 'bg-amber-100 dark:bg-amber-950',

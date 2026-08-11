@@ -12,7 +12,7 @@ const AdminErrandPage = async () => {
   return (
     <main className="px-4 mx-2 md:mx-6 pb-12 space-y-4">
       <DashboardHeader
-        title="Suruh Kurir"
+        title="Tugaskan Kurir"
         description="Semua pesanan kurir langsung dari pelanggan"
       />
       <AdminErrandsClient />

@@ -78,7 +78,7 @@ export const ORDER_FULFILLMENT = pgEnum('order_fulfillment', [
   'service',
   'materials',
 ]);
-// "Suruh Kurir": a courier hired directly, with no outlet and no products in
+// "Tugaskan Kurir": a courier hired directly, with no outlet and no products in
 // the picture. Deliberately its OWN enum and its own table rather than a fourth
 // ORDER_FULFILLMENT value — an errand has no outlet_id, no order_details and no
 // cash-in, so folding it into orders would have meant making outlet_id nullable
@@ -148,7 +148,7 @@ export const usersTable = pgTable('users', {
   // Canonical 628… form — see lib/utils/phone.ts. Everything that writes here
   // must go through normalizeIndonesianPhone, or the column drifts back into
   // holding six spellings of one number.
-  // Unique since "Suruh Kurir": a courier identifies the customer he is about
+  // Unique since "Tugaskan Kurir": a courier identifies the customer he is about
   // to deal with by looking their number up, and a number shared by two
   // accounts makes that lookup meaningless.
   //
@@ -157,7 +157,7 @@ export const usersTable = pgTable('users', {
   // signup after it dies on a constraint violation. Nullable rather than
   // notNull because Postgres allows unlimited NULLs under UNIQUE — that is what
   // the placeholder rows were migrated to. A user with a null phone simply
-  // cannot be reached, and cannot use Suruh Kurir until they set one.
+  // cannot be reached, and cannot use Tugaskan Kurir until they set one.
   phone: varchar('phone', { length: 255 }).unique(),
   // Proof the number is actually reachable on WhatsApp, established by the OTP
   // flow in routes/phone-verification.ts. Resets to false on every change of
@@ -565,7 +565,7 @@ export const orderOffersTable = pgTable(
 );
 
 /**
- * A courier hired directly by a customer — "Suruh Kurir".
+ * A courier hired directly by a customer — "Tugaskan Kurir".
  *
  * Mirrors ordersTable in spirit but shares none of its machinery. There is no
  * outlet, no products, no order_details, no promo and no cash-in: the courier

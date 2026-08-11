@@ -71,7 +71,7 @@ export function ErrandRatingForm({ errandId }: { errandId: string }) {
     <div className="mx-auto max-w-md pt-8">
       <h1 className="text-center text-xl font-black">Beri Penilaian</h1>
       <p className="mt-1 text-center text-sm text-muted-foreground">
-        Bagaimana pengalaman pian dengan suruhan ini?
+        Bagaimana pengalaman pian dengan tugas ini?
       </p>
 
       <div className="mt-6 flex justify-center gap-1.5">

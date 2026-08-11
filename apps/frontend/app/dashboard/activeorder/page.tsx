@@ -68,7 +68,7 @@ export default async function ActiveOrderPage() {
     );
   }
 
-  // An errand ("Suruh Kurir") is checked before the outlet order, because it
+  // An errand ("Tugaskan Kurir") is checked before the outlet order, because it
   // lives in its own table and a customer can only ever have one live job of
   // either kind. Checked first rather than last so the redirect below — which
   // assumes "no active order means nothing is happening" — cannot bounce a

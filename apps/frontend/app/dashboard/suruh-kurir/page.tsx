@@ -4,7 +4,7 @@ import { serverFetch } from '@/lib/server-fetch';
 import { ErrandCourierPicker } from '@/components/errand/errand-courier-picker';
 
 /**
- * "Suruh Kurir" — hire a courier directly, no outlet involved.
+ * "Tugaskan Kurir" — hire a courier directly, no outlet involved.
  *
  * The list itself is fetched client-side rather than here: availability changes
  * as couriers go online and pick up jobs, so a server-rendered snapshot would

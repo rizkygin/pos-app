@@ -1422,7 +1422,7 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   /**
-   * Every "Suruh Kurir" errand on the platform.
+   * Every "Tugaskan Kurir" errand on the platform.
    *
    * Errands are outside the platform's accounting — no outlet, no commission,
    * nothing booked — so they never appear in /api/admin/orders, which is built

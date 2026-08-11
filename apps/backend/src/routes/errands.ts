@@ -21,7 +21,7 @@ import { updateRatings } from "../lib/update-ratings";
 import { sendErrandPush } from "../lib/fcm";
 
 /**
- * "Suruh Kurir" — hiring one courier directly, with no outlet and no products.
+ * "Tugaskan Kurir" — hiring one courier directly, with no outlet and no products.
  *
  * The negotiation happens on WhatsApp, outside the app entirely. These
  * endpoints only record the outcome: the customer names a courier, the courier
@@ -53,6 +53,39 @@ const CANCEL_FLOOR_MS = 5 * 60 * 1000;
 const COOLDOWN_MS = 5 * 60 * 1000;
 
 /**
+ * How long a courier who declined is off-limits TO THAT CUSTOMER.
+ *
+ * Scoped to the pair on purpose. A rejection is not the customer's fault, so it
+ * must not cost them the whole courier list — every other courier stays hireable
+ * the same second. What it does stop is the one thing a "no" invites: tapping
+ * the same courier again straight away, which re-rings a phone that has already
+ * answered and turns a decline into a loop the courier cannot get out of.
+ *
+ * The courier disappears from that customer's list for the duration rather than
+ * sitting there as a tappable name that always fails.
+ */
+const REJECT_COOLDOWN_MS = 10 * 60 * 1000;
+
+/**
+ * How long a rejected request stays offerable back to the customer as a draft.
+ *
+ * Long enough to cover "he said no, let me find someone else" including a walk
+ * away from the phone; short enough that returning to the screen tomorrow gives
+ * a blank form rather than yesterday's job.
+ */
+const DRAFT_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * How long after a rejection the tracking screen still reports it.
+ *
+ * The screen polls every few seconds, so this only has to outlive one poll plus
+ * a phone that was locked in a pocket. Kept short deliberately: past this the
+ * customer has already been told, and re-announcing it on their next visit
+ * would be the app nagging about a decision they have moved on from.
+ */
+const REJECTION_NOTICE_MS = 3 * 60 * 1000;
+
+/**
  * How close the courier must be to the customer's pin to close the job.
  *
  * "Tandai Sudah Sampai" was previously an unguarded button: a courier could end
@@ -73,7 +106,7 @@ const ARRIVAL_RADIUS_M = 20;
 const MAX_ACCURACY_M = 75;
 
 const NO_ADDRESS_MESSAGE =
-  "Atur alamat utama pian dulu di halaman Alamat sebelum suruh kurir.";
+  "Atur alamat utama pian dulu di halaman Alamat sebelum menugaskan kurir.";
 const NO_PHONE_MESSAGE =
   "Nomor HP pian belum diatur. Kurir perlu nomor buat menghubungi lewat WhatsApp.";
 
@@ -233,6 +266,15 @@ export async function errandRoutes(app: FastifyInstance) {
         reviewCount: couriersTable.review_count,
         lastLat: couriersTable.last_lat,
         lastLon: couriersTable.last_lon,
+        // When this courier last turned THIS customer down, if still inside the
+        // cooldown. Selected rather than filtered on: see the row below.
+        rejectedAt: sql<Date | null>`(
+          SELECT MAX(${errandOrdersTable.updatedAt}) FROM ${errandOrdersTable}
+          WHERE ${errandOrdersTable.courier_id} = ${couriersTable.id}
+            AND ${errandOrdersTable.user_id} = ${user.id}
+            AND ${errandOrdersTable.status} = 'rejected_by_courier'
+            AND ${errandOrdersTable.updatedAt} >= ${new Date(Date.now() - REJECT_COOLDOWN_MS)}
+        )`,
       })
       .from(couriersTable)
       .innerJoin(usersTable, eq(couriersTable.user_id, usersTable.id))
@@ -258,6 +300,11 @@ export async function errandRoutes(app: FastifyInstance) {
             WHERE ${errandOrdersTable.courier_id} = ${couriersTable.id}
               AND ${errandOrdersTable.status} IN ('pending', 'on_delivery')
           )`,
+          // A courier who declined this customer is NOT filtered out here. He is
+          // returned with `rejectedCooldownSeconds` set and the screen renders
+          // him greyed out and untappable: a name that silently disappears just
+          // reads as a bug, and the customer is left wondering where the courier
+          // they were talking to went.
         ),
       );
 
@@ -283,6 +330,17 @@ export async function errandRoutes(app: FastifyInstance) {
             originValid && hasPosition
               ? haversineKm(originLat, originLon, lat, lon)
               : null,
+          // Seconds until this courier can be hired by this customer again, or
+          // null when he is hireable right now. The screen disables the row and
+          // says so rather than dropping it.
+          rejectedCooldownSeconds: c.rejectedAt
+            ? Math.max(
+                1,
+                Math.ceil(
+                  (REJECT_COOLDOWN_MS - (Date.now() - new Date(c.rejectedAt).getTime())) / 1000,
+                ),
+              )
+            : null,
         };
       })
       // Couriers who have never reported a position sort last rather than
@@ -290,6 +348,11 @@ export async function errandRoutes(app: FastifyInstance) {
       // how far away they are, and hiding them would shrink the pool for a
       // missing GPS ping.
       .sort((a, b) => {
+        // Whoever just said no sits at the bottom: still visible, so the absence
+        // is explained, but never in the way of the couriers who can be hired.
+        if (!!a.rejectedCooldownSeconds !== !!b.rejectedCooldownSeconds) {
+          return a.rejectedCooldownSeconds ? 1 : -1;
+        }
         if (a.distanceKm === null) return b.distanceKm === null ? 0 : 1;
         if (b.distanceKm === null) return -1;
         return a.distanceKm - b.distanceKm;
@@ -313,6 +376,16 @@ export async function errandRoutes(app: FastifyInstance) {
       return reply.status(400).send({ success: false, error: "courierId required" });
     }
     const note = typeof body.note === "string" ? body.note.trim().slice(0, 500) : "";
+    // Required, not optional. The whole errand is this sentence — without it the
+    // courier is riding somewhere to do he does not know what, and the price he
+    // is meant to quote on WhatsApp has nothing behind it.
+    if (!note) {
+      return reply.status(400).send({
+        success: false,
+        error: "Tulis dulu tugasnya biar kurir tahu yang mau dikerjakan.",
+        code: "note_required",
+      });
+    }
 
     const destination = readDestination(body.destination);
     if (destination === null) {
@@ -395,6 +468,36 @@ export async function errandRoutes(app: FastifyInstance) {
       });
     }
 
+    // The same rejection cooldown the list already applies, enforced here too:
+    // the list is a snapshot the client polls, and this is the only place that
+    // can actually stop a request re-sent from a stale one.
+    const [recentReject] = await db
+      .select({ rejectedAt: errandOrdersTable.updatedAt })
+      .from(errandOrdersTable)
+      .where(
+        and(
+          eq(errandOrdersTable.user_id, user.id),
+          eq(errandOrdersTable.courier_id, courierId),
+          eq(errandOrdersTable.status, "rejected_by_courier"),
+          gte(errandOrdersTable.updatedAt, new Date(Date.now() - REJECT_COOLDOWN_MS)),
+        ),
+      )
+      .orderBy(desc(errandOrdersTable.updatedAt))
+      .limit(1);
+    if (recentReject?.rejectedAt) {
+      const secondsLeft = Math.ceil(
+        (REJECT_COOLDOWN_MS - (Date.now() - new Date(recentReject.rejectedAt).getTime())) / 1000,
+      );
+      return reply.status(429).send({
+        success: false,
+        error: `Kurir ini baru saja menolak. Pilih kurir lain, atau coba lagi ${Math.ceil(
+          secondsLeft / 60,
+        )} menit lagi.`,
+        code: "courier_cooldown",
+        secondsLeft,
+      });
+    }
+
     const id = crypto.randomUUID();
     try {
       await db.insert(errandOrdersTable).values({
@@ -439,6 +542,59 @@ export async function errandRoutes(app: FastifyInstance) {
     return reply.send({ success: true, errandId: id });
   });
 
+  /**
+   * The last errand the customer wrote but never got served, so the picker can
+   * hand it straight back to them.
+   *
+   * Being turned down is not a reason to retype the job and re-pin the map: the
+   * customer's request has not changed, only who is going to do it. This returns
+   * that request as a draft — note and destination — and the screen prefills it,
+   * still fully editable. Nothing here resurrects the errand itself; the old row
+   * stays rejected, and hiring the next courier writes a brand new one.
+   */
+  app.get("/api/errands/draft", async (request, reply) => {
+    const user = await requireUser(request, reply);
+    if (!user) return;
+
+    const [row] = await db
+      .select({
+        note: errandOrdersTable.note,
+        address: errandOrdersTable.destination_address,
+        lat: errandOrdersTable.destination_lat,
+        lon: errandOrdersTable.destination_lon,
+        updatedAt: errandOrdersTable.updatedAt,
+      })
+      .from(errandOrdersTable)
+      .where(
+        and(
+          eq(errandOrdersTable.user_id, user.id),
+          eq(errandOrdersTable.status, "rejected_by_courier"),
+          // Older than this and it is no longer "the thing I was just doing" —
+          // it is last week's errand, and prefilling it would be a surprise.
+          gte(errandOrdersTable.updatedAt, new Date(Date.now() - DRAFT_MAX_AGE_MS)),
+        ),
+      )
+      .orderBy(desc(errandOrdersTable.updatedAt))
+      .limit(1);
+
+    if (!row) return reply.send({ success: true, draft: null });
+
+    const lat = Number(row.lat);
+    const lon = Number(row.lon);
+    return reply.send({
+      success: true,
+      draft: {
+        note: row.note ?? "",
+        // A destination is only worth handing back whole — an address with
+        // broken coordinates would sort the courier list by nonsense.
+        destination:
+          row.address && Number.isFinite(lat) && Number.isFinite(lon)
+            ? { address: row.address, lat, lon }
+            : null,
+      },
+    });
+  });
+
   /** The customer's live errand, for the activeorder screen. */
   app.get("/api/errands/active", async (request, reply) => {
     const user = await requireUser(request, reply);
@@ -478,7 +634,41 @@ export async function errandRoutes(app: FastifyInstance) {
       )
       .limit(1);
 
-    if (!row) return reply.send({ success: true, errand: null });
+    if (!row) {
+      // Nothing live — but "nothing live" a second after the courier declined
+      // is not the same as an empty screen, and the customer watching this page
+      // is owed the reason. Only a fresh rejection qualifies: anything older has
+      // already been read and dismissed.
+      const [rejected] = await db
+        .select({
+          courierName: usersTable.name,
+          reason: errandOrdersTable.rejected_reason,
+        })
+        .from(errandOrdersTable)
+        .innerJoin(couriersTable, eq(errandOrdersTable.courier_id, couriersTable.id))
+        .innerJoin(usersTable, eq(couriersTable.user_id, usersTable.id))
+        .where(
+          and(
+            eq(errandOrdersTable.user_id, user.id),
+            eq(errandOrdersTable.status, "rejected_by_courier"),
+            gte(errandOrdersTable.updatedAt, new Date(Date.now() - REJECTION_NOTICE_MS)),
+          ),
+        )
+        .orderBy(desc(errandOrdersTable.updatedAt))
+        .limit(1);
+
+      return reply.send({
+        success: true,
+        errand: null,
+        outcome: rejected
+          ? {
+              status: "rejected_by_courier" as const,
+              courierName: rejected.courierName,
+              reason: rejected.reason,
+            }
+          : null,
+      });
+    }
 
     const createdMs = row.createdAt ? new Date(row.createdAt).getTime() : Date.now();
     const cancellableInMs = Math.max(0, CANCEL_FLOOR_MS - (Date.now() - createdMs));
@@ -783,7 +973,12 @@ export async function errandRoutes(app: FastifyInstance) {
     return reply.send({ success: true });
   });
 
-  /** Courier declines. pending -> rejected_by_courier. No cooldown follows. */
+  /**
+   * Courier declines. pending -> rejected_by_courier.
+   *
+   * The customer is free to hire someone else immediately; only this courier
+   * goes quiet for them, for REJECT_COOLDOWN_MS.
+   */
   app.post("/api/courier/errands/:id/reject", async (request, reply) => {
     const user = await requireUser(request, reply);
     if (!user) return;

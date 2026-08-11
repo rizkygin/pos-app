@@ -182,7 +182,7 @@ async function findCandidates(orderId: string, round: number): Promise<Candidate
           WHERE ${ordersTable.courier_id} = ${couriersTable.id}
             AND ${ordersTable.status} IN ('preparing', 'ready', 'on_delivery')
         )`,
-        // ...nor carrying an errand ("Suruh Kurir"), which lives in a separate
+        // ...nor carrying an errand ("Tugaskan Kurir"), which lives in a separate
         // table entirely and is therefore invisible to the clause above. A
         // pending errand counts: the courier is being asked and is holding that
         // question exclusively, exactly like the live-offer rule below.

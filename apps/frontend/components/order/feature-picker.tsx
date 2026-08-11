@@ -344,7 +344,7 @@ export function FeaturePicker() {
                     </div>
                 </div>
 
-                {/* Suruh Kurir sits outside the grid on purpose. Every tile
+                {/* Tugaskan Kurir sits outside the grid on purpose. Every tile
                     below browses outlets by product category; this one hires a
                     person and touches no outlet at all, so it is not an
                     ORDER_FEATURES entry — adding it there would require a
@@ -359,7 +359,7 @@ export function FeaturePicker() {
                     </div>
                     <div className="min-w-0 flex-1">
                         <h3 className="truncate text-xs font-black leading-tight text-foreground sm:text-base">
-                            Suruh Kurir
+                            Tugaskan Kurir
                         </h3>
                         <p className="line-clamp-2 text-[10px] leading-tight text-muted-foreground sm:text-xs sm:leading-snug">
                             Pilih kurir langsung buat antar barang. Harga nego lewat WhatsApp.

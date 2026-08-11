@@ -241,9 +241,9 @@ export default function HistoryErrandPage() {
     // card sits under the tab bar and cannot be scrolled into view.
     <main className="mx-auto max-w-3xl px-4 pb-28 pt-6 md:px-6 md:pb-12">
       <header className="mb-5">
-        <h1 className="text-2xl font-black">Riwayat Suruh Kurir</h1>
+        <h1 className="text-2xl font-black">Riwayat Tugas Kurir</h1>
         <p className="mt-1 mb-4 text-sm text-muted-foreground">
-          Semua suruhan pian, termasuk yang ditolak atau dibatalkan.
+          Semua tugas pian, termasuk yang ditolak atau dibatalkan.
         </p>
         <HistorySwitcher active="errand" />
       </header>
@@ -255,16 +255,16 @@ export default function HistoryErrandPage() {
       ) : errands.length === 0 ? (
         <div className="rounded-3xl border border-dashed p-10 text-center">
           <Truck className="mx-auto size-10 text-muted-foreground" />
-          <p className="mt-3 font-bold">Belum Pernah Suruh Kurir</p>
+          <p className="mt-3 font-bold">Belum Pernah Menugaskan Kurir</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            Pian belum pernah menyuruh kurir. Coba sekali, harganya nego langsung
+            Pian belum pernah menugaskan kurir. Coba sekali, harganya nego langsung
             sama kurirnya.
           </p>
           <Link
             href="/dashboard/suruh-kurir"
             className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-rose-500 px-5 py-2.5 text-sm font-bold text-white transition-colors hover:bg-rose-600"
           >
-            Suruh Kurir Sekarang
+            Tugaskan Kurir Sekarang
           </Link>
         </div>
       ) : (

@@ -66,7 +66,7 @@ const fmtDistance = (m: number) =>
   m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
 
 /**
- * The courier's side of "Suruh Kurir".
+ * The courier's side of "Tugaskan Kurir".
  *
  * Mounted alongside the regular lobby rather than inside it: an errand is not
  * an offer, has no countdown, and is aimed at this courier alone, so none of
@@ -213,14 +213,17 @@ export function ErrandRequestPanel({ children }: { children?: React.ReactNode })
       : '';
 
   return (
+    // Full-bleed on a phone: the card IS the screen when an errand is live, and
+    // a 448px cap left it visibly narrower than the lobby it replaces. The cap
+    // returns from sm up, where full width would stretch absurdly.
     <motion.section
       initial={{ opacity: 0, y: -8 }}
       animate={{ opacity: 1, y: 0 }}
-      className="mx-auto mb-4 w-full max-w-md overflow-hidden rounded-2xl border-2 border-rose-300 bg-rose-50/60 dark:border-rose-900 dark:bg-rose-950/20"
+      className="mx-auto mt-6 mb-4 w-full sm:max-w-md overflow-hidden rounded-2xl border-2 border-rose-300 bg-rose-50/60 dark:border-rose-900 dark:bg-rose-950/20"
     >
       <div className="flex items-center gap-2 bg-rose-500 px-4 py-2 text-white">
         <span className="text-sm font-black">
-          {pending ? 'Suruhan Baru' : 'Suruhan Berjalan'}
+          {pending ? 'Tugas Baru' : 'Tugas Berjalan'}
         </span>
         <span className="ml-auto text-xs opacity-90">Tanpa outlet</span>
       </div>
@@ -252,7 +255,7 @@ export function ErrandRequestPanel({ children }: { children?: React.ReactNode })
 
         {errand.note && (
           <p className="mt-3 rounded-xl bg-background px-3 py-2.5 text-sm">
-            <span className="font-semibold">Suruhan: </span>
+            <span className="font-semibold">Tugas: </span>
             {errand.note}
           </p>
         )}

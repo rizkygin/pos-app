@@ -110,10 +110,10 @@ export const CustomerDashboard = ({ lastOrders = [], recommend = [], ads = [], h
         { name: "Mart", icon: ShoppingBag,url: 'mart', color: "bg-emerald-100 text-emerald-600" , available: 'available'},
         { name: "Minuman", icon: Coffee, url: 'drink', color: "bg-amber-100 text-amber-800" , available: 'available'},
         { name: "Jasa", icon: Wrench, url: 'service', color: "bg-amber-100 text-amber-800", available: 'available' },
-        // Suruh Kurir hires a courier directly, so it does NOT live under
+        // Tugaskan Kurir hires a courier directly, so it does NOT live under
         // /dashboard/order/<slug> like the category tiles around it — hence the
         // explicit href.
-        { name: "Suruh Kurir", icon: Truck, url:'suruh-kurir', href: '/dashboard/suruh-kurir', color: "bg-blue-100 text-blue-600" , available: 'available', badge: hasActiveErrand},
+        { name: "Tugaskan Kurir", icon: Truck, url:'suruh-kurir', href: '/dashboard/suruh-kurir', color: "bg-blue-100 text-blue-600" , available: 'available', badge: hasActiveErrand},
         { name: "Ride", icon: Bike, url: 'ride',color: "bg-purple-100 text-purple-600" , available: 'non'},
     ];
 
