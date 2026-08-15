@@ -11,12 +11,15 @@ import {
   usersTable,
   cashInDetailTable,
   cashInCategoryTable,
+  cashOutDetailTable,
+  cashOutCategoryTable,
   cashFlows,
 } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 import { requireOutletAccess } from "../lib/outlet-access";
-import { applySaleStockOut } from "../lib/stock";
+import { applySaleStockOut, applySaleStockReturn } from "../lib/stock";
+import { CATEGORY_POS_SALE, CATEGORY_POS_CANCELLATION } from "../lib/cashflow-categories";
 import { normalizeIndonesianPhone } from "../lib/utils/phone";
 import { DEFAULT_COORDS, parseCoordPair } from "../lib/utils/coords";
 import { isWithinServiceArea } from "../lib/service-area";
@@ -27,17 +30,21 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 // Record a POS sale as cash-in for the given outlet. Find-or-create the "Kasir"
 // cash-in category so a missing category can't silently drop the cashflow, and
 // attribute it to the actual outlet (was hardcoded to outlet 1).
-async function addPosToCashflowin(tx: Tx, outletId: number, total: number) {
+//
+// orderId is optional because /api/add-pos-to-cashflowin calls this with no
+// order in hand. When it is passed the cashflow row carries it, which is what
+// makes the sale reversible — see cancelPosOrder.
+async function addPosToCashflowin(tx: Tx, outletId: number, total: number, orderId?: string) {
   let [category] = await tx
     .select({ id: cashInCategoryTable.id })
     .from(cashInCategoryTable)
-    .where(eq(cashInCategoryTable.category, "Kasir"))
+    .where(eq(cashInCategoryTable.category, CATEGORY_POS_SALE))
     .limit(1);
 
   if (!category) {
     [category] = await tx
       .insert(cashInCategoryTable)
-      .values({ category: "Kasir" })
+      .values({ category: CATEGORY_POS_SALE })
       .returning({ id: cashInCategoryTable.id });
   }
 
@@ -53,6 +60,7 @@ async function addPosToCashflowin(tx: Tx, outletId: number, total: number) {
   await tx.insert(cashFlows).values({
     outlet_id: outletId,
     cash_in_detail_id: detail.id,
+    order_id: orderId ?? null,
   });
 }
 
@@ -116,6 +124,11 @@ export async function mutationRoutes(app: FastifyInstance) {
               id: new_order_id,
               customer_id: customer_offline?.id || 1,
               courier_id: courier_offline?.id || 1,
+              // Stated, not inferred. Everything downstream that needs to know
+              // this was rung up at the counter reads this column instead of
+              // re-deriving it from which customer row the two lookups above
+              // happened to land on.
+              source: "pos",
               status: "delivered",
               outlet_id: body.outletId,
               note: {
@@ -157,7 +170,7 @@ export async function mutationRoutes(app: FastifyInstance) {
             }
           }
 
-          await addPosToCashflowin(tx, body.outletId, body.total);
+          await addPosToCashflowin(tx, body.outletId, body.total, new_order_id);
         });
       } catch (err: any) {
         // Race: two near-simultaneous retries both slipped past the pre-check
@@ -174,6 +187,160 @@ export async function mutationRoutes(app: FastifyInstance) {
       return { success: true, message: "Order created successfully", orderId: new_order_id };
     } catch (error: any) {
       return reply.status(500).send({ error: { message: error.message || "Internal server error" } });
+    }
+  });
+
+  // Cancel a cashier order: soft-delete it, hand the stock back, and reverse
+  // the cash it booked. Deliberately NOT a DELETE of anything — a sale that
+  // happened and was then voided is two facts, and the books should show both.
+  //
+  // Gated on the cashier permission rather than owner: the person who rang up
+  // the wrong item is the person standing there when the customer says so, and
+  // making them fetch the owner is how you get cancellations that never get
+  // recorded at all. Owners pass this check too.
+  app.post("/api/orders/:orderId/cancel", async (request, reply) => {
+    try {
+      const access = await requireOutletAccess(request, reply, "cashier");
+      if (!access) return;
+
+      const { orderId } = request.params as { orderId: string };
+      const { reason } = ((request.body as { reason?: string }) ?? {});
+
+      const result = await db.transaction(async (tx) => {
+        // SELECT ... FOR UPDATE: two cashiers hitting cancel on the same order
+        // at once would otherwise both read deleted_at as null and both book a
+        // reversal, refunding the sale twice into the ledger.
+        const [order] = await tx
+          .select({
+            id: ordersTable.id,
+            outletId: ordersTable.outlet_id,
+            source: ordersTable.source,
+            deletedAt: ordersTable.deletedAt,
+            note: ordersTable.note,
+          })
+          .from(ordersTable)
+          .where(eq(ordersTable.id, orderId))
+          .limit(1)
+          .for("update");
+
+        if (!order) return { status: 404 as const, error: "Order tidak ditemukan" };
+        // Outlet scoping before anything else: without it, a cashier at one
+        // outlet could cancel another outlet's sales by guessing an id.
+        if (order.outletId !== access.outlet.id) {
+          return { status: 404 as const, error: "Order tidak ditemukan" };
+        }
+        if (order.source !== "pos") {
+          return {
+            status: 400 as const,
+            error: "Hanya order kasir yang bisa dibatalkan di sini",
+          };
+        }
+        // Idempotent: a double-submit is a no-op, not a second reversal.
+        if (order.deletedAt) {
+          return { status: 200 as const, alreadyCancelled: true };
+        }
+
+        // What this sale actually put in the drawer. Orders rung up after the
+        // 0057 migration carry the link and give an exact figure.
+        const [linked] = await tx
+          .select({
+            amount: sql<string>`coalesce(sum(cast(${cashInDetailTable.money_amount} as numeric)), 0)`,
+          })
+          .from(cashFlows)
+          .innerJoin(cashInDetailTable, eq(cashFlows.cash_in_detail_id, cashInDetailTable.id))
+          .where(eq(cashFlows.order_id, orderId));
+
+        let amount = Number(linked?.amount ?? 0);
+
+        // Orders that predate the link have no cash-in to point at, so the
+        // total is rebuilt from the lines less the discount the cashier gave —
+        // the same arithmetic the checkout screen did when it sent `total`.
+        // This can disagree with what was really booked if the order was ever
+        // edited, which is why it is the fallback and not the primary path.
+        if (amount === 0) {
+          const [sum] = await tx
+            .select({
+              total: sql<string>`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric)), 0)`,
+            })
+            .from(orderDetailsTable)
+            .where(eq(orderDetailsTable.order_id, orderId));
+          const discount = Number((order.note as any)?.discountAmount ?? 0);
+          amount = Math.max(0, Number(sum?.total ?? 0) - discount);
+        }
+
+        // Reverse the money. Zero is skipped rather than booked: a 0-rupiah
+        // cash-out row is noise in the cashflow report, and a free order is a
+        // real case (fully discounted).
+        if (amount > 0) {
+          let [category] = await tx
+            .select({ id: cashOutCategoryTable.id })
+            .from(cashOutCategoryTable)
+            .where(eq(cashOutCategoryTable.category, CATEGORY_POS_CANCELLATION))
+            .limit(1);
+          if (!category) {
+            [category] = await tx
+              .insert(cashOutCategoryTable)
+              .values({ category: CATEGORY_POS_CANCELLATION })
+              .returning({ id: cashOutCategoryTable.id });
+          }
+
+          const [detail] = await tx
+            .insert(cashOutDetailTable)
+            .values({ category_id: category.id, money_amount: String(amount), type: "cash" })
+            .returning({ id: cashOutDetailTable.id });
+
+          await tx.insert(cashFlows).values({
+            outlet_id: access.outlet.id,
+            cash_out_detail_id: detail.id,
+            order_id: orderId,
+          });
+        }
+
+        // Hand the stock back, line by line.
+        const lines = await tx
+          .select({
+            productId: orderDetailsTable.product_id,
+            quantity: orderDetailsTable.quantity,
+          })
+          .from(orderDetailsTable)
+          .where(eq(orderDetailsTable.order_id, orderId));
+
+        for (const line of lines) {
+          if (!line.productId) continue;
+          await applySaleStockReturn(tx, {
+            outletId: access.outlet.id,
+            productId: line.productId,
+            qty: Number(line.quantity),
+            note: `Batal POS ${orderId}`,
+          });
+        }
+
+        // status alongside deleted_at: the soft-delete filter is what hides the
+        // order, but anything that reads a cancelled row directly (the reprint
+        // slip, an admin drilldown) should see it say so rather than still
+        // claiming 'delivered'.
+        await tx
+          .update(ordersTable)
+          .set({
+            deletedAt: new Date(),
+            status: "cancelled",
+            rejected_by: "owner",
+            rejected_reason: (reason ?? "Dibatalkan kasir").slice(0, 255),
+            updatedAt: new Date(),
+          })
+          .where(eq(ordersTable.id, orderId));
+
+        return { status: 200 as const, amount };
+      });
+
+      if (result.status !== 200) {
+        return reply.status(result.status).send({ success: false, error: result.error });
+      }
+      return { success: true, alreadyCancelled: result.alreadyCancelled ?? false, amount: result.amount ?? 0 };
+    } catch (error: any) {
+      return reply
+        .status(500)
+        .send({ success: false, error: error.message || "Internal Server Error" });
     }
   });
 

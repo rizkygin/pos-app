@@ -15,6 +15,7 @@ import {
 } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
+import { orderNotDeleted } from "../lib/order-scope";
 import { attachOrderItems } from "../lib/utils/order-items";
 import { getCourierAvailability } from "../lib/utils/courier-availability";
 import { tickDispatch, visibleOrderIdsFor } from "../lib/dispatch";
@@ -52,7 +53,7 @@ export async function customerRoutes(app: FastifyInstance) {
       })
       .from(ordersTable)
       .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))
-      .where(eq(ordersTable.customer_id, customer.id))
+      .where(and(orderNotDeleted, eq(ordersTable.customer_id, customer.id)))
       .orderBy(desc(ordersTable.createdAt));
 
     // Attach the actual purchased items (name + qty) + total per order.
@@ -138,6 +139,7 @@ export async function customerRoutes(app: FastifyInstance) {
       .leftJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
       .where(
         and(
+          orderNotDeleted,
           eq(ordersTable.customer_id, customer.id),
           eq(ordersTable.fulfillment, "service"),
           notInArray(ordersTable.status, ["delivered", "cancelled"]),
@@ -202,7 +204,7 @@ export async function customerRoutes(app: FastifyInstance) {
       // leftJoin — most of an order's life has no courier attached.
       .leftJoin(couriersTable, eq(ordersTable.courier_id, couriersTable.id))
       .leftJoin(courierUser, eq(couriersTable.user_id, courierUser.id))
-      .where(eq(ordersTable.customer_id, customer.id))
+      .where(and(orderNotDeleted, eq(ordersTable.customer_id, customer.id)))
       .orderBy(desc(ordersTable.createdAt))
       .limit(1);
 
@@ -322,6 +324,7 @@ export async function customerRoutes(app: FastifyInstance) {
       .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))
       .where(
         and(
+          orderNotDeleted,
           eq(ordersTable.status, "confirmed"),
           isNull(ordersTable.courier_id),
           // Service and materials orders are courier-less by design — the
@@ -390,7 +393,7 @@ export async function customerRoutes(app: FastifyInstance) {
       .innerJoin(usersTable, eq(customersTable.user_id, usersTable.id))
       .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))
       .leftJoin(locationsTable, and(eq(locationsTable.user_id, usersTable.id), eq(locationsTable.is_default, true)))
-      .where(eq(ordersTable.courier_id, courier.id))
+      .where(and(orderNotDeleted, eq(ordersTable.courier_id, courier.id)))
       .orderBy(desc(ordersTable.updatedAt))
       .limit(3);
 
@@ -426,6 +429,7 @@ export async function customerRoutes(app: FastifyInstance) {
       .innerJoin(usersTable, eq(customersTable.user_id, usersTable.id))
       .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))
       .where(and(
+        orderNotDeleted,
         eq(ordersTable.courier_id, courier.id),
         or(
           eq(ordersTable.status, "confirmed"),

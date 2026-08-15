@@ -66,6 +66,21 @@ export const ORDER_STATUS = pgEnum('order_status', [
   'delivered',
   'cancelled',
 ]);
+// Where the order was rung up. pos = the cashier screen; app = a customer
+// ordering for themselves.
+//
+// This exists because "is it a cashier order?" was previously answered by
+// joining out to users.email and comparing it to the hardcoded offline-customer
+// address (routes/admin.ts, routes/owner.ts). That test is fine for a read-only
+// filter tab, but cancellation is destructive and must not depend on a string
+// literal that four files keep their own copy of — nor on the `|| 1` fallback
+// in add-order-detail, which silently attaches POS orders to customer id 1 on
+// any database where that email was never seeded. Those orders do not match
+// the email test and would be undeletable.
+//
+// The old email checks are deliberately left in place for now; this column is
+// the identity test for new work only.
+export const ORDER_SOURCE = pgEnum('order_source', ['app', 'pos']);
 // delivery = courier-fulfilled order (food/drink/mart): goes through the courier
 // lobby + on_delivery leg. service = no courier: owner drives the whole flow and
 // the customer accepts at the end (see the service order endpoints).
@@ -492,6 +507,7 @@ export const ordersTable = pgTable(
       .notNull()
       .references(() => outletsTable.id),
     fulfillment: ORDER_FULFILLMENT('fulfillment').default('delivery').notNull(),
+    source: ORDER_SOURCE('source').default('app').notNull(),
     status: ORDER_STATUS('status').default('pending').notNull(),
     promo_id: integer('promo_id').references(() => promosTable.id),
     discount_amount: varchar('discount_amount', { length: 15 }),
@@ -749,21 +765,35 @@ export const cashOutDetailTable = pgTable(
   (table) => [index('cash_out_detail_created_at_idx').on(table.created_at)],
 );
 
-export const cashFlows = pgTable('cashFlows', {
-  id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
-  outlet_id: integer('outlet_id')
-    .notNull()
-    .references(() => outletsTable.id),
-  cash_opname: varchar('cash_opname', { length: 15 })
-    .notNull()
-    .$default(() => 'cash'),
-  cash_in_detail_id: integer('cash_in_detail_id').references(
-    () => cashInDetailTable.id,
-  ),
-  cash_out_detail_id: integer('cash_out_detail_id').references(
-    () => cashOutDetailTable.id,
-  ),
-});
+export const cashFlows = pgTable(
+  'cashFlows',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    outlet_id: integer('outlet_id')
+      .notNull()
+      .references(() => outletsTable.id),
+    cash_opname: varchar('cash_opname', { length: 15 })
+      .notNull()
+      .$default(() => 'cash'),
+    cash_in_detail_id: integer('cash_in_detail_id').references(
+      () => cashInDetailTable.id,
+    ),
+    cash_out_detail_id: integer('cash_out_detail_id').references(
+      () => cashOutDetailTable.id,
+    ),
+    // The order this row was caused by, when there was one. Sales invoices got
+    // invoicePaymentsTable to tie a payment back to its invoice; POS orders had
+    // no such link at all, so the cash-in a cashier order wrote was
+    // unreachable from the order.
+    //
+    // Cancellation needs it twice over: to book the reversal against the same
+    // order, and — because the reversal is money — to answer "has this already
+    // been reversed?" from the ledger itself rather than trusting the caller
+    // not to double-submit.
+    order_id: text('order_id').references(() => ordersTable.id),
+  },
+  (table) => [index('cash_flows_order_id_idx').on(table.order_id)],
+);
 
 export const promosTable = pgTable('promos', {
   id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
