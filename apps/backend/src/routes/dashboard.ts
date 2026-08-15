@@ -31,6 +31,7 @@ import {
 } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
+import { orderNotDeleted } from "../lib/order-scope";
 import { getOutletByUserId } from "../lib/outlet-id";
 import { notInternalCategory } from "../lib/outlet-features";
 import { getOutletAccess, hasPermission, parseActiveOutletId } from "../lib/outlet-access";
@@ -68,7 +69,9 @@ export async function dashboardRoutes(app: FastifyInstance) {
       })
       .from(ordersTable)
       .leftJoin(orderDetailsTable, eq(orderDetailsTable.order_id, ordersTable.id))
-      .where(and(eq(ordersTable.outlet_id, outletId), gte(ordersTable.createdAt, since)))
+      .where(
+        and(orderNotDeleted, eq(ordersTable.outlet_id, outletId), gte(ordersTable.createdAt, since)),
+      )
       .groupBy(ordersTable.id);
 
     const recentOrders = rawOrders.map((o) => ({
@@ -92,6 +95,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
     const previousPeriodStart = new Date(now.getFullYear(), now.getMonth() - 11, 1);
 
     const validOrderDetails = and(
+      orderNotDeleted,
       eq(ordersTable.outlet_id, outletId),
       notInArray(ordersTable.status, ["cancelled", "pending"]),
     );
@@ -239,13 +243,14 @@ export async function dashboardRoutes(app: FastifyInstance) {
         sum: sql<number>`SUM(CAST(orders.delivery_fee as NUMERIC))`,
       })
       .from(ordersTable)
-      .where(eq(ordersTable.courier_id, courier.id));
+      .where(and(orderNotDeleted, eq(ordersTable.courier_id, courier.id)));
 
     const [{ totalCancel: cancelOrderByCourier }] = await db
       .select({ totalCancel: count(ordersTable.id) })
       .from(ordersTable)
       .where(
         and(
+          orderNotDeleted,
           eq(ordersTable.courier_id, courier.id),
           eq(ordersTable.status, "cancelled"),
           eq(ordersTable.rejected_by, "courier"),
@@ -285,6 +290,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
         .from(ordersTable)
         .where(
           and(
+            orderNotDeleted,
             eq(ordersTable.courier_id, courier.id),
             eq(ordersTable.status, "delivered"),
             gte(ordersTable.createdAt, thisWeekStart),
@@ -300,6 +306,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
         .from(ordersTable)
         .where(
           and(
+            orderNotDeleted,
             eq(ordersTable.courier_id, courier.id),
             eq(ordersTable.status, "delivered"),
             gte(ordersTable.createdAt, lastWeekStart),
@@ -321,6 +328,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
       .from(ordersTable)
       .where(
         and(
+          orderNotDeleted,
           eq(ordersTable.courier_id, courier.id),
           eq(ordersTable.status, "delivered"),
           gte(ordersTable.createdAt, thisWeekStart),
@@ -373,6 +381,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
       )
       .where(
         and(
+          orderNotDeleted,
           eq(ordersTable.courier_id, courier.id),
           inArray(ordersTable.status, ["confirmed", "preparing", "ready", "on_delivery"]),
         ),
@@ -476,7 +485,13 @@ export async function dashboardRoutes(app: FastifyInstance) {
         .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))
         .leftJoin(orderDetailsTable, eq(orderDetailsTable.order_id, ordersTable.id))
         .leftJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
-        .where(and(eq(ordersTable.customer_id, customer.id), eq(ordersTable.status, "delivered")))
+        .where(
+          and(
+            orderNotDeleted,
+            eq(ordersTable.customer_id, customer.id),
+            eq(ordersTable.status, "delivered"),
+          ),
+        )
         .groupBy(ordersTable.id, outletsTable.id)
         .orderBy(desc(ordersTable.createdAt))
         .limit(3);

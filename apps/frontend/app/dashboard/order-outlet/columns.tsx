@@ -7,6 +7,7 @@ import { ArrowUpDown, ArrowRight, Clock, CheckCircle2, ChefHat, Package, Bike, X
 import Link from "next/link"
 import { format } from "date-fns"
 import { id as idLocale } from "date-fns/locale"
+import { CancelOrderButton } from "./cancel-order-button"
 
 export type OrderStatus = "pending" | "confirmed" | "preparing" | "ready" | "on_delivery" | "delivered" | "cancelled"
 
@@ -17,6 +18,12 @@ export type Order = {
     totalAmount: number
     status: OrderStatus
     createdAt: string | null
+    source: "app" | "pos"
+}
+
+// Set by OrdersTable so a row can tell the page to refetch after a cancellation.
+export type OrdersTableMeta = {
+    onCancelled: () => void
 }
 
 function fmtIDR(n: number) {
@@ -102,6 +109,25 @@ export const columns: ColumnDef<Order>[] = [
             const dateA = a.getValue("createdAt") as string | null
             const dateB = b.getValue("createdAt") as string | null
             return new Date(dateA ?? 0).getTime() - new Date(dateB ?? 0).getTime()
+        },
+    },
+    {
+        id: "cancel",
+        cell: ({ row, table }) => {
+            // Cashier orders only. The backend enforces this too — the check
+            // here just avoids offering a button that would come back 400 on
+            // every online order in the list.
+            if (row.original.source !== "pos") return null
+            // An order already cancelled has nothing left to reverse.
+            if (row.original.status === "cancelled") return null
+            const meta = table.options.meta as OrdersTableMeta | undefined
+            return (
+                <CancelOrderButton
+                    orderId={row.original.orderId}
+                    totalAmount={row.original.totalAmount}
+                    onCancelled={() => meta?.onCancelled()}
+                />
+            )
         },
     },
     {

@@ -15,6 +15,7 @@ import {
 } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
+import { orderNotDeleted } from "../lib/order-scope";
 import { hasVerifiedPhone, PHONE_NOT_VERIFIED } from "../lib/utils/verified-contact";
 import { getOutletAccess, hasPermission, parseActiveOutletId, getSubscriptionGate, gateBlocks } from "../lib/outlet-access";
 import { CATEGORY_IN } from "../lib/cashflow-categories";
@@ -384,7 +385,7 @@ export async function orderRoutes(app: FastifyInstance) {
         createdAt: ordersTable.createdAt,
       })
       .from(ordersTable)
-      .where(and(eq(ordersTable.id, orderId), eq(ordersTable.customer_id, customer.id)))
+      .where(and(orderNotDeleted, eq(ordersTable.id, orderId), eq(ordersTable.customer_id, customer.id)))
       .limit(1);
 
     if (!order) return reply.status(404).send({ success: false, error: "Order tidak ditemukan" });
@@ -581,7 +582,7 @@ export async function orderRoutes(app: FastifyInstance) {
         const [outlet] = await tx
           .select({ id: ordersTable.outlet_id })
           .from(ordersTable)
-          .where(eq(ordersTable.id, orderId))
+          .where(and(orderNotDeleted, eq(ordersTable.id, orderId)))
           .limit(1);
 
         if (!outlet) throw new Error("Not an owner");

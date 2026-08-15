@@ -20,7 +20,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Search, Filter, Loader2, CalendarDays, X } from "lucide-react"
-import { Order } from "./columns"
+import { Order, OrdersTableMeta } from "./columns"
 
 interface OrdersTableProps {
     columns: ColumnDef<Order>[]
@@ -39,6 +39,7 @@ interface OrdersTableProps {
     onStatusChange: (status: string) => void
     onDateFromChange: (v: string) => void
     onDateToChange: (v: string) => void
+    onCancelled: () => void
 }
 
 const STATUS_OPTIONS = [
@@ -66,6 +67,7 @@ export function OrdersTable({
     onStatusChange,
     onDateFromChange,
     onDateToChange,
+    onCancelled,
 }: OrdersTableProps) {
     const [sorting, setSorting] = React.useState<SortingState>([])
 
@@ -80,6 +82,7 @@ export function OrdersTable({
         manualPagination: true,
         pageCount,
         state: { sorting },
+        meta: { onCancelled } satisfies OrdersTableMeta,
     })
 
     return (

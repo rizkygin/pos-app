@@ -13,6 +13,7 @@ import {
 } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
+import { orderNotDeleted } from "../lib/order-scope";
 import { updateRatings } from "../lib/update-ratings";
 
 type RatingInput = { rating: number; comment: string };
@@ -99,6 +100,7 @@ export async function ratingRoutes(app: FastifyInstance) {
       .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))
       .where(
         and(
+          orderNotDeleted,
           eq(ordersTable.id, orderId),
           eq(ordersTable.courier_id, courier.id),
           eq(ordersTable.status, "delivered"),
@@ -141,6 +143,7 @@ export async function ratingRoutes(app: FastifyInstance) {
       .innerJoin(usersTable, eq(couriersTable.user_id, usersTable.id))
       .where(
         and(
+          orderNotDeleted,
           eq(ordersTable.id, orderId),
           eq(ordersTable.customer_id, customer.id),
           eq(ordersTable.status, "delivered"),
@@ -205,6 +208,7 @@ export async function ratingRoutes(app: FastifyInstance) {
       .innerJoin(couriersTable, eq(ordersTable.courier_id, couriersTable.id))
       .where(
         and(
+          orderNotDeleted,
           eq(ordersTable.id, orderId),
           eq(ordersTable.customer_id, customer.id),
           eq(ordersTable.status, "delivered"),
@@ -337,6 +341,7 @@ export async function ratingRoutes(app: FastifyInstance) {
       .innerJoin(usersTable, eq(outletsTable.user_id, usersTable.id))
       .where(
         and(
+          orderNotDeleted,
           eq(ordersTable.id, orderId),
           eq(ordersTable.customer_id, customer.id),
           // Both courier-less lanes rate the outlet here: there is no courier
@@ -407,6 +412,7 @@ export async function ratingRoutes(app: FastifyInstance) {
       .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))
       .where(
         and(
+          orderNotDeleted,
           eq(ordersTable.id, orderId),
           eq(ordersTable.customer_id, customer.id),
           // Both courier-less lanes rate the outlet here: there is no courier
@@ -551,6 +557,7 @@ export async function ratingRoutes(app: FastifyInstance) {
       .innerJoin(usersTable, eq(customersTable.user_id, usersTable.id))
       .where(
         and(
+          orderNotDeleted,
           eq(ordersTable.id, orderId),
           eq(ordersTable.courier_id, courier.id),
           eq(ordersTable.status, "delivered"),

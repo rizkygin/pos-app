@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { API_URL } from "@/lib/api-url";
@@ -31,34 +31,35 @@ export default function OrderOutletPage() {
     const [loading, setLoading] = useState(true);
     const [forbidden, setForbidden] = useState(false);
 
-    useEffect(() => {
-        const fetchOrders = async () => {
-            setLoading(true);
-            try {
-                const params = new URLSearchParams({
-                    page: String(page),
-                    limit: String(limit),
-                    search,
-                    status,
-                    ...(dateFrom && { dateFrom }),
-                    ...(dateTo && { dateTo }),
-                });
-                const res = await fetch(`${API_URL}/api/get-outlet-orders?${params}`, { credentials: 'include' });
-                if (res.status === 401 || res.status === 403) { setForbidden(true); return; }
-                const result = await res.json();
-                if (result.success) {
-                    setData(result.data);
-                    setCount(result.count);
-                    setStats(result.stats);
-                }
-            } catch (e) {
-                console.error("Failed to fetch orders:", e);
-            } finally {
-                setLoading(false);
+    const fetchOrders = useCallback(async () => {
+        setLoading(true);
+        try {
+            const params = new URLSearchParams({
+                page: String(page),
+                limit: String(limit),
+                search,
+                status,
+                ...(dateFrom && { dateFrom }),
+                ...(dateTo && { dateTo }),
+            });
+            const res = await fetch(`${API_URL}/api/get-outlet-orders?${params}`, { credentials: 'include' });
+            if (res.status === 401 || res.status === 403) { setForbidden(true); return; }
+            const result = await res.json();
+            if (result.success) {
+                setData(result.data);
+                setCount(result.count);
+                setStats(result.stats);
             }
-        };
-        fetchOrders();
+        } catch (e) {
+            console.error("Failed to fetch orders:", e);
+        } finally {
+            setLoading(false);
+        }
     }, [page, limit, search, status, dateFrom, dateTo]);
+
+    useEffect(() => {
+        fetchOrders();
+    }, [fetchOrders]);
 
     if (forbidden) {
         return (
@@ -129,6 +130,10 @@ export default function OrderOutletPage() {
                     onStatusChange={(v: string) => { setStatus(v); setPage(1); }}
                     onDateFromChange={(v: string) => { setDateFrom(v); setPage(1); }}
                     onDateToChange={(v: string) => { setDateTo(v); setPage(1); }}
+                    // A cancelled order drops out of the list (soft-deleted)
+                    // and the summary chips shift, so refetch rather than
+                    // patching the row out locally.
+                    onCancelled={fetchOrders}
                 />
             )}
         </main>

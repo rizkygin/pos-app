@@ -821,14 +821,7 @@ export const CashierClient = ({
 
           {/* Desktop: full header */}
           <div className="hidden md:flex flex-row gap-4 items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-extrabold tracking-tight">
-                Point of Sale
-              </h1>
-              <p className="text-muted-foreground text-sm mt-1">
-                Select items to add to cart
-              </p>
-            </div>
+            
             <div className="flex flex-col items-end gap-1">
               <div className="flex gap-3">
                 <div className="relative w-56">

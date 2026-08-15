@@ -20,6 +20,7 @@ import {
 } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
+import { orderNotDeleted } from "../lib/order-scope";
 import { getOutletByUserId } from "../lib/outlet-id";
 import { getOutletAccess, hasPermission, parseActiveOutletId, getSubscriptionGate, gateBlocks, type EmployeePermission } from "../lib/outlet-access";
 import { attachOrderItems } from "../lib/utils/order-items";
@@ -91,7 +92,7 @@ async function lobbyOrdersByStatus(
       locationsTable,
       and(eq(locationsTable.user_id, usersTable.id), eq(locationsTable.is_default, true)),
     )
-    .where(and(eq(ordersTable.outlet_id, outletId), eq(ordersTable.status, status)))
+    .where(and(orderNotDeleted, eq(ordersTable.outlet_id, outletId), eq(ordersTable.status, status)))
     .orderBy(ordersTable.createdAt);
 
   return attachOrderItems(orders);
@@ -125,6 +126,7 @@ export async function ownerRoutes(app: FastifyInstance) {
         eq(ordersTable.status, status as OrderStatus);
 
       const baseFilter = and(
+        orderNotDeleted,
         eq(productsTable.outlet_id, outlet.id),
         statusFilter,
         search ? or(ilike(usersTable.name, `%${search}%`), ilike(orderDetailsTable.order_id, `%${search}%`)) : undefined,
@@ -139,6 +141,9 @@ export async function ownerRoutes(app: FastifyInstance) {
             itemCount: sql<number>`cast(count(*) as int)`,
             totalAmount: sql<number>`coalesce(sum(${money(orderDetailsTable.summary_price)}), 0)`,
             status: ordersTable.status,
+            // Drives whether the row offers a cancel button — only cashier
+            // orders can be cancelled here.
+            source: ordersTable.source,
             createdAt: sql<string>`max(${orderDetailsTable.created_at})::text`,
             customerName: usersTable.name,
           })
@@ -148,7 +153,7 @@ export async function ownerRoutes(app: FastifyInstance) {
           .innerJoin(customersTable, eq(ordersTable.customer_id, customersTable.id))
           .innerJoin(usersTable, eq(customersTable.user_id, usersTable.id))
           .where(baseFilter)
-          .groupBy(orderDetailsTable.order_id, usersTable.name, ordersTable.status)
+          .groupBy(orderDetailsTable.order_id, usersTable.name, ordersTable.status, ordersTable.source)
           .orderBy(desc(sql`max(${orderDetailsTable.created_at})`))
           .limit(limitNum)
           .offset(offset),
@@ -165,7 +170,7 @@ export async function ownerRoutes(app: FastifyInstance) {
         db
           .select({ status: ordersTable.status })
           .from(ordersTable)
-          .where(eq(ordersTable.outlet_id, outlet.id))
+          .where(and(orderNotDeleted, eq(ordersTable.outlet_id, outlet.id)))
           .groupBy(ordersTable.id, ordersTable.status),
       ]);
 
@@ -224,7 +229,9 @@ export async function ownerRoutes(app: FastifyInstance) {
     const [row] = await db
       .select({ count: count() })
       .from(ordersTable)
-      .where(and(eq(ordersTable.outlet_id, outlet.id), eq(ordersTable.status, "pending")));
+      .where(
+        and(orderNotDeleted, eq(ordersTable.outlet_id, outlet.id), eq(ordersTable.status, "pending")),
+      );
 
     return { success: true, count: row?.count ?? 0, courierReachable: true };
   });
@@ -310,7 +317,7 @@ export async function ownerRoutes(app: FastifyInstance) {
         .from(ordersTable)
         .leftJoin(customersTable, eq(ordersTable.customer_id, customersTable.id))
         .leftJoin(usersTable, eq(customersTable.user_id, usersTable.id))
-        .where(and(eq(ordersTable.id, order_id), eq(ordersTable.outlet_id, outlet.id)))
+        .where(and(orderNotDeleted, eq(ordersTable.id, order_id), eq(ordersTable.outlet_id, outlet.id)))
         .limit(1);
 
       if (!order) return reply.status(404).send({ success: false, error: "Order not found" });
@@ -405,6 +412,7 @@ export async function ownerRoutes(app: FastifyInstance) {
         .innerJoin(ordersTable, eq(orderDetailsTable.order_id, ordersTable.id))
         .where(
           and(
+            orderNotDeleted,
             eq(productsTable.outlet_id, outlet.id),
             search ? ilike(productsTable.product_name, `%${search}%`) : undefined,
             dateStart ? gte(orderDetailsTable.created_at, dateStart) : undefined,
@@ -647,6 +655,7 @@ export async function ownerRoutes(app: FastifyInstance) {
 
       const scope = (start: Date, end: Date) =>
         and(
+          orderNotDeleted,
           eq(productsTable.outlet_id, outlet.id),
           gte(orderDetailsTable.created_at, start),
           lt(orderDetailsTable.created_at, end),

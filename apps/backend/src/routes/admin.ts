@@ -28,6 +28,7 @@ import {
 const OFFLINE_CUSTOMER_EMAIL = "rizkygin1@gmail.com";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
+import { orderNotDeleted } from "../lib/order-scope";
 import { cappedShiftEnd, closeStaleCourierSessions, staleShiftCutoff } from "../lib/utils/courier-availability";
 import {
   COURIER_DOCUMENT_GROUPS,
@@ -998,22 +999,37 @@ export async function adminRoutes(app: FastifyInstance) {
       db
         .select({ total: revenueExpr })
         .from(ordersTable)
-        .where(and(eq(ordersTable.status, "delivered"), gte(ordersTable.createdAt, currentPeriodStart))),
+        .where(
+          and(
+            orderNotDeleted,
+            eq(ordersTable.status, "delivered"),
+            gte(ordersTable.createdAt, currentPeriodStart),
+          ),
+        ),
       db
         .select({ total: revenueExpr })
         .from(ordersTable)
         .where(
           and(
+            orderNotDeleted,
             eq(ordersTable.status, "delivered"),
             gte(ordersTable.createdAt, previousPeriodStart),
             lt(ordersTable.createdAt, currentPeriodStart),
           ),
         ),
-      db.select({ total: count() }).from(ordersTable).where(eq(ordersTable.status, "pending")),
       db
         .select({ total: count() })
         .from(ordersTable)
-        .where(notInArray(ordersTable.status, ["pending", "delivered", "cancelled"])),
+        .where(and(orderNotDeleted, eq(ordersTable.status, "pending"))),
+      db
+        .select({ total: count() })
+        .from(ordersTable)
+        .where(
+          and(
+            orderNotDeleted,
+            notInArray(ordersTable.status, ["pending", "delivered", "cancelled"]),
+          ),
+        ),
       db
         .select({ total: countDistinct(courierSessionsTable.courier_id) })
         .from(courierSessionsTable)
@@ -1046,6 +1062,7 @@ export async function adminRoutes(app: FastifyInstance) {
         .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))
         .leftJoin(couriersTable, eq(ordersTable.courier_id, couriersTable.id))
         .leftJoin(courierUser, eq(couriersTable.user_id, courierUser.id))
+        .where(orderNotDeleted)
         .orderBy(desc(ordersTable.createdAt))
         .limit(5),
     ]);
@@ -1100,7 +1117,7 @@ export async function adminRoutes(app: FastifyInstance) {
     const customerUser = alias(usersTable, "customer_user");
     const courierUser = alias(usersTable, "courier_user");
 
-    const conditions: SQL[] = [];
+    const conditions: SQL[] = [orderNotDeleted];
     if (search) {
       conditions.push(
         or(
@@ -1219,7 +1236,7 @@ export async function adminRoutes(app: FastifyInstance) {
       .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))
       .leftJoin(couriersTable, eq(ordersTable.courier_id, couriersTable.id))
       .leftJoin(courierUser, eq(couriersTable.user_id, courierUser.id))
-      .where(eq(ordersTable.id, orderId))
+      .where(and(orderNotDeleted, eq(ordersTable.id, orderId)))
       .limit(1);
 
     if (!order) return reply.status(404).send({ success: false, error: "Not found" });
