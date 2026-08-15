@@ -407,6 +407,13 @@
       "when": 1786811432036,
       "tag": "0057_cashier_order_cancellation",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1786816774503,
+      "tag": "0058_maintenance_windows",
+      "breakpoints": true
     }
   ]
 }

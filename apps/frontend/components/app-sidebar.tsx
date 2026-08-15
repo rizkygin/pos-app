@@ -50,7 +50,8 @@ import {
   Boxes,
   Truck,
   Home,
-  ShieldCheck
+  ShieldCheck,
+  Wrench
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -282,6 +283,13 @@ const adminOutletSubItems = [
 ];
 
 const adminManageNavItems: NavItem[] = [
+  {
+    name: 'Pemeliharaan',
+    url: '/dashboard/admin/maintenance',
+    icon: Wrench,
+    iconBg: 'bg-amber-100 dark:bg-amber-950',
+    iconColor: 'text-amber-600 dark:text-amber-400',
+  },
   {
     name: 'Area Layanan',
     url: '/dashboard/admin/service-area',

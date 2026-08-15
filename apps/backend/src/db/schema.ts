@@ -1576,3 +1576,35 @@ export const menuGroupsTable = pgTable(
     uniqueIndex('menu_groups_outlet_name_uq').on(t.outlet_id, t.name),
   ],
 );
+
+// Platform-wide maintenance windows. A row is a PLANNED window, not a flag:
+// scheduling it ahead of time is what lets the app warn people before the doors
+// close ("maintenance in 25 minutes") instead of vanishing under them mid-order.
+//
+// Rows are kept after they pass — the history of when the platform was down is
+// worth more than the storage — so "are we in maintenance right now" is always
+// a time comparison, never a stored boolean that can be left switched on.
+export const maintenanceWindowsTable = pgTable(
+  'maintenance_windows',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    starts_at: timestamp('starts_at', { withTimezone: true }).notNull(),
+    ends_at: timestamp('ends_at', { withTimezone: true }).notNull(),
+    // Shown verbatim on the banner and the maintenance page. Optional: the UI
+    // has a sensible Indonesian default so an admin in a hurry can skip it.
+    message: text('message'),
+    // How long before starts_at the warning banner appears.
+    notice_minutes: integer('notice_minutes').notNull().default(60),
+    // Set when an admin calls it off, or ends it early (ends_at is moved to now
+    // for an early finish; this column is only for "it never happened").
+    cancelled_at: timestamp('cancelled_at', { withTimezone: true }),
+    created_by: text('created_by').references(() => usersTable.id, { onDelete: 'set null' }),
+    ...timestamps,
+  },
+  (t) => [
+    // The public status lookup runs on every proxied request, so it must hit an
+    // index: newest-first over the window bounds.
+    index('maintenance_windows_window_idx').on(t.ends_at, t.starts_at),
+    check('maintenance_windows_order_ck', sql`${t.ends_at} > ${t.starts_at}`),
+  ],
+);

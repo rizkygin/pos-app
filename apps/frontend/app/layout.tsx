@@ -4,6 +4,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { RegisterServiceWorker } from "@/components/register-service-worker";
 import { ThemeProvider } from "@/components/theme-provider";
+import { MaintenanceBanner } from "@/components/maintenance/maintenance-banner";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -110,6 +111,9 @@ export default function RootLayout({
         />
         <ThemeProvider>
           <RegisterServiceWorker />
+          {/* Client-polled, so it appears on an already-open tab without a
+              navigation and without making every page dynamic. */}
+          <MaintenanceBanner />
           {children}
         </ThemeProvider>
       </body>
