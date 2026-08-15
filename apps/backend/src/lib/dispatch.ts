@@ -3,6 +3,7 @@ import { db } from "../db";
 import {
   couriersTable,
   courierSessionsTable,
+  errandOrdersTable,
   orderOffersTable,
   ordersTable,
   outletsTable,
@@ -180,6 +181,21 @@ async function findCandidates(orderId: string, round: number): Promise<Candidate
           SELECT 1 FROM ${ordersTable}
           WHERE ${ordersTable.courier_id} = ${couriersTable.id}
             AND ${ordersTable.status} IN ('preparing', 'ready', 'on_delivery')
+        )`,
+        // ...nor carrying an errand ("Tugaskan Kurir"), which lives in a separate
+        // table entirely and is therefore invisible to the clause above. A
+        // pending errand counts: the courier is being asked and is holding that
+        // question exclusively, exactly like the live-offer rule below.
+        //
+        // This duplicates getCourierAvailability()'s rule rather than calling
+        // it, because dispatch needs the predicate as SQL to filter candidates
+        // in one query instead of N round-trips. The two must be changed
+        // together — a courier readable as free here but busy there gets offered
+        // work he can never accept.
+        sql`NOT EXISTS (
+          SELECT 1 FROM ${errandOrdersTable}
+          WHERE ${errandOrdersTable.courier_id} = ${couriersTable.id}
+            AND ${errandOrdersTable.status} IN ('pending', 'on_delivery')
         )`,
         // Not mid-decision on another order. One question at a time, or a
         // courier ends up holding two offers and losing one of them by timeout

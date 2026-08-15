@@ -6,7 +6,18 @@ import type { LucideIcon } from 'lucide-react';
 import { useCurrentUrl } from '@/hooks/use-current-url';
 import { cn } from '@/lib/utils';
 
-type Tab = { name: string; url: string; icon: LucideIcon };
+type Tab = {
+  name: string;
+  url: string;
+  icon: LucideIcon;
+  /**
+   * Extra subtrees this tab owns. Riwayat covers two sibling routes — outlet
+   * orders and errands — that are reachable from each other via the switcher on
+   * those pages. Without this, tapping through to the errand history would
+   * leave every tab unlit, which reads as "you have navigated out of the app".
+   */
+  alsoMatch?: string[];
+};
 
 // Five is the ceiling — a sixth tab makes each target narrower than a thumb.
 // These mirror the customer rows of the sidebar, plus the account page that
@@ -15,17 +26,23 @@ const TABS: Tab[] = [
   { name: 'Beranda', url: '/dashboard', icon: Home },
   { name: 'Pesan', url: '/dashboard/order', icon: ShoppingCart },
   { name: 'Terjadwal', url: '/dashboard/scheduled-order', icon: CalendarClock },
-  { name: 'Riwayat', url: '/dashboard/history-order', icon: History },
+  {
+    name: 'Riwayat',
+    url: '/dashboard/history-order',
+    icon: History,
+    alsoMatch: ['/dashboard/history-errand'],
+  },
   { name: 'Akun', url: '/dashboard/user', icon: UserRound },
 ];
 
 // /dashboard is the home tab, so it matches only itself. Every other tab owns
 // its subtree — /dashboard/order/food keeps "Pesan" lit. The trailing slash
 // matters: it stops /dashboard/order from claiming /dashboard/order-outlet.
-function isTabActive(url: string, pathname: string | null) {
+function isTabActive(tab: Tab, pathname: string | null) {
   if (!pathname) return false;
-  if (url === '/dashboard') return pathname === '/dashboard';
-  return pathname === url || pathname.startsWith(`${url}/`);
+  if (tab.url === '/dashboard') return pathname === '/dashboard';
+  const owns = (base: string) => pathname === base || pathname.startsWith(`${base}/`);
+  return owns(tab.url) || (tab.alsoMatch?.some(owns) ?? false);
 }
 
 export function CustomerBottomNav() {
@@ -48,7 +65,7 @@ export function CustomerBottomNav() {
     >
       <ul className="flex items-stretch">
         {TABS.map((tab) => {
-          const active = isTabActive(tab.url, pathname);
+          const active = isTabActive(tab, pathname);
           const Icon = tab.icon;
           return (
             <li key={tab.url} className="flex-1">

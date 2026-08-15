@@ -5,6 +5,7 @@ import Image from "next/image";
 import { motion, AnimatePresence } from "motion/react";
 import {
     Utensils,
+    Bike,
     Coffee,
     ShoppingBag,
     ArrowRight,
@@ -342,6 +343,32 @@ export function FeaturePicker() {
                         </p>
                     </div>
                 </div>
+
+                {/* Tugaskan Kurir sits outside the grid on purpose. Every tile
+                    below browses outlets by product category; this one hires a
+                    person and touches no outlet at all, so it is not an
+                    ORDER_FEATURES entry — adding it there would require a
+                    category in FEATURE_CATEGORY that no product will ever
+                    have. */}
+                <Link
+                    href="/dashboard/suruh-kurir"
+                    className="group mb-3 flex items-center gap-3 rounded-2xl border border-border/60 bg-gradient-to-br from-rose-50 to-orange-50 p-3.5 shadow-sm transition-all duration-300 hover:border-rose-300/50 hover:shadow-lg dark:from-rose-950/30 dark:to-orange-950/20 sm:mb-4 sm:rounded-3xl sm:p-5"
+                >
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-rose-100 shadow-sm transition-transform duration-300 group-hover:scale-105 sm:h-12 sm:w-12 sm:rounded-2xl">
+                        <Bike className="h-4.5 w-4.5 text-rose-600 sm:h-6 sm:w-6" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                        <h3 className="truncate text-xs font-black leading-tight text-foreground sm:text-base">
+                            Tugaskan Kurir
+                        </h3>
+                        <p className="line-clamp-2 text-[10px] leading-tight text-muted-foreground sm:text-xs sm:leading-snug">
+                            Pilih kurir langsung buat antar barang. Harga nego lewat WhatsApp.
+                        </p>
+                    </div>
+                    <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-rose-100 transition-transform duration-300 group-hover:translate-x-0.5 sm:h-7 sm:w-7">
+                        <ArrowRight className="h-2.5 w-2.5 text-rose-600 sm:h-3.5 sm:w-3.5" />
+                    </div>
+                </Link>
 
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5 sm:gap-4 w-full min-w-0">
                     {filteredFeatures.map((feature, i) => (

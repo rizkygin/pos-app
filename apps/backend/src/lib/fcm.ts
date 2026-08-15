@@ -118,6 +118,94 @@ export type OfferPush = {
   details?: OfferDetails;
 };
 
+export type ErrandPush = {
+  errandId: string;
+  customerName: string;
+  /** Canonical 628… — the courier taps straight through to WhatsApp. */
+  customerPhone: string;
+  customerRating: number;
+  customerReviewCount: number;
+  note: string;
+  /**
+   * Where the courier rides TO. Named pickup* only because the installed
+   * courier app reads those keys off the push payload; the columns behind them
+   * are errand_orders.destination_* (migration 0054).
+   */
+  pickupAddress: string;
+  pickupLat: number | null;
+  pickupLon: number | null;
+};
+
+/**
+ * Ring one courier about a direct hire ("Tugaskan Kurir").
+ *
+ * Deliberately NOT an offer push, despite the overlap. An offer carries a
+ * countdown the app renders as a full-screen intent with two buttons, and it
+ * expires — dispatch moves on to the next courier. An errand has no clock and
+ * no next courier: it was aimed at this one person and waits until they answer.
+ * Reusing type:"offer" would put it on a screen built to expire, and the app
+ * would discard a request that is still perfectly live.
+ *
+ * No TTL for the same reason. A request the courier sees an hour late is still
+ * actionable — the customer is the only one who can end the wait, and only
+ * after the five-minute floor.
+ */
+export async function sendErrandPush(courierId: number, errand: ErrandPush): Promise<void> {
+  if (!serviceAccount) return;
+
+  const tokens = await getCourierFcmTokens(courierId);
+  if (tokens.length === 0) return;
+
+  const accessToken = await getAccessToken(serviceAccount);
+  const url = `https://fcm.googleapis.com/v1/projects/${serviceAccount.project_id}/messages:send`;
+  const dead: string[] = [];
+
+  await Promise.all(
+    tokens.map(async (token) => {
+      const message = {
+        message: {
+          token,
+          data: {
+            type: "errand",
+            errandId: errand.errandId,
+            customerName: errand.customerName,
+            customerPhone: errand.customerPhone,
+            customerRating: String(errand.customerRating),
+            customerReviewCount: String(errand.customerReviewCount),
+            note: errand.note,
+            pickupAddress: errand.pickupAddress,
+            pickupLat: errand.pickupLat !== null ? String(errand.pickupLat) : "",
+            pickupLon: errand.pickupLon !== null ? String(errand.pickupLon) : "",
+          },
+          android: {
+            priority: "HIGH" as const,
+          },
+        },
+      };
+
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(message),
+      });
+
+      if (res.ok) return;
+
+      const body = await res.text();
+      if (res.status === 404 || body.includes("UNREGISTERED") || body.includes("INVALID_ARGUMENT")) {
+        dead.push(token);
+        return;
+      }
+      console.error(`[fcm] errand send failed (${res.status}): ${body}`);
+    }),
+  );
+
+  if (dead.length > 0) await pruneFcmTokens(dead);
+}
+
 /**
  * Ring one courier about one offer.
  *

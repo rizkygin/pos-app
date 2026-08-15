@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, avg, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, avg, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db";
 import {
   couriersTable,
@@ -24,6 +24,49 @@ type ProductRatingInput = RatingInput & {
 type SubmitResult =
   | { ok: true }
   | { ok: false; error: "already_rated" | "not_found" | "unknown" };
+
+/**
+ * Has this person already rated this order?
+ *
+ * Asked of the WHOLE order, not of one hand-picked order detail. A rating row
+ * hangs off an order_details id, and the courier/customer rating is anchored to
+ * whichever detail the writer happened to see first — an unordered LIMIT 1,
+ * which Postgres is free to answer differently from one query plan to the next.
+ * Checking one specific detail therefore missed ratings that exist on a sibling
+ * row, and the customer was sent back to rate an order they had already rated
+ * (the submit then failed with already_rated). Any rating by this reviewer
+ * against any detail of this order settles the question.
+ */
+async function alreadyRatedOrder(reviewerUserId: string, orderId: string) {
+  const [existing] = await db
+    .select({ id: ratingsTable.id })
+    .from(ratingsTable)
+    .innerJoin(orderDetailsTable, eq(ratingsTable.order_details_id, orderDetailsTable.id))
+    .where(
+      and(
+        eq(ratingsTable.reviewer, reviewerUserId),
+        eq(orderDetailsTable.order_id, orderId),
+      ),
+    )
+    .limit(1);
+  return !!existing;
+}
+
+/**
+ * The order detail the courier/outlet rating hangs off.
+ *
+ * Ordered, unlike the reads it used to mirror: the anchor has to be the same row
+ * every time or the "already rated" question above has no stable answer.
+ */
+async function ratingAnchorDetail(orderId: string) {
+  const [detail] = await db
+    .select({ id: orderDetailsTable.id })
+    .from(orderDetailsTable)
+    .where(eq(orderDetailsTable.order_id, orderId))
+    .orderBy(asc(orderDetailsTable.id))
+    .limit(1);
+  return detail ?? null;
+}
 
 export async function ratingRoutes(app: FastifyInstance) {
   // Data for the courier's "rate the customer + outlet" page, with all the
@@ -64,24 +107,8 @@ export async function ratingRoutes(app: FastifyInstance) {
       .limit(1);
     if (!order) return reply.send({ ok: false });
 
-    const [firstDetail] = await db
-      .select({ id: orderDetailsTable.id })
-      .from(orderDetailsTable)
-      .where(eq(orderDetailsTable.order_id, orderId))
-      .limit(1);
-    if (!firstDetail) return reply.send({ ok: false });
-
-    const [existingRating] = await db
-      .select({ id: ratingsTable.id })
-      .from(ratingsTable)
-      .where(
-        and(
-          eq(ratingsTable.reviewer, session.user.id),
-          eq(ratingsTable.order_details_id, firstDetail.id),
-        ),
-      )
-      .limit(1);
-    if (existingRating) return reply.send({ ok: false });
+    if (!(await ratingAnchorDetail(orderId))) return reply.send({ ok: false });
+    if (await alreadyRatedOrder(session.user.id, orderId)) return reply.send({ ok: false });
 
     return reply.send({ ok: true, order });
   });
@@ -140,17 +167,7 @@ export async function ratingRoutes(app: FastifyInstance) {
       .where(eq(orderDetailsTable.order_id, orderId));
     if (products.length === 0) return reply.send({ ok: false });
 
-    const [existingRating] = await db
-      .select({ id: ratingsTable.id })
-      .from(ratingsTable)
-      .where(
-        and(
-          eq(ratingsTable.reviewer, session.user.id),
-          eq(ratingsTable.order_details_id, products[0].orderDetailId),
-        ),
-      )
-      .limit(1);
-    if (existingRating) return reply.send({ ok: false });
+    if (await alreadyRatedOrder(session.user.id, orderId)) return reply.send({ ok: false });
 
     return reply.send({ ok: true, order, products });
   });
@@ -202,11 +219,7 @@ export async function ratingRoutes(app: FastifyInstance) {
       return reply.send({ ok: false, error: "not_found" } satisfies SubmitResult);
     }
 
-    const [firstDetail] = await db
-      .select({ id: orderDetailsTable.id })
-      .from(orderDetailsTable)
-      .where(eq(orderDetailsTable.order_id, orderId))
-      .limit(1);
+    const firstDetail = await ratingAnchorDetail(orderId);
     if (!firstDetail) return reply.send({ ok: false, error: "not_found" } satisfies SubmitResult);
 
     try {
@@ -352,17 +365,7 @@ export async function ratingRoutes(app: FastifyInstance) {
       .where(eq(orderDetailsTable.order_id, orderId));
     if (products.length === 0) return reply.send({ ok: false });
 
-    const [existingRating] = await db
-      .select({ id: ratingsTable.id })
-      .from(ratingsTable)
-      .where(
-        and(
-          eq(ratingsTable.reviewer, session.user.id),
-          eq(ratingsTable.order_details_id, products[0].orderDetailId),
-        ),
-      )
-      .limit(1);
-    if (existingRating) return reply.send({ ok: false });
+    if (await alreadyRatedOrder(session.user.id, orderId)) return reply.send({ ok: false });
 
     return reply.send({
       ok: true,
@@ -420,11 +423,7 @@ export async function ratingRoutes(app: FastifyInstance) {
       return reply.send({ ok: false, error: "not_found" } satisfies SubmitResult);
     }
 
-    const [firstDetail] = await db
-      .select({ id: orderDetailsTable.id })
-      .from(orderDetailsTable)
-      .where(eq(orderDetailsTable.order_id, orderId))
-      .limit(1);
+    const firstDetail = await ratingAnchorDetail(orderId);
     if (!firstDetail) return reply.send({ ok: false, error: "not_found" } satisfies SubmitResult);
 
     try {
@@ -560,22 +559,25 @@ export async function ratingRoutes(app: FastifyInstance) {
       .limit(1);
     if (!order) return reply.send({ ok: false, error: "not_found" } satisfies SubmitResult);
 
-    const [firstDetail] = await db
-      .select({ id: orderDetailsTable.id })
-      .from(orderDetailsTable)
-      .where(eq(orderDetailsTable.order_id, orderId))
-      .limit(1);
+    const firstDetail = await ratingAnchorDetail(orderId);
     if (!firstDetail) return reply.send({ ok: false, error: "not_found" } satisfies SubmitResult);
 
     try {
       await db.transaction(async (tx) => {
+        // Order-wide, matching the page guard — a rating written against a
+        // different detail of this order still means "already rated". Kept
+        // inside the transaction so two taps cannot both pass it.
         const [existing] = await tx
           .select({ id: ratingsTable.id })
           .from(ratingsTable)
+          .innerJoin(
+            orderDetailsTable,
+            eq(ratingsTable.order_details_id, orderDetailsTable.id),
+          )
           .where(
             and(
               eq(ratingsTable.reviewer, session.user.id),
-              eq(ratingsTable.order_details_id, firstDetail.id),
+              eq(orderDetailsTable.order_id, orderId),
             ),
           )
           .limit(1);

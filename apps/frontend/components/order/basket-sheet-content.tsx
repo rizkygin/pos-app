@@ -14,9 +14,24 @@ import { useRouter } from "next/navigation";
 import { getDeliveryFee } from "@/app/dashboard/order/[feature]/[outletId]/action";
 import { checkUserHasLocations } from "@/app/dashboard/users/locations/setting/actions";
 import { cartNeedsOwnDriver, cartHaulCap } from "@/lib/types";
+import { API_URL } from "@/lib/api-url";
 
 type Product = OrderProduct;
 type Promo = OutletPromo;
+
+/**
+ * Order states that still have someone working on them. Everything else
+ * ('delivered', 'cancelled') is finished and blocks nothing.
+ */
+const ACTIVE_ORDER_STATUSES = [
+    'pending',
+    'confirmed',
+    'preparing',
+    'ready',
+    'on_delivery',
+];
+
+const ACTIVE_CHECK_MS = 10000;
 
 export type CartItem = {
     product: Product;
@@ -44,7 +59,42 @@ export function BasketSheetContent({
     const [isPending, setTransition] = useTransition();
     const [deliveryFee, setDeliveryFee] = useState<number | null>(null);
     const [feeError, setFeeError] = useState<string | null>(null);
+    const [hasActiveOrder, setHasActiveOrder] = useState(false);
     const router = useRouter();
+
+    // A customer may only have one order running at a time: the outlet, the
+    // courier and the tracking screen all assume a single live job. Checked
+    // here, at the last step before the invoice, and re-checked while the sheet
+    // stays open so finishing an order re-opens checkout without a reload.
+    useEffect(() => {
+        let cancelled = false;
+        const check = async () => {
+            try {
+                const res = await fetch(`${API_URL}/api/get-active-order`, {
+                    cache: 'no-store',
+                    credentials: 'include',
+                });
+                const data = await res.json();
+                if (cancelled) return;
+                // The endpoint returns the customer's LATEST order whatever its
+                // state, so the statuses are what decide — a delivered or
+                // cancelled one is not in the way of anything.
+                setHasActiveOrder(
+                    !!data?.success && ACTIVE_ORDER_STATUSES.includes(data.order?.status),
+                );
+            } catch {
+                // Never block checkout on a failed check: the customer losing
+                // the ability to order because of a network blip is far worse
+                // than the double order this is guarding against.
+            }
+        };
+        check();
+        const id = setInterval(check, ACTIVE_CHECK_MS);
+        return () => {
+            cancelled = true;
+            clearInterval(id);
+        };
+    }, []);
 
     // One bulky item and the outlet hauls the whole order itself. There is no
     // distance fee to fetch in that case — the owner quotes the haul once they
@@ -237,13 +287,45 @@ export function BasketSheetContent({
                     )}
                 </div>
 
+                {/* One order at a time. Said before the button rather than as a
+                    failure after it — the cart itself is untouched, so whatever
+                    is in it is still there once the current order is done. */}
+                {hasActiveOrder && (
+                    <div className="mb-2 rounded-2xl bg-amber-50 px-3 py-2.5 text-xs dark:bg-amber-950/30">
+                        <p className="font-bold text-amber-700 dark:text-amber-400">
+                            Pesanan pian yang sekarang masih berjalan
+                        </p>
+                        <p className="mt-0.5 text-muted-foreground">
+                            Selesaikan dulu pesanan yang berjalan sebelum memesan lagi.
+                            Isi keranjang ini tetap ulun simpan.
+                        </p>
+                        <button
+                            type="button"
+                            onClick={() => router.push('/dashboard/activeorder')}
+                            className="mt-1.5 font-bold text-rose-600 hover:underline"
+                        >
+                            Lihat Pesanan Berjalan
+                        </button>
+                    </div>
+                )}
+
                 <Button
                     onClick={handleCheckout}
                     // The own-driver lane never fetches a distance fee, so gating
                     // on deliveryFee there would disable checkout permanently.
-                    disabled={isPending || (!ownDriver && (!!feeError || deliveryFee === null))}
+                    disabled={
+                        isPending ||
+                        hasActiveOrder ||
+                        (!ownDriver && (!!feeError || deliveryFee === null))
+                    }
                     className="w-full rounded-2xl bg-rose-500 hover:bg-rose-600 text-white font-black py-6 shadow-lg shadow-rose-200">
-                    Checkout <ArrowRight className="ml-2 h-4 w-4" />
+                    {hasActiveOrder ? (
+                        'Ada Pesanan Berjalan'
+                    ) : (
+                        <>
+                            Checkout <ArrowRight className="ml-2 h-4 w-4" />
+                        </>
+                    )}
                 </Button>
             </div>
         </div>

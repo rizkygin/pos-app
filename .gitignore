@@ -53,3 +53,8 @@ apps/desktop-cashier/
 
 # Firebase config for the courier app — belongs in its own repo, never this one
 google-services*.json
+
+# Backend build output. Local-only: apps/backend/Dockerfile compiles its own
+# dist from src (`RUN npx tsc`) and copies nothing from here, so a committed
+# copy is dead weight that `railway up` still uploads.
+apps/backend/dist/

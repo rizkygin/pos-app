@@ -1,8 +1,21 @@
 import { db } from '../../db';
-import { courierSessionsTable, couriersTable, ordersTable, ratingsTable } from '../../db/schema';
+import {
+  courierSessionsTable,
+  couriersTable,
+  errandOrdersTable,
+  ordersTable,
+  ratingsTable,
+} from '../../db/schema';
 import { and, desc, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm';
 
 const ACTIVE_ORDER_STATUSES = ['preparing', 'ready', 'on_delivery'] as const;
+
+// The errand equivalent. 'pending' counts as busy even though no job has been
+// agreed yet: a pending errand holds the courier exclusively while he decides,
+// which is the whole point of errand_orders_courier_pending_uq. Leaving it out
+// would let a courier be offered other work in the gap between being asked and
+// answering — and then accept both.
+const ACTIVE_ERRAND_STATUSES = ['pending', 'on_delivery'] as const;
 
 // Hard ceiling on one shift. Nothing closes a session when a courier simply
 // walks away — it stays open until their *next* go-online — so without a cap a
@@ -124,6 +137,21 @@ export async function getCourierAvailability(courierId: number) {
     )
     .limit(1);
 
+  // Errands live in their own table and are invisible to the query above, so a
+  // courier mid-errand would otherwise read as free. Checked here rather than
+  // at the call sites: this function is the single answer to "can this courier
+  // take work", and a second copy of the rule is a copy that drifts.
+  const [activeErrand] = await db
+    .select({ id: errandOrdersTable.id })
+    .from(errandOrdersTable)
+    .where(
+      and(
+        eq(errandOrdersTable.courier_id, courierId),
+        inArray(errandOrdersTable.status, ACTIVE_ERRAND_STATUSES),
+      ),
+    )
+    .limit(1);
+
   const [courier] = await db
     .select({ status: couriersTable.verification_status })
     .from(couriersTable)
@@ -131,7 +159,7 @@ export async function getCourierAvailability(courierId: number) {
     .limit(1);
 
   const isOnline = !!openSession;
-  const hasActiveOrder = !!activeOrder;
+  const hasActiveOrder = !!activeOrder || !!activeErrand;
   const isApproved = courier?.status === 'approved';
   const ratingInfo = await getCourierRatingInfo(courierId);
 

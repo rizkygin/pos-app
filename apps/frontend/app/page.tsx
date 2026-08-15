@@ -708,8 +708,12 @@ export default async function LandingPage() {
           <div className="flex items-center gap-5">
             <a href="#fitur" className="transition-colors hover:text-white">Fitur</a>
             <a href="#harga" className="transition-colors hover:text-white">Harga</a>
+            {/* Versioned filename, so this must be bumped with every courier
+                release. It previously pointed at an unversioned
+                KurirUlunPesan.apk that no release ever contained — a 404
+                behind a button nobody had reason to test. */}
             <a
-              href="https://github.com/rizkygin/kurir-ulunpesan/releases/download/Latest/KurirUlunPesan.apk"
+              href="https://github.com/rizkygin/kurir-ulunpesan/releases/download/Latest/KurirUlunPesan.v1.2.0.apk"
               className="inline-flex items-center gap-1.5 transition-colors hover:text-white"
             >
               <Download className="size-3.5" /> Aplikasi Kurir

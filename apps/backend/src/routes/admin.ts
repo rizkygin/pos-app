@@ -12,6 +12,7 @@ import {
   orderOffersTable,
   courierSessionsTable,
   customersTable,
+  errandOrdersTable,
   ordersTable,
   outletsTable,
   productsTable,
@@ -1418,6 +1419,91 @@ export async function adminRoutes(app: FastifyInstance) {
     ]);
 
     return reply.send({ success: true, online, history });
+  });
+
+  /**
+   * Every "Tugaskan Kurir" errand on the platform.
+   *
+   * Errands are outside the platform's accounting — no outlet, no commission,
+   * nothing booked — so they never appear in /api/admin/orders, which is built
+   * on ordersTable. Without this endpoint the whole feature is invisible to
+   * admins: a customer complaint about a courier who took the money and never
+   * arrived has no record anywhere an admin can reach.
+   *
+   * Read-only by design. The negotiation happens on WhatsApp and the lifecycle
+   * belongs to the two people in it; an admin watching is not a party to it and
+   * has nothing to move.
+   */
+  app.get("/api/admin/errands", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
+    if (!(await requireAdmin(session.user.id))) {
+      return reply.status(403).send({ success: false, error: "Forbidden" });
+    }
+
+    const { limit = "100", status } = request.query as Record<string, string>;
+    const rowLimit = Math.min(300, Math.max(1, Number(limit) || 100));
+
+    // Two joins onto users — the customer and the courier's own user row — so
+    // one of them needs an alias or Postgres cannot tell the columns apart.
+    const courierUser = alias(usersTable, "errand_courier_user");
+
+    const statuses = [
+      "pending",
+      "on_delivery",
+      "delivered",
+      "cancelled_by_customer",
+      "rejected_by_courier",
+      "rejected_by_customer",
+    ] as const;
+    const wanted = statuses.find((s) => s === status);
+
+    const [rows, tallies] = await Promise.all([
+      db
+        .select({
+          id: errandOrdersTable.id,
+          status: errandOrdersTable.status,
+          note: errandOrdersTable.note,
+          price: errandOrdersTable.price,
+          rejectedReason: errandOrdersTable.rejected_reason,
+          destinationAddress: errandOrdersTable.destination_address,
+          destinationLat: errandOrdersTable.destination_lat,
+          destinationLon: errandOrdersTable.destination_lon,
+          createdAt: errandOrdersTable.createdAt,
+          acceptedAt: errandOrdersTable.accepted_at,
+          deliveredAt: errandOrdersTable.delivered_at,
+          customerId: usersTable.id,
+          customerName: usersTable.name,
+          customerPhone: usersTable.phone,
+          courierId: couriersTable.id,
+          courierName: courierUser.name,
+          courierPhone: courierUser.phone,
+          courierPlate: couriersTable.vehicle_plate,
+          courierVehicle: couriersTable.vehicle_type,
+        })
+        .from(errandOrdersTable)
+        .innerJoin(usersTable, eq(errandOrdersTable.user_id, usersTable.id))
+        .innerJoin(couriersTable, eq(errandOrdersTable.courier_id, couriersTable.id))
+        .innerJoin(courierUser, eq(couriersTable.user_id, courierUser.id))
+        .where(wanted ? eq(errandOrdersTable.status, wanted) : undefined)
+        .orderBy(desc(errandOrdersTable.createdAt))
+        .limit(rowLimit),
+      // Counted over the whole table, not the returned page: the tab badges
+      // must not shrink as the row limit trims the list.
+      db
+        .select({
+          status: errandOrdersTable.status,
+          total: count(),
+        })
+        .from(errandOrdersTable)
+        .groupBy(errandOrdersTable.status),
+    ]);
+
+    const counts = Object.fromEntries(
+      statuses.map((s) => [s, tallies.find((t) => t.status === s)?.total ?? 0]),
+    );
+
+    return reply.send({ success: true, errands: rows, counts });
   });
 
   /**

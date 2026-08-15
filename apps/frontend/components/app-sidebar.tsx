@@ -250,6 +250,17 @@ const customerNavItems: NavItem[] = [
     iconBg: 'bg-indigo-100 dark:bg-indigo-950',
     iconColor: 'text-indigo-600 dark:text-indigo-400',
   },
+  {
+    // Its own row rather than a tab inside History Order: an errand has no
+    // outlet, no items and no total, so it shares none of that screen's
+    // columns — and a customer looking for "the thing I asked the courier to
+    // do" is looking for the note, which only exists here.
+    name: 'Riwayat Tugas Kurir',
+    url: '/dashboard/history-errand',
+    icon: Truck,
+    iconBg: 'bg-blue-100 dark:bg-blue-950',
+    iconColor: 'text-blue-600 dark:text-blue-400',
+  },
 ];
 
 const adminDashboardNavItem: NavItem = {
@@ -284,6 +295,13 @@ const adminManageNavItems: NavItem[] = [
     icon: Receipt,
     iconBg: 'bg-sky-100 dark:bg-sky-950',
     iconColor: 'text-sky-600 dark:text-sky-400',
+  },
+  {
+    name: 'Tugaskan Kurir',
+    url: '/dashboard/admin/errand',
+    icon: Bike,
+    iconBg: 'bg-amber-100 dark:bg-amber-950',
+    iconColor: 'text-amber-600 dark:text-amber-400',
   },
   {
     name: 'Manage Courier',
