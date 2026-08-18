@@ -26,7 +26,10 @@ const dashboardPage = async () => {
         activeOrdersCount={data.activeOrdersCount}
         recentOrders={data.recentOrders}
         total6monthsSales={data.total6monthsSales}
-        topProduct={data.topProduct}
+        total7daysSales={data.total7daysSales}
+        totalTodaySales={data.totalTodaySales}
+        todayChannels={data.todayChannels}
+        counts30d={data.counts30d}
       />
     );
   }
@@ -65,8 +68,11 @@ const dashboardPage = async () => {
             activeOrdersCount={data.activeOrdersCount}
             recentOrders={data.recentOrders}
             total6monthsSales={data.total6monthsSales}
-            topProduct={data.topProduct}
-          />
+            total7daysSales={data.total7daysSales}
+            totalTodaySales={data.totalTodaySales}
+            todayChannels={data.todayChannels}
+        counts30d={data.counts30d}
+              />
         );
       }
     }

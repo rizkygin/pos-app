@@ -529,6 +529,14 @@ export const ordersTable = pgTable(
     index('courier_id_idx').on(table.courier_id),
     index('outlet_id_idx').on(table.outlet_id),
     index('orders_outlet_status_idx').on(table.outlet_id, table.status),
+    // NOTE: migration 0059 adds four more indexes on this table by hand —
+    // expression indexes over note ->> 'paymentMethod' / 'cashierName' /
+    // 'customerName' plus (outlet_id, created_at, source), all partial on
+    // deleted_at IS NULL. They are what makes the segmented reports in
+    // routes/reports.ts affordable. Deliberately NOT declared here: drizzle-kit
+    // cannot round-trip them, and a generate would drop them. Do not remove the
+    // migration.
+
     index('orders_courier_status_idx').on(table.courier_id, table.status),
   ],
 );

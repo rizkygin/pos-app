@@ -26,6 +26,7 @@ import { employeeRoutes } from "./routes/employees";
 import { pushRoutes } from "./routes/push";
 import { routingRoutes } from "./routes/routing";
 import { maintenanceRoutes } from "./routes/maintenance";
+import { reportRoutes } from "./routes/reports";
 import { startDispatchScheduler } from "./lib/dispatch-scheduler";
 import { FRONTEND_ORIGINS } from "./lib/app-env";
 
@@ -119,6 +120,7 @@ async function main() {
   await app.register(pushRoutes);
   await app.register(routingRoutes);
   await app.register(maintenanceRoutes);
+  await app.register(reportRoutes);
 
   app.get("/health", async () => ({ ok: true }));
 

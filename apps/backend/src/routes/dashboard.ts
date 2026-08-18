@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import type { AnyColumn, SQL } from "drizzle-orm";
 import {
   and,
   count,
@@ -22,6 +23,7 @@ import {
   locationsTable,
   ordersTable,
   orderDetailsTable,
+  invoicesTable,
   outletsTable,
   productAdsTable,
   productAdsSchedule,
@@ -55,6 +57,28 @@ export async function dashboardRoutes(app: FastifyInstance) {
     const outlet = access && hasPermission(access, "reports") ? access.outlet : null;
     if (!outlet) return reply.send({ ok: false });
     const outletId = outlet.id;
+
+    // Timezone matters for "today": an outlet in WITA closes its books six hours
+    // before UTC does. Query param mirrors /api/owner/reports; Asia/Jakarta is
+    // the default everywhere in this codebase.
+    const { timezone = "Asia/Jakarta" } = request.query as Record<string, string>;
+    const now = new Date();
+    const todayLocal = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(now);
+
+    const sixMonthsStart = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+    const prevSixMonthsStart = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+    const sevenDaysStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const prevSevenDaysStart = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+    const todayStart = getUTCRangeFromLocalDate(todayLocal, timezone).startUTC;
+    const thirtyDaysStart = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const yesterdayStart = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
+    // Widest window any bucket needs — one scan covers all six sums.
+    const windowStart = prevSixMonthsStart;
 
     const since = new Date(getUTCTime().getTime() - 24 * 60 * 60 * 1000);
 
@@ -90,77 +114,113 @@ export async function dashboardRoutes(app: FastifyInstance) {
       (o) => !["delivered", "cancelled"].includes(o.status),
     ).length;
 
-    const now = new Date();
-    const currentPeriodStart = new Date(now.getFullYear(), now.getMonth() - 5, 1);
-    const previousPeriodStart = new Date(now.getFullYear(), now.getMonth() - 11, 1);
-
     const validOrderDetails = and(
       orderNotDeleted,
       eq(ordersTable.outlet_id, outletId),
       notInArray(ordersTable.status, ["cancelled", "pending"]),
     );
 
-    const [[currentPeriod], [previousPeriod], [topProductRow]] = await Promise.all([
+    // Sales invoices are a second revenue stream (Faktur Jual) that never flows
+    // through ordersTable — count them alongside POS orders so the headline
+    // number matches what the owner actually sold. Drafts/voids are excluded;
+    // issue_date is the period anchor (that is the date on the invoice).
+    const validSalesInvoices = and(
+      eq(invoicesTable.outlet_id, outletId),
+      eq(invoicesTable.type, "sales"),
+      inArray(invoicesTable.status, ["posted", "partial", "paid"]),
+    );
+
+    // Every period in one pass: FILTER carves the buckets out of a single scan
+    // instead of firing six near-identical range queries per source.
+    const bucketSums = (amount: SQL, at: AnyColumn) => ({
+      cur6: sql<number>`coalesce(sum(${amount}) filter (where ${at} >= ${sixMonthsStart}), 0)`.mapWith(Number),
+      prev6: sql<number>`coalesce(sum(${amount}) filter (where ${at} >= ${prevSixMonthsStart} and ${at} < ${sixMonthsStart}), 0)`.mapWith(Number),
+      cur7: sql<number>`coalesce(sum(${amount}) filter (where ${at} >= ${sevenDaysStart}), 0)`.mapWith(Number),
+      prev7: sql<number>`coalesce(sum(${amount}) filter (where ${at} >= ${prevSevenDaysStart} and ${at} < ${sevenDaysStart}), 0)`.mapWith(Number),
+      curToday: sql<number>`coalesce(sum(${amount}) filter (where ${at} >= ${todayStart}), 0)`.mapWith(Number),
+      prevToday: sql<number>`coalesce(sum(${amount}) filter (where ${at} >= ${yesterdayStart} and ${at} < ${todayStart}), 0)`.mapWith(Number),
+    });
+
+    const [[orderSums], [invoiceSums]] = await Promise.all([
       db
         .select({
-          total:
-            sql<number>`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric)), 0)`.mapWith(
-              Number,
-            ),
-        })
-        .from(orderDetailsTable)
-        .innerJoin(ordersTable, eq(orderDetailsTable.order_id, ordersTable.id))
-        .where(and(validOrderDetails, gte(orderDetailsTable.created_at, currentPeriodStart))),
-      db
-        .select({
-          total:
-            sql<number>`coalesce(sum(cast(${orderDetailsTable.summary_price} as numeric)), 0)`.mapWith(
-              Number,
-            ),
-        })
-        .from(orderDetailsTable)
-        .innerJoin(ordersTable, eq(orderDetailsTable.order_id, ordersTable.id))
-        .where(
-          and(
-            validOrderDetails,
-            gte(orderDetailsTable.created_at, previousPeriodStart),
-            lt(orderDetailsTable.created_at, currentPeriodStart),
+          ...bucketSums(
+            sql`cast(${orderDetailsTable.summary_price} as numeric)`,
+            orderDetailsTable.created_at,
           ),
-        ),
-      db
-        .select({
-          name: productsTable.product_name,
-          category: productsTable.category,
-          totalSold: sum(orderDetailsTable.quantity).mapWith(Number),
+          // Order counts. count(distinct order_id) because this scan is over
+          // LINE ITEMS — a 4-item order must count once, not four times.
+          // Today's split feeds the Kasir/Online card; the 30-day total feeds
+          // the rotating counter beside it.
+          posToday: sql<number>`count(distinct ${orderDetailsTable.order_id}) filter (where ${orderDetailsTable.created_at} >= ${todayStart} and ${ordersTable.source} = 'pos')`.mapWith(Number),
+          appToday: sql<number>`count(distinct ${orderDetailsTable.order_id}) filter (where ${orderDetailsTable.created_at} >= ${todayStart} and ${ordersTable.source} = 'app')`.mapWith(Number),
+          orders30: sql<number>`count(distinct ${orderDetailsTable.order_id}) filter (where ${orderDetailsTable.created_at} >= ${thirtyDaysStart})`.mapWith(Number),
         })
         .from(orderDetailsTable)
         .innerJoin(ordersTable, eq(orderDetailsTable.order_id, ordersTable.id))
-        .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
-        .where(and(validOrderDetails, gte(orderDetailsTable.created_at, currentPeriodStart)))
-        .groupBy(productsTable.id)
-        .orderBy(desc(sum(orderDetailsTable.quantity)))
-        .limit(1),
+        .where(and(validOrderDetails, gte(orderDetailsTable.created_at, windowStart))),
+      db
+        .select({
+          ...bucketSums(sql`${invoicesTable.total}`, invoicesTable.issue_date),
+          count30:
+            sql<number>`count(*) filter (where ${invoicesTable.issue_date} >= ${thirtyDaysStart})`.mapWith(
+              Number,
+            ),
+        })
+        .from(invoicesTable)
+        .where(and(validSalesInvoices, gte(invoicesTable.issue_date, windowStart))),
     ]);
 
-    const currentSales = currentPeriod?.total ?? 0;
-    const previousSales = previousPeriod?.total ?? 0;
-
-    const total6monthsSales = {
-      totalSales: currentSales,
-      percentage:
-        previousSales > 0
-          ? ((currentSales - previousSales) / previousSales) * 100
-          : currentSales > 0
-            ? 100
-            : 0,
+    // Today's Kasir vs Online split. Revenue for the average comes from the
+    // curToday bucket the headline already computes.
+    const posToday = orderSums?.posToday ?? 0;
+    const appToday = orderSums?.appToday ?? 0;
+    const revenueToday = orderSums?.curToday ?? 0;
+    const todayChannels = {
+      pos: posToday,
+      app: appToday,
+      revenue: revenueToday,
+      aov: posToday + appToday > 0 ? Math.round(revenueToday / (posToday + appToday)) : 0,
     };
+
+    // Rolling 30-day counts for the rotating counter — a wider window than the
+    // card beside it on purpose, so the two aren't saying the same thing.
+    const counts30d = {
+      orders: orderSums?.orders30 ?? 0,
+      invoices: invoiceSums?.count30 ?? 0,
+    };
+
+    // Each period compares against the equal-length window right before it.
+    // Keyed on the shared bucket names only — both scans carry extra columns of
+    // their own (channel counts, invoice count) that have no period pairing.
+    type BucketKey = "cur6" | "prev6" | "cur7" | "prev7" | "curToday" | "prevToday";
+    const period = (curKey: BucketKey, prevKey: BucketKey) => {
+      const totalSales = (orderSums?.[curKey] ?? 0) + (invoiceSums?.[curKey] ?? 0);
+      const previous = (orderSums?.[prevKey] ?? 0) + (invoiceSums?.[prevKey] ?? 0);
+      return {
+        totalSales,
+        percentage:
+          previous > 0
+            ? ((totalSales - previous) / previous) * 100
+            : totalSales > 0
+              ? 100
+              : 0,
+      };
+    };
+
+    const total6monthsSales = period("cur6", "prev6");
+    const total7daysSales = period("cur7", "prev7");
+    const totalTodaySales = period("curToday", "prevToday");
 
     return reply.send({
       ok: true,
       activeOrdersCount,
       recentOrders,
       total6monthsSales,
-      topProduct: topProductRow ?? null,
+      total7daysSales,
+      totalTodaySales,
+      todayChannels,
+      counts30d,
     });
   });
 

@@ -1,7 +1,8 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { motion } from 'motion/react';
+import { AnimatePresence, motion } from 'motion/react';
 import {
   ShoppingBag,
   ShoppingCart,
@@ -21,7 +22,6 @@ import {
   Star,
   Settings,
   ClipboardList,
-  Sparkles,
   Download,
   Printer,
 } from 'lucide-react';
@@ -33,8 +33,11 @@ type RecentOrder = {
   status: 'addToChart' | 'checkout' | null;
 };
 
-type Total6MonthsSales = { totalSales: number; percentage: number };
-type TopProduct = { name: string; category: string; totalSold: number } | null;
+type SalesPeriod = { totalSales: number; percentage: number };
+// Today's Kasir vs Online split.
+type TodayChannels = { pos: number; app: number; revenue: number; aov: number };
+// Rolling 30-day counts for the rotating counter card.
+type Counts30d = { orders: number; invoices: number };
 
 function fmtIDR(amount: number) {
   return new Intl.NumberFormat('id-ID', {
@@ -70,19 +73,83 @@ const FEATURES: {
   { name: 'Pengaturan', icon: Settings, href: '/dashboard/setting', grad: 'from-slate-400 to-gray-500' },
 ];
 
+const ROTATE_MS = 3500;
+// Deliberately not a multiple of ROTATE_MS: the two rotating blocks would
+// otherwise swap on the same frame forever, which reads as the whole hero
+// twitching instead of two facts taking turns.
+const COUNTER_ROTATE_MS = 4700;
+
 export const OwnerDashboard = ({
   activeOrdersCount,
   recentOrders,
   total6monthsSales,
-  topProduct,
+  total7daysSales,
+  totalTodaySales,
+  todayChannels,
+  counts30d,
 }: {
   activeOrdersCount: number;
   recentOrders: RecentOrder[];
-  total6monthsSales: Total6MonthsSales;
-  topProduct: TopProduct;
+  total6monthsSales: SalesPeriod;
+  total7daysSales?: SalesPeriod;
+  totalTodaySales?: SalesPeriod;
+  todayChannels?: TodayChannels;
+  counts30d?: Counts30d;
 }) => {
-  // Defensive: a stale cached response (this is a PWA) could omit the field.
-  const salesPct = total6monthsSales.percentage ?? 0;
+  // The headline cycles through three windows so the hero says something new
+  // on every glance. A stale cached response (this is a PWA) can omit the two
+  // newer fields, so anything missing simply drops out of the rotation.
+  const periods = [
+    { label: 'Penjualan Hari Ini', hint: 'vs kemarin', data: totalTodaySales },
+    { label: 'Penjualan 7 Hari', hint: 'vs 7 hari sebelumnya', data: total7daysSales },
+    { label: 'Penjualan 6 Bulan', hint: 'vs 6 bulan sebelumnya', data: total6monthsSales },
+  ].filter((p): p is { label: string; hint: string; data: SalesPeriod } => Boolean(p.data));
+
+  const [tick, setTick] = useState(0);
+  // Paused while the owner is interacting, so a tap-to-read never gets yanked.
+  const [paused, setPaused] = useState(false);
+
+  useEffect(() => {
+    if (paused || periods.length < 2) return;
+    const timer = setInterval(() => setTick((i) => (i + 1) % periods.length), ROTATE_MS);
+    return () => clearInterval(timer);
+  }, [paused, periods.length]);
+
+  // The left mini-stat rotates through 30-day counts on its own cadence (see
+  // COUNTER_ROTATE_MS). Active orders live in the header pill, so they're not
+  // repeated here.
+  const counters = counts30d
+    ? [
+        {
+          label: 'Order 30 Hari',
+          icon: ShoppingCart,
+          value: counts30d.orders,
+          hint: 'Kasir + Online',
+        },
+        {
+          label: 'Faktur Jual',
+          icon: Receipt,
+          value: counts30d.invoices,
+          hint: 'terbit 30 hari',
+        },
+      ]
+    : [];
+
+  const [countTick, setCountTick] = useState(0);
+
+  useEffect(() => {
+    if (paused || counters.length < 2) return;
+    const timer = setInterval(
+      () => setCountTick((i) => (i + 1) % counters.length),
+      COUNTER_ROTATE_MS,
+    );
+    return () => clearInterval(timer);
+  }, [paused, counters.length]);
+
+  const counter = counters.length > 0 ? counters[countTick % counters.length] : null;
+
+  const active = periods[tick % periods.length];
+  const salesPct = active.data.percentage ?? 0;
   const isPositive = salesPct >= 0;
 
   return (
@@ -92,7 +159,11 @@ export const OwnerDashboard = ({
         <div className="absolute -right-10 -top-12 size-48 rounded-full bg-white/10 blur-3xl" />
         <div className="absolute -bottom-16 -left-10 size-48 rounded-full bg-white/10 blur-3xl" />
 
-        <div className="relative">
+        <div
+          className="relative"
+          onMouseEnter={() => setPaused(true)}
+          onMouseLeave={() => setPaused(false)}
+        >
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-white/70">Halo, Juragan 👋</p>
@@ -110,44 +181,117 @@ export const OwnerDashboard = ({
             </Link>
           </div>
 
-          {/* Headline metric */}
-          <div className="mt-6">
-            <p className="text-[11px] font-bold uppercase tracking-widest text-white/60">
-              Penjualan 6 Bulan
-            </p>
-            <div className="mt-1 flex flex-wrap items-center gap-3">
-              <h2 className="text-3xl font-black tracking-tight md:text-4xl">
-                {fmtIDR(total6monthsSales.totalSales)}
-              </h2>
-              <span
-                className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-black ${
-                  isPositive ? 'bg-emerald-400/90 text-emerald-950' : 'bg-rose-400/90 text-rose-950'
-                }`}
+          {/* Headline metric — rotates today → 7 days → 6 months. The min-height
+              reserves the tallest state so mode="wait" (which unmounts the old
+              value before mounting the new) can't collapse the hero mid-swap. */}
+          <div className="mt-6 min-h-[84px]">
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.div
+                key={active.label}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.25 }}
               >
-                {isPositive ? <ArrowUpRight className="size-3.5" /> : <ArrowDownRight className="size-3.5" />}
-                {isPositive ? '+' : ''}
-                {salesPct.toFixed(1)}%
-              </span>
-            </div>
+                <p className="text-[11px] font-bold uppercase tracking-widest text-white/60">
+                  {active.label}
+                </p>
+                <div className="mt-1 flex flex-wrap items-center gap-3">
+                  <h2 className="text-3xl font-black tracking-tight md:text-4xl">
+                    {fmtIDR(active.data.totalSales)}
+                  </h2>
+                  <span
+                    className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-black ${
+                      isPositive ? 'bg-emerald-400/90 text-emerald-950' : 'bg-rose-400/90 text-rose-950'
+                    }`}
+                  >
+                    {isPositive ? <ArrowUpRight className="size-3.5" /> : <ArrowDownRight className="size-3.5" />}
+                    {isPositive ? '+' : ''}
+                    {salesPct.toFixed(1)}%
+                  </span>
+                  <span className="text-[11px] font-semibold text-white/60">{active.hint}</span>
+                </div>
+              </motion.div>
+            </AnimatePresence>
+
+            {/* Dots double as controls: rotation is a nudge, not a lock-out. */}
+            {periods.length > 1 && (
+              <div className="mt-3 flex items-center gap-1.5">
+                {periods.map((p, i) => (
+                  <button
+                    key={p.label}
+                    type="button"
+                    onClick={() => setTick(i)}
+                    aria-label={p.label}
+                    aria-current={i === tick % periods.length}
+                    className={`h-1.5 rounded-full transition-all ${
+                      i === tick % periods.length ? 'w-6 bg-white' : 'w-1.5 bg-white/40 hover:bg-white/70'
+                    }`}
+                  />
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Mini stats */}
           <div className="mt-5 grid grid-cols-2 gap-3">
-            <div className="rounded-2xl bg-white/10 p-3 backdrop-blur">
-              <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-white/60">
-                <ShoppingBag className="size-3" /> Pesanan Aktif
-              </div>
-              <p className="mt-0.5 text-xl font-black">{activeOrdersCount}</p>
+            {/* Rotates: 30-day order count → 30-day invoice count. Same
+                min-height trick as the headline so the grid row never jumps. */}
+            <div className="min-h-[76px] rounded-2xl bg-white/10 p-3 backdrop-blur">
+              <AnimatePresence mode="wait" initial={false}>
+                {counter ? (
+                  <motion.div
+                    key={counter.label}
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -8 }}
+                    transition={{ duration: 0.25 }}
+                  >
+                    <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-white/60">
+                      <counter.icon className="size-3" /> {counter.label}
+                    </div>
+                    <p className="mt-0.5 text-xl font-black">{counter.value}</p>
+                    <p className="truncate text-[11px] text-white/70">{counter.hint}</p>
+                  </motion.div>
+                ) : (
+                  <div>
+                    <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-white/60">
+                      <ShoppingCart className="size-3" /> Order 30 Hari
+                    </div>
+                    <p className="mt-0.5 text-xl font-black">-</p>
+                  </div>
+                )}
+              </AnimatePresence>
             </div>
-            <div className="rounded-2xl bg-white/10 p-3 backdrop-blur">
+            {/* Kasir vs Online today — the one cut of the day's trade that
+                isn't visible anywhere else in the app, and it fills itself in
+                just by selling (no HPP, no faktur, no manual entry needed). */}
+            <Link
+              href="/dashboard/order-outlet"
+              className="group rounded-2xl bg-white/10 p-3 backdrop-blur transition-colors hover:bg-white/20"
+            >
               <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-white/60">
-                <Sparkles className="size-3" /> Produk Terlaris
+                <Store className="size-3" /> Transaksi Hari Ini
               </div>
-              <p className="mt-0.5 truncate text-sm font-black">{topProduct ? topProduct.name : '-'}</p>
-              {topProduct && (
-                <p className="text-[11px] text-white/70">{topProduct.totalSold} terjual · {topProduct.category}</p>
+              {todayChannels ? (
+                <>
+                  <p className="mt-0.5 flex items-baseline gap-1.5 text-sm font-black">
+                    <span className="text-xl">{todayChannels.pos}</span>
+                    <span className="text-[11px] font-bold text-white/70">Kasir</span>
+                    <span className="text-white/40">·</span>
+                    <span className="text-xl">{todayChannels.app}</span>
+                    <span className="text-[11px] font-bold text-white/70">Online</span>
+                  </p>
+                  <p className="truncate text-[11px] text-white/70">
+                    {todayChannels.aov > 0
+                      ? `${fmtIDR(todayChannels.aov)} rata-rata`
+                      : 'Belum ada transaksi hari ini'}
+                  </p>
+                </>
+              ) : (
+                <p className="mt-0.5 text-xl font-black">-</p>
               )}
-            </div>
+            </Link>
           </div>
         </div>
       </div>

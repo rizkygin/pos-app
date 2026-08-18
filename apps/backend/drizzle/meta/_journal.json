@@ -414,6 +414,13 @@
       "when": 1786816774503,
       "tag": "0058_maintenance_windows",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1787067862644,
+      "tag": "0059_report_segment_indexes",
+      "breakpoints": true
     }
   ]
 }

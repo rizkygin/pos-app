@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { motion } from 'motion/react';
 import {
   Area,
@@ -28,6 +29,11 @@ import {
   Clock,
   Loader2,
   BarChart3,
+  CreditCard,
+  UserCog,
+  Users,
+  Globe,
+  ChevronRight,
 } from 'lucide-react';
 import { API_URL } from '@/lib/api-url';
 
@@ -60,6 +66,16 @@ function fmtIDR(n: number) {
 function fmtCompact(n: number) {
   return new Intl.NumberFormat('id-ID', { notation: 'compact', maximumFractionDigits: 1 }).format(n);
 }
+
+// The four segmented reports. They live behind their own filter popup rather
+// than on this page because each one groups by free text inside orders.note —
+// see components/reports/segment-report.tsx for why that must not auto-run.
+const SUB_REPORTS = [
+  { href: '/dashboard/reports/payment-method', label: 'Metode Pembayaran', desc: 'Tunai vs non-tunai', icon: CreditCard, grad: 'from-emerald-400 to-teal-500' },
+  { href: '/dashboard/reports/cashier', label: 'Per Kasir', desc: 'Siapa yang melayani', icon: UserCog, grad: 'from-blue-400 to-indigo-500' },
+  { href: '/dashboard/reports/customer', label: 'Per Pelanggan', desc: 'Nama pelanggan kasir', icon: Users, grad: 'from-violet-400 to-purple-500' },
+  { href: '/dashboard/reports/online-order', label: 'Order Online', desc: 'Pesanan dari aplikasi', icon: Globe, grad: 'from-amber-400 to-orange-500' },
+] as const;
 
 const trendConfig = { revenue: { label: 'Omzet', color: 'hsl(221 83% 53%)' } } satisfies ChartConfig;
 const hourlyConfig = { orders: { label: 'Order', color: 'hsl(262 83% 58%)' } } satisfies ChartConfig;
@@ -205,6 +221,26 @@ export default function ReportsPage() {
             )}
           </div>
         </div>
+      </div>
+
+      {/* Sub-reports */}
+      <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {SUB_REPORTS.map((s) => (
+          <Link
+            key={s.href}
+            href={s.href}
+            className="flex items-center gap-3 rounded-2xl border border-border/60 bg-card p-4 shadow-sm transition-colors hover:bg-muted/40"
+          >
+            <span className={`flex size-10 shrink-0 items-center justify-center rounded-xl bg-linear-to-br ${s.grad} text-white shadow-md`}>
+              <s.icon className="size-5" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-black tracking-tight">{s.label}</p>
+              <p className="truncate text-[11px] text-muted-foreground">{s.desc}</p>
+            </div>
+            <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+          </Link>
+        ))}
       </div>
 
       {!data ? (
