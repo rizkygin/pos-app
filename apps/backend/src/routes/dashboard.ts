@@ -37,7 +37,7 @@ import { orderNotDeleted } from "../lib/order-scope";
 import { getOutletByUserId } from "../lib/outlet-id";
 import { notInternalCategory } from "../lib/outlet-features";
 import { getOutletAccess, hasPermission, parseActiveOutletId } from "../lib/outlet-access";
-import { getUTCRangeFromLocalDate, getUTCTime } from "../lib/timezone";
+import { getUTCRangeFromLocalDate, getUTCRangeFromLocalMonth, getUTCTime } from "../lib/timezone";
 import { getCurrentAdSlot } from "../lib/utils/ad-schedule";
 import { getCourierRatingInfo, MAX_SHIFT_HOURS, staleShiftCutoff } from "../lib/utils/courier-availability";
 import { formatCurrency } from "../lib/utils/format";
@@ -70,8 +70,19 @@ export async function dashboardRoutes(app: FastifyInstance) {
       day: "2-digit",
     }).format(now);
 
-    const sixMonthsStart = new Date(now.getFullYear(), now.getMonth() - 5, 1);
-    const prevSixMonthsStart = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+    // Month buckets start at local midnight too. `new Date(y, m - 5, 1)` would
+    // read the *container's* zone, which is UTC in the deployed image — that puts
+    // the boundary 7 hours off and leaks orders into the neighbouring month.
+    // Derive the month from todayLocal and hand it to the same helper todayStart
+    // uses, so every window in this handler agrees on where a day begins.
+    const [localYear, localMonth] = todayLocal.split("-").map(Number);
+    const monthsAgoStart = (n: number) => {
+      const m = new Date(Date.UTC(localYear, localMonth - 1 - n, 1));
+      const key = `${m.getUTCFullYear()}-${String(m.getUTCMonth() + 1).padStart(2, "0")}`;
+      return getUTCRangeFromLocalMonth(key, timezone).startUTC;
+    };
+    const sixMonthsStart = monthsAgoStart(5);
+    const prevSixMonthsStart = monthsAgoStart(11);
     const sevenDaysStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     const prevSevenDaysStart = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
     const todayStart = getUTCRangeFromLocalDate(todayLocal, timezone).startUTC;

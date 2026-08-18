@@ -25,6 +25,7 @@ import {
   applyScheduledTierIfDue,
 } from "../lib/subscription";
 import { invalidateGate } from "../lib/outlet-access";
+import { getUTCRangeFromLocalMonth } from "../lib/timezone";
 
 const PROOF_DIR = path.join(process.cwd(), "uploads", "subscriptions");
 const PROOF_URL_PREFIX = "/uploads/subscriptions/";
@@ -333,10 +334,25 @@ export async function subscriptionRoutes(app: FastifyInstance) {
     if (!admin) return;
 
     const paidAmount = sql<string>`coalesce(sum(${subscriptionPaymentsTable.amount_due}), 0)`;
-    const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const trendStart = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+    // "This month" is a local calendar month. new Date(y, m, 1) would use the
+    // container's zone — UTC in the deployed image — so a payment made in the
+    // first 7 hours of the 1st would be credited to the previous month.
+    const { timezone = "Asia/Jakarta" } = request.query as Record<string, string>;
+    const todayLocal = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+    const [localYear, localMonth] = todayLocal.split("-").map(Number);
+    const monthsAgoStart = (n: number) => {
+      const m = new Date(Date.UTC(localYear, localMonth - 1 - n, 1));
+      const key = `${m.getUTCFullYear()}-${String(m.getUTCMonth() + 1).padStart(2, "0")}`;
+      return getUTCRangeFromLocalMonth(key, timezone).startUTC;
+    };
+    const monthStart = monthsAgoStart(0);
+    const lastMonthStart = monthsAgoStart(1);
+    const trendStart = monthsAgoStart(5);
 
     const [[allTime], [thisMonth], [lastMonth], [subs], trendRows] = await Promise.all([
       db
@@ -370,7 +386,7 @@ export async function subscriptionRoutes(app: FastifyInstance) {
         .from(subscriptionsTable),
       db
         .select({
-          month: sql<string>`to_char(${subscriptionPaymentsTable.paid_at}, 'YYYY-MM')`,
+          month: sql<string>`to_char(${subscriptionPaymentsTable.paid_at} AT TIME ZONE ${timezone}, 'YYYY-MM')`,
           total: paidAmount,
         })
         .from(subscriptionPaymentsTable)
@@ -380,8 +396,8 @@ export async function subscriptionRoutes(app: FastifyInstance) {
             sql`${subscriptionPaymentsTable.paid_at} >= ${trendStart}`,
           ),
         )
-        .groupBy(sql`to_char(${subscriptionPaymentsTable.paid_at}, 'YYYY-MM')`)
-        .orderBy(sql`to_char(${subscriptionPaymentsTable.paid_at}, 'YYYY-MM')`),
+        .groupBy(sql`to_char(${subscriptionPaymentsTable.paid_at} AT TIME ZONE ${timezone}, 'YYYY-MM')`)
+        .orderBy(sql`to_char(${subscriptionPaymentsTable.paid_at} AT TIME ZONE ${timezone}, 'YYYY-MM')`),
     ]);
 
     return {

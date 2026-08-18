@@ -1,3 +1,32 @@
+// The zone the server commits to when it has to BAKE a date into text — receipt
+// numbers, kwitansi HTML, notification copy. Those are stored and mailed, so
+// they need one decided zone; the reader's browser zone is not available and
+// would make the same receipt read differently later. (User-facing dates in the
+// frontend are the opposite case: those render in the viewer's own zone.)
+// Never format server-side without a zone — an unset TZ means UTC, which is 7
+// hours off for every reader here.
+export const APP_TIMEZONE = "Asia/Jakarta";
+
+// "19 Agustus 2026" in APP_TIMEZONE. Accepts an ISO string, epoch ms, or Date.
+export function formatDateID(
+    value: string | number | Date,
+    timezone: string = APP_TIMEZONE,
+) {
+    return new Date(value).toLocaleDateString("id-ID", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+        timeZone: timezone,
+    });
+}
+
+// Calendar year in APP_TIMEZONE — for document numbering that must not flip a
+// year early for anyone transacting in the last 7 hours of 31 December.
+export function yearIn(value: Date = new Date(), timezone: string = APP_TIMEZONE) {
+    return Number(
+        new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric" }).format(value),
+    );
+}
 
 export function getUTCRangeFromLocalDate(dateStr: string, timezone: string = "Asia/Jakarta") {
     try {

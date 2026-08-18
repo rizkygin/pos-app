@@ -9,6 +9,7 @@ import {
   subscriptionNotificationsTable,
   usersTable,
 } from '../db/schema';
+import { formatDateID, yearIn } from './timezone';
 
 // ============================================================================
 // Subscription billing service (platform revenue — see schema.ts).
@@ -118,8 +119,9 @@ type ReceiptPayload = {
   period_end: string; // ISO
 };
 
-const tglID = (iso: string) =>
-  new Date(iso).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
+// Kwitansi dates are baked into stored/mailed text, so they use the app's
+// decided zone (Asia/Jakarta) — never the bare process TZ, which is UTC.
+const tglID = (iso: string) => formatDateID(iso);
 
 // Invoice-style (kwitansi) HTML for the payment-confirmed email. Table-based
 // layout + inline styles only — email clients ignore stylesheets.
@@ -545,7 +547,7 @@ export async function confirmPayment(paymentId: number, adminUserId: string) {
     };
     // Human-facing receipt number, stable per payment: KW/SUB/<year>/<id>.
     const receipt: ReceiptPayload = {
-      receipt_no: `KW/SUB/${now.getFullYear()}/${String(paymentId).padStart(4, '0')}`,
+      receipt_no: `KW/SUB/${yearIn(now)}/${String(paymentId).padStart(4, '0')}`,
       plan_label: TIER_LABEL[payment.tier] ?? payment.tier,
       interval: payment.interval,
       amount: payment.amount,
@@ -558,9 +560,9 @@ export async function confirmPayment(paymentId: number, adminUserId: string) {
       period_end: periodEnd.toISOString(),
     };
 
-    const tglAkhir = periodEnd.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
+    const tglAkhir = formatDateID(periodEnd);
     const body = scheduleDowngrade
-      ? `Pembayaran ${rupiah(payment.amount_due)} (${receipt.plan_label} ${payment.interval === 'monthly' ? 'Bulanan' : 'Tahunan'}) sudah kami terima. Paket ${receipt.plan_label} aktif mulai ${base.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })} setelah paket Pian saat ini berakhir, sampai ${tglAkhir}. Terima kasih!`
+      ? `Pembayaran ${rupiah(payment.amount_due)} (${receipt.plan_label} ${payment.interval === 'monthly' ? 'Bulanan' : 'Tahunan'}) sudah kami terima. Paket ${receipt.plan_label} aktif mulai ${formatDateID(base)} setelah paket Pian saat ini berakhir, sampai ${tglAkhir}. Terima kasih!`
       : `Pembayaran ${rupiah(payment.amount_due)} (${receipt.plan_label} ${payment.interval === 'monthly' ? 'Bulanan' : 'Tahunan'}) sudah kami terima. Langganan Pian aktif sampai ${tglAkhir}${bonusDays > 0 ? ` (termasuk konversi sisa masa aktif +${bonusDays} hari)` : ''}. Terima kasih!`;
     await enqueueNotification(tx, {
       user_id: payment.user_id,

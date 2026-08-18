@@ -1,5 +1,6 @@
 import { getRole } from '@/lib/utils/get-role';
 import { serverFetch } from '@/lib/server-fetch';
+import { LocalDateTime } from '@/components/local-datetime';
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import {
@@ -89,14 +90,7 @@ const Page = async ({ params }: { params: Promise<{ order_id: string }> }) => {
           </h1>
           <p className="text-sm text-muted-foreground">
             {order.outlet_name} ·{' '}
-            {order.created_at &&
-              new Date(order.created_at).toLocaleDateString('id-ID', {
-                day: 'numeric',
-                month: 'long',
-                year: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit',
-              })}
+            {order.created_at && <LocalDateTime value={order.created_at} />}
           </p>
         </div>
         <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-black border ${s.className}`}>

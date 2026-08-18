@@ -24,7 +24,7 @@ import { orderNotDeleted } from "../lib/order-scope";
 import { getOutletByUserId } from "../lib/outlet-id";
 import { getOutletAccess, hasPermission, parseActiveOutletId, getSubscriptionGate, gateBlocks, type EmployeePermission } from "../lib/outlet-access";
 import { attachOrderItems } from "../lib/utils/order-items";
-import { getUTCRangeFromLocalDate, getUTCRangeFromLocalMonth } from "../lib/timezone";
+import { APP_TIMEZONE, getUTCRangeFromLocalDate, getUTCRangeFromLocalMonth } from "../lib/timezone";
 
 // Money columns (summary_price, buying_price) are varchar; a single blank or
 // non-numeric row makes `cast(... as numeric)` throw and kills the whole
@@ -523,13 +523,32 @@ export async function ownerRoutes(app: FastifyInstance) {
       const outlet = await outletFor(session.user.id, "reports", request);
       if (!outlet) return reply.status(401).send({ error: "Unauthorized" });
 
+      // Month edges must be local midnight, not the container's. new Date(y, m, 1)
+      // reads the process zone — UTC in the deployed image — which shifts every
+      // boundary 7 hours and misfiles orders placed late on the last of the month.
+      const { timezone = "Asia/Jakarta" } = request.query as Record<string, string>;
+
       function getLast6Months() {
         const months = [];
-        const now = new Date();
+        const todayLocal = new Intl.DateTimeFormat("en-CA", {
+          timeZone: timezone,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        }).format(new Date());
+        const [localYear, localMonth] = todayLocal.split("-").map(Number);
+
         for (let i = 5; i >= 0; i--) {
-          const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
-          const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
-          months.push({ start, end, month: start.toLocaleString("default", { month: "short" }) });
+          // UTC arithmetic here is just a calendar cursor; the helper turns each
+          // year-month into the real UTC instant that local midnight falls on.
+          const cursor = new Date(Date.UTC(localYear, localMonth - 1 - i, 1));
+          const key = `${cursor.getUTCFullYear()}-${String(cursor.getUTCMonth() + 1).padStart(2, "0")}`;
+          const { startUTC: start, endUTC: end } = getUTCRangeFromLocalMonth(key, timezone);
+          months.push({
+            start,
+            end,
+            month: cursor.toLocaleString("default", { month: "short", timeZone: "UTC" }),
+          });
         }
         return months;
       }
@@ -953,7 +972,18 @@ export async function ownerRoutes(app: FastifyInstance) {
 
       return {
         success: true,
-        data: rows.map((r) => ({ id: r.id, category: r.category, amount: Number(r.money_amount), time: new Date(r.created_at).toLocaleTimeString() })),
+        // Formatted server-side, so it needs an explicit zone — a bare
+        // toLocaleTimeString() reads the process TZ and prints UTC.
+        data: rows.map((r) => ({
+          id: r.id,
+          category: r.category,
+          amount: Number(r.money_amount),
+          time: new Date(r.created_at).toLocaleTimeString("id-ID", {
+            hour: "2-digit",
+            minute: "2-digit",
+            timeZone: APP_TIMEZONE,
+          }),
+        })),
         total,
       };
     } catch (error) {

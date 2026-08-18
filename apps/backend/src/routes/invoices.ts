@@ -19,6 +19,7 @@ import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 import { requireOutletAccess, type EmployeePermission } from "../lib/outlet-access";
 import { applySaleStockOut } from "../lib/stock";
+import { getUTCRangeFromLocalDate, getUTCRangeFromLocalMonth, yearIn } from "../lib/timezone";
 
 // Cashflow categories used when an invoice is paid (seeded in CATEGORY_OUT/IN).
 const PURCHASE_CASH_CATEGORY = "Pembelian stok barang dagang";
@@ -167,7 +168,9 @@ async function recordPurchaseCashOut(
 
 async function nextInvoiceNumber(outletId: number, type: "purchase" | "sales") {
   const prefix = type === "purchase" ? "PB" : "PJ";
-  const year = new Date().getFullYear();
+  // Invoice numbers are permanent document identity: derive the year in the
+  // app's zone so one issued on 31 Dec evening is not numbered into next year.
+  const year = yearIn();
   const [{ n }] = await db
     .select({ n: sql<number>`count(*)::int` })
     .from(invoicesTable)
@@ -979,15 +982,31 @@ export async function invoiceRoutes(app: FastifyInstance) {
     if (!outlet) return;
     const { period = "30d" } = request.query as { period?: string };
 
+    // Period boundaries are calendar edges, so they must land on local midnight.
+    // setHours / new Date(y, m, 1) would use the container's zone — UTC in the
+    // deployed image — and quietly shift "today" and "this month" by 7 hours.
+    const { timezone = "Asia/Jakarta" } = request.query as Record<string, string>;
     const now = new Date();
+    const todayLocal = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(now);
+    const [localYear, localMonth] = todayLocal.split("-").map(Number);
+    const monthsAgoStart = (n: number) => {
+      const m = new Date(Date.UTC(localYear, localMonth - 1 - n, 1));
+      const key = `${m.getUTCFullYear()}-${String(m.getUTCMonth() + 1).padStart(2, "0")}`;
+      return getUTCRangeFromLocalMonth(key, timezone).startUTC;
+    };
+
     let from: Date;
     if (period === "today") {
-      from = new Date(now);
-      from.setHours(0, 0, 0, 0);
+      from = getUTCRangeFromLocalDate(todayLocal, timezone).startUTC;
     } else if (period === "7d") {
       from = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     } else if (period === "month") {
-      from = new Date(now.getFullYear(), now.getMonth(), 1);
+      from = monthsAgoStart(0);
     } else {
       from = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
     }
@@ -997,7 +1016,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
     const base = [eq(invoicesTable.outlet_id, outlet.id), isNull(invoicesTable.deletedAt)];
     const remainingSql = sql<string>`coalesce(sum(${invoicesTable.total} - ${invoicesTable.amount_paid}), 0)`;
 
-    const trendStart = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+    const trendStart = monthsAgoStart(5);
     const [kpiRows, openRows, lateRows, trendRows, topSales, topPurchase] = await Promise.all([
       // Billed in the selected period.
       db
@@ -1026,7 +1045,10 @@ export async function invoiceRoutes(app: FastifyInstance) {
       db
         .select({
           type: invoicesTable.type,
-          month: sql<string>`to_char(date_trunc('month', ${invoicesTable.issue_date}), 'YYYY-MM')`,
+          // issue_date is timestamptz, so date_trunc would bucket by the session
+          // TimeZone (UTC on the server). Convert to local time first, else an
+          // invoice issued late on the 31st lands in the following month.
+          month: sql<string>`to_char(date_trunc('month', ${invoicesTable.issue_date} AT TIME ZONE ${timezone}), 'YYYY-MM')`,
           total: sql<string>`coalesce(sum(${invoicesTable.total}), 0)`,
         })
         .from(invoicesTable)
@@ -1083,10 +1105,12 @@ export async function invoiceRoutes(app: FastifyInstance) {
     // Assemble a dense 6-month series (months with no invoices stay 0).
     const byKey = new Map(trendRows.map((r) => [`${r.type}:${r.month}`, Number(r.total)]));
     const trend = Array.from({ length: 6 }, (_, i) => {
-      const d = new Date(now.getFullYear(), now.getMonth() - 5 + i, 1);
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      // Built in UTC purely as a calendar cursor over localYear/localMonth — the
+      // keys must match the local-time buckets the SQL above produces.
+      const d = new Date(Date.UTC(localYear, localMonth - 1 - 5 + i, 1));
+      const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
       return {
-        month: d.toLocaleString("id-ID", { month: "short" }),
+        month: d.toLocaleString("id-ID", { month: "short", timeZone: "UTC" }),
         sales: byKey.get(`sales:${key}`) ?? 0,
         purchase: byKey.get(`purchase:${key}`) ?? 0,
       };
