@@ -17,7 +17,34 @@ const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
 })
 
-export const db = drizzle({ client: pool, schema: { ...schema, ...relations }, logger: true })
+/**
+ * Query logging. `logger: true` fires on EVERY query — auth session lookups,
+ * feature flags, the lot — which buries the one statement you are actually
+ * reading. SQL_LOG narrows it to queries whose text matches:
+ *
+ *   SQL_LOG=off                     silence
+ *   SQL_LOG=invoices                only statements mentioning "invoices"
+ *   SQL_LOG=invoices|order_details  either one (it is a regex)
+ *   unset                           log everything, as before
+ *
+ * Params are printed under the statement so you can paste a real query into
+ * psql rather than one full of $1, $2.
+ */
+const sqlLog = process.env.SQL_LOG
+const logger =
+    sqlLog === 'off'
+        ? false
+        : sqlLog
+          ? {
+                logQuery(query: string, params: unknown[]) {
+                    if (!new RegExp(sqlLog, 'i').test(query)) return
+                    console.log('\n\x1b[36m%s\x1b[0m', query)
+                    if (params.length) console.log('\x1b[90mparams:\x1b[0m', params)
+                },
+            }
+          : true
+
+export const db = drizzle({ client: pool, schema: { ...schema, ...relations }, logger })
 
 /**
  * A deliberately tiny SECOND pool, used only by the segmented sales reports.

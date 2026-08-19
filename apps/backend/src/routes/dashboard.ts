@@ -133,12 +133,15 @@ export async function dashboardRoutes(app: FastifyInstance) {
 
     // Sales invoices are a second revenue stream (Faktur Jual) that never flows
     // through ordersTable — count them alongside POS orders so the headline
-    // number matches what the owner actually sold. Drafts/voids are excluded;
-    // issue_date is the period anchor (that is the date on the invoice).
+    // number matches what the owner actually took in. Cash basis, matching the
+    // order side above: only invoices with money against them ('partial' /
+    // 'paid') count, and the amount summed below is amount_paid, not total — a
+    // posted invoice nobody has paid yet is a receivable, not sales. issue_date
+    // is the period anchor (that is the date on the invoice).
     const validSalesInvoices = and(
       eq(invoicesTable.outlet_id, outletId),
       eq(invoicesTable.type, "sales"),
-      inArray(invoicesTable.status, ["posted", "partial", "paid"]),
+      inArray(invoicesTable.status, ["partial", "paid"]),
     );
 
     // Every period in one pass: FILTER carves the buckets out of a single scan
@@ -172,7 +175,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
         .where(and(validOrderDetails, gte(orderDetailsTable.created_at, windowStart))),
       db
         .select({
-          ...bucketSums(sql`${invoicesTable.total}`, invoicesTable.issue_date),
+          ...bucketSums(sql`${invoicesTable.amount_paid}`, invoicesTable.issue_date),
           count30:
             sql<number>`count(*) filter (where ${invoicesTable.issue_date} >= ${thirtyDaysStart})`.mapWith(
               Number,
