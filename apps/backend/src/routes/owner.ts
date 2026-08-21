@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, or, eq, desc, sql, gte, lte, ilike, count, inArray, isNull, notInArray, lt, type AnyColumn } from "drizzle-orm";
+import { and, or, eq, desc, sql, gte, lte, ilike, count, inArray, isNull, notInArray, lt } from "drizzle-orm";
 import { db } from "../db";
 import {
   ordersTable,
@@ -25,13 +25,10 @@ import { getOutletByUserId } from "../lib/outlet-id";
 import { getOutletAccess, hasPermission, parseActiveOutletId, getSubscriptionGate, gateBlocks, type EmployeePermission } from "../lib/outlet-access";
 import { attachOrderItems } from "../lib/utils/order-items";
 import { APP_TIMEZONE, getUTCRangeFromLocalDate, getUTCRangeFromLocalMonth } from "../lib/timezone";
+import { money } from "../lib/money-sql";
 
-// Money columns (summary_price, buying_price) are varchar; a single blank or
-// non-numeric row makes `cast(... as numeric)` throw and kills the whole
-// aggregate ("invalid input syntax for type numeric"). Guard the cast so bad or
-// blank values count as 0 instead of crashing the query.
-const money = (col: AnyColumn) =>
-  sql`(case when ${col} ~ '^\\s*-?[0-9]+(\\.[0-9]+)?\\s*$' then cast(${col} as numeric) else 0 end)`;
+// Money columns (summary_price, buying_price) are varchar and a single blank
+// row makes the cast throw, killing the whole aggregate. See lib/money-sql.ts.
 
 // POS/cashier orders are attached to this hardcoded "offline" customer (see
 // mutations.ts /api/add-order-detail). Matches admin.ts OFFLINE_CUSTOMER_EMAIL.

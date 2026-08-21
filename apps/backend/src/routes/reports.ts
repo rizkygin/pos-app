@@ -3,6 +3,7 @@ import { and, eq, isNull, sql, type SQL } from "drizzle-orm";
 import { db, reportDb } from "../db";
 import { menuGroupsTable, productsTable } from "../db/schema";
 import { requireOutletAccess } from "../lib/outlet-access";
+import { money } from "../lib/money-sql";
 
 /**
  * Segmented sales reports: the same period sliced four ways.
@@ -209,8 +210,8 @@ function baseWhere(outletId: number, dimension: ReportDimension, f: Filters): SQ
  */
 const lineAgg = (over: SQL) => sql`
   select od.order_id,
-         coalesce(sum(od.summary_price::numeric), 0) as revenue,
-         coalesce(sum(p.buying_price::numeric * od.quantity), 0) as cogs,
+         coalesce(sum(${money(sql`od.summary_price`)}), 0) as revenue,
+         coalesce(sum(${money(sql`p.buying_price`)} * od.quantity), 0) as cogs,
          coalesce(sum(od.quantity), 0) as qty
   from "orderDetails" od
   join products p on p.id = od.product_id
