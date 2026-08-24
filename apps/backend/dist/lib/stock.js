@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.applySaleStockOut = applySaleStockOut;
+exports.applySaleStockReturn = applySaleStockReturn;
 const drizzle_orm_1 = require("drizzle-orm");
 const schema_1 = require("../db/schema");
 // Record the stock OUT for one sold line, inside an open transaction.
@@ -76,4 +77,75 @@ async function applySaleStockOut(tx, line) {
             .where((0, drizzle_orm_1.eq)(schema_1.productsTable.id, r.ingredient_id));
     }
     return warnings;
+}
+// Undo the stock OUT of one sold line: the exact mirror of applySaleStockOut,
+// same branches, same quantities, opposite sign, reason 'void'.
+//
+// The movements are added, never deleted. A cancelled cashier sale is a thing
+// that happened — the ledger should read "sold 3, then voided 3", because the
+// stock physically left the shelf and came back, and an opname done between the
+// two would have counted it gone. Deleting the original row would make the
+// ledger disagree with anyone who counted.
+//
+// Deliberately returns no warnings: overselling is a concern when stock leaves,
+// not when it returns.
+async function applySaleStockReturn(tx, line) {
+    const { outletId, productId, qty, invoiceId, note } = line;
+    const [p] = await tx
+        .select({
+        name: schema_1.productsTable.product_name,
+        track_stock: schema_1.productsTable.track_stock,
+    })
+        .from(schema_1.productsTable)
+        .where((0, drizzle_orm_1.eq)(schema_1.productsTable.id, productId))
+        .limit(1);
+    if (!p)
+        return;
+    if (p.track_stock) {
+        await tx.insert(schema_1.stockMovementsTable).values({
+            outlet_id: outletId,
+            product_id: productId,
+            qty_change: String(qty), // positive = stock back in
+            reason: "void",
+            invoice_id: invoiceId ?? null,
+            note: note ?? "",
+        });
+        await tx
+            .update(schema_1.productsTable)
+            .set({ stock: (0, drizzle_orm_1.sql) `${schema_1.productsTable.stock} + ${qty}::numeric` })
+            .where((0, drizzle_orm_1.eq)(schema_1.productsTable.id, productId));
+        return;
+    }
+    // Menu item: put back each ingredient the recipe consumed.
+    //
+    // This reads the recipe as it stands NOW, not as it stood at sale time —
+    // recipe_items has no history to read. If the recipe was edited between the
+    // sale and the cancellation the amounts returned won't match the amounts
+    // taken. Accepted: cancellations happen within minutes of the sale, and the
+    // alternative (snapshotting every recipe onto every order line) is a far
+    // larger change than this feature warrants.
+    const recipe = await tx
+        .select({
+        ingredient_id: schema_1.recipeItemsTable.ingredient_id,
+        per_unit: schema_1.recipeItemsTable.qty,
+    })
+        .from(schema_1.recipeItemsTable)
+        .where((0, drizzle_orm_1.eq)(schema_1.recipeItemsTable.product_id, productId));
+    for (const r of recipe) {
+        const restored = (Number(r.per_unit) * qty).toFixed(3);
+        if (Number(restored) <= 0)
+            continue;
+        await tx.insert(schema_1.stockMovementsTable).values({
+            outlet_id: outletId,
+            product_id: r.ingredient_id,
+            qty_change: restored,
+            reason: "void",
+            invoice_id: invoiceId ?? null,
+            note: `${note ? `${note} · ` : ""}Resep: ${p.name} ×${qty}`.slice(0, 255),
+        });
+        await tx
+            .update(schema_1.productsTable)
+            .set({ stock: (0, drizzle_orm_1.sql) `${schema_1.productsTable.stock} + ${restored}::numeric` })
+            .where((0, drizzle_orm_1.eq)(schema_1.productsTable.id, r.ingredient_id));
+    }
 }

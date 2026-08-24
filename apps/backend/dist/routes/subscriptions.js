@@ -15,6 +15,7 @@ const web_headers_1 = require("../lib/web-headers");
 const outlet_id_1 = require("../lib/outlet-id");
 const subscription_1 = require("../lib/subscription");
 const outlet_access_1 = require("../lib/outlet-access");
+const timezone_1 = require("../lib/timezone");
 const PROOF_DIR = node_path_1.default.join(process.cwd(), "uploads", "subscriptions");
 const PROOF_URL_PREFIX = "/uploads/subscriptions/";
 // Session (any logged-in user) or null + 401 sent.
@@ -300,10 +301,25 @@ async function subscriptionRoutes(app) {
         if (!admin)
             return;
         const paidAmount = (0, drizzle_orm_1.sql) `coalesce(sum(${schema_1.subscriptionPaymentsTable.amount_due}), 0)`;
-        const now = new Date();
-        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-        const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-        const trendStart = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+        // "This month" is a local calendar month. new Date(y, m, 1) would use the
+        // container's zone — UTC in the deployed image — so a payment made in the
+        // first 7 hours of the 1st would be credited to the previous month.
+        const { timezone = "Asia/Jakarta" } = request.query;
+        const todayLocal = new Intl.DateTimeFormat("en-CA", {
+            timeZone: timezone,
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+        }).format(new Date());
+        const [localYear, localMonth] = todayLocal.split("-").map(Number);
+        const monthsAgoStart = (n) => {
+            const m = new Date(Date.UTC(localYear, localMonth - 1 - n, 1));
+            const key = `${m.getUTCFullYear()}-${String(m.getUTCMonth() + 1).padStart(2, "0")}`;
+            return (0, timezone_1.getUTCRangeFromLocalMonth)(key, timezone).startUTC;
+        };
+        const monthStart = monthsAgoStart(0);
+        const lastMonthStart = monthsAgoStart(1);
+        const trendStart = monthsAgoStart(5);
         const [[allTime], [thisMonth], [lastMonth], [subs], trendRows] = await Promise.all([
             db_1.db
                 .select({ total: paidAmount, n: (0, drizzle_orm_1.sql) `count(*)::int` })
@@ -325,13 +341,13 @@ async function subscriptionRoutes(app) {
                 .from(schema_1.subscriptionsTable),
             db_1.db
                 .select({
-                month: (0, drizzle_orm_1.sql) `to_char(${schema_1.subscriptionPaymentsTable.paid_at}, 'YYYY-MM')`,
+                month: (0, drizzle_orm_1.sql) `to_char(${schema_1.subscriptionPaymentsTable.paid_at} AT TIME ZONE ${timezone}, 'YYYY-MM')`,
                 total: paidAmount,
             })
                 .from(schema_1.subscriptionPaymentsTable)
                 .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.subscriptionPaymentsTable.status, "paid"), (0, drizzle_orm_1.sql) `${schema_1.subscriptionPaymentsTable.paid_at} >= ${trendStart}`))
-                .groupBy((0, drizzle_orm_1.sql) `to_char(${schema_1.subscriptionPaymentsTable.paid_at}, 'YYYY-MM')`)
-                .orderBy((0, drizzle_orm_1.sql) `to_char(${schema_1.subscriptionPaymentsTable.paid_at}, 'YYYY-MM')`),
+                .groupBy((0, drizzle_orm_1.sql) `to_char(${schema_1.subscriptionPaymentsTable.paid_at} AT TIME ZONE ${timezone}, 'YYYY-MM')`)
+                .orderBy((0, drizzle_orm_1.sql) `to_char(${schema_1.subscriptionPaymentsTable.paid_at} AT TIME ZONE ${timezone}, 'YYYY-MM')`),
         ]);
         return {
             success: true,

@@ -40,6 +40,18 @@ async function meRoutes(app) {
         if (!session?.user)
             return reply.status(401).send({ role: null, data: null });
         const userId = session.user.id;
+        // Contact state travels with every role, so the dashboard layout can gate on
+        // it without a second round-trip. Only customers are gated today, but the
+        // number is equally real for a courier or an owner.
+        const [contact] = await db_1.db
+            .select({ phone: schema_1.usersTable.phone, phoneVerified: schema_1.usersTable.phone_verified })
+            .from(schema_1.usersTable)
+            .where((0, drizzle_orm_1.eq)(schema_1.usersTable.id, userId))
+            .limit(1);
+        const phone = {
+            phone: contact?.phone ?? null,
+            phoneVerified: contact?.phoneVerified ?? false,
+        };
         const probes = [
             { role: "admin", row: () => db_1.db.query.adminsTable.findFirst({ where: (0, drizzle_orm_1.eq)(schema_1.adminsTable.user_id, userId) }) },
             { role: "customer", row: () => db_1.db.query.customersTable.findFirst({ where: (0, drizzle_orm_1.eq)(schema_1.customersTable.user_id, userId) }) },
@@ -53,9 +65,9 @@ async function meRoutes(app) {
                 // plan-bound pages (Faktur/Stok/...) without extra round-trips.
                 if (probe.role === "owner") {
                     const gate = await (0, outlet_access_1.getSubscriptionGate)(userId);
-                    return reply.send({ role: probe.role, data, gate });
+                    return reply.send({ role: probe.role, data, gate, ...phone });
                 }
-                return reply.send({ role: probe.role, data });
+                return reply.send({ role: probe.role, data, ...phone });
             }
         }
         // Fifth role: an ACTIVE outlet employee. data carries the permission map +
@@ -71,6 +83,7 @@ async function meRoutes(app) {
             return reply.send({
                 role: "employee",
                 gate,
+                ...phone,
                 data: {
                     id: employment.employee.id,
                     outlet_id: employment.outlet.id,
@@ -93,7 +106,11 @@ async function meRoutes(app) {
         if (!session?.user)
             return reply.status(401).send({ success: false });
         const [row] = await db_1.db
-            .select({ phone: schema_1.usersTable.phone, changedAt: schema_1.usersTable.phone_changed_at })
+            .select({
+            phone: schema_1.usersTable.phone,
+            changedAt: schema_1.usersTable.phone_changed_at,
+            verified: schema_1.usersTable.phone_verified,
+        })
             .from(schema_1.usersTable)
             .where((0, drizzle_orm_1.eq)(schema_1.usersTable.id, session.user.id))
             .limit(1);
@@ -101,6 +118,7 @@ async function meRoutes(app) {
         return reply.send({
             success: true,
             phone: row?.phone ?? null,
+            phoneVerified: row?.verified ?? false,
             // Local 08… form for display; the column holds canonical 628…
             phoneDisplay: row?.phone ? (0, phone_1.formatIndonesianPhone)(row.phone) : null,
             canChange: nextChangeAt === null,
@@ -139,9 +157,11 @@ async function meRoutes(app) {
                 nextChangeAt: nextChangeAt.toISOString(),
             });
         }
+        // A new number is an unproven number: carrying the old flag over would let
+        // anyone verify once and then swap in a number they don't own.
         await db_1.db
             .update(schema_1.usersTable)
-            .set({ phone, phone_changed_at: new Date() })
+            .set({ phone, phone_changed_at: new Date(), phone_verified: false })
             .where((0, drizzle_orm_1.eq)(schema_1.usersTable.id, session.user.id));
         return reply.send({
             success: true,

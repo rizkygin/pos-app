@@ -7,6 +7,7 @@ const db_1 = require("../db");
 const schema_1 = require("../db/schema");
 const auth_1 = require("../auth");
 const web_headers_1 = require("../lib/web-headers");
+const order_scope_1 = require("../lib/order-scope");
 const order_items_1 = require("../lib/utils/order-items");
 const courier_availability_1 = require("../lib/utils/courier-availability");
 const dispatch_1 = require("../lib/dispatch");
@@ -41,7 +42,7 @@ async function customerRoutes(app) {
         })
             .from(schema_1.ordersTable)
             .innerJoin(schema_1.outletsTable, (0, drizzle_orm_1.eq)(schema_1.ordersTable.outlet_id, schema_1.outletsTable.id))
-            .where((0, drizzle_orm_1.eq)(schema_1.ordersTable.customer_id, customer.id))
+            .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.customer_id, customer.id)))
             .orderBy((0, drizzle_orm_1.desc)(schema_1.ordersTable.createdAt));
         // Attach the actual purchased items (name + qty) + total per order.
         const withItems = await (0, order_items_1.attachOrderItems)(base);
@@ -111,7 +112,7 @@ async function customerRoutes(app) {
             .innerJoin(schema_1.outletsTable, (0, drizzle_orm_1.eq)(schema_1.ordersTable.outlet_id, schema_1.outletsTable.id))
             .leftJoin(schema_1.orderDetailsTable, (0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, schema_1.ordersTable.id))
             .leftJoin(schema_1.productsTable, (0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.product_id, schema_1.productsTable.id))
-            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ordersTable.customer_id, customer.id), (0, drizzle_orm_1.eq)(schema_1.ordersTable.fulfillment, "service"), (0, drizzle_orm_1.notInArray)(schema_1.ordersTable.status, ["delivered", "cancelled"])))
+            .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.customer_id, customer.id), (0, drizzle_orm_1.eq)(schema_1.ordersTable.fulfillment, "service"), (0, drizzle_orm_1.notInArray)(schema_1.ordersTable.status, ["delivered", "cancelled"])))
             .groupBy(schema_1.ordersTable.id, schema_1.outletsTable.name)
             .orderBy((0, drizzle_orm_1.desc)(schema_1.ordersTable.scheduled_at));
         return reply.send({ success: true, orders });
@@ -168,7 +169,7 @@ async function customerRoutes(app) {
             // leftJoin — most of an order's life has no courier attached.
             .leftJoin(schema_1.couriersTable, (0, drizzle_orm_1.eq)(schema_1.ordersTable.courier_id, schema_1.couriersTable.id))
             .leftJoin(courierUser, (0, drizzle_orm_1.eq)(schema_1.couriersTable.user_id, courierUser.id))
-            .where((0, drizzle_orm_1.eq)(schema_1.ordersTable.customer_id, customer.id))
+            .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.customer_id, customer.id)))
             .orderBy((0, drizzle_orm_1.desc)(schema_1.ordersTable.createdAt))
             .limit(1);
         if (!order)
@@ -267,7 +268,7 @@ async function customerRoutes(app) {
             .innerJoin(schema_1.customersTable, (0, drizzle_orm_1.eq)(schema_1.ordersTable.customer_id, schema_1.customersTable.id))
             .innerJoin(schema_1.usersTable, (0, drizzle_orm_1.eq)(schema_1.customersTable.user_id, schema_1.usersTable.id))
             .innerJoin(schema_1.outletsTable, (0, drizzle_orm_1.eq)(schema_1.ordersTable.outlet_id, schema_1.outletsTable.id))
-            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "confirmed"), (0, drizzle_orm_1.isNull)(schema_1.ordersTable.courier_id), 
+            .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "confirmed"), (0, drizzle_orm_1.isNull)(schema_1.ordersTable.courier_id), 
         // Service and materials orders are courier-less by design — the
         // outlet moves those itself, so they never reach the courier lobby.
         (0, drizzle_orm_1.eq)(schema_1.ordersTable.fulfillment, "delivery"), (0, drizzle_orm_1.inArray)(schema_1.ordersTable.id, visibleIds)))
@@ -326,7 +327,7 @@ async function customerRoutes(app) {
             .innerJoin(schema_1.usersTable, (0, drizzle_orm_1.eq)(schema_1.customersTable.user_id, schema_1.usersTable.id))
             .innerJoin(schema_1.outletsTable, (0, drizzle_orm_1.eq)(schema_1.ordersTable.outlet_id, schema_1.outletsTable.id))
             .leftJoin(schema_1.locationsTable, (0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.locationsTable.user_id, schema_1.usersTable.id), (0, drizzle_orm_1.eq)(schema_1.locationsTable.is_default, true)))
-            .where((0, drizzle_orm_1.eq)(schema_1.ordersTable.courier_id, courier.id))
+            .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.courier_id, courier.id)))
             .orderBy((0, drizzle_orm_1.desc)(schema_1.ordersTable.updatedAt))
             .limit(3);
         return { success: true, history };
@@ -358,7 +359,7 @@ async function customerRoutes(app) {
             .innerJoin(schema_1.customersTable, (0, drizzle_orm_1.eq)(schema_1.ordersTable.customer_id, schema_1.customersTable.id))
             .innerJoin(schema_1.usersTable, (0, drizzle_orm_1.eq)(schema_1.customersTable.user_id, schema_1.usersTable.id))
             .innerJoin(schema_1.outletsTable, (0, drizzle_orm_1.eq)(schema_1.ordersTable.outlet_id, schema_1.outletsTable.id))
-            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ordersTable.courier_id, courier.id), (0, drizzle_orm_1.or)((0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "confirmed"), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "preparing"), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "ready"), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "on_delivery"))))
+            .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.courier_id, courier.id), (0, drizzle_orm_1.or)((0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "confirmed"), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "preparing"), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "ready"), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "on_delivery"))))
             .orderBy(schema_1.ordersTable.createdAt);
         const ordersWithItems = await (0, order_items_1.attachOrderItems)(orders);
         return { success: true, orders: ordersWithItems };

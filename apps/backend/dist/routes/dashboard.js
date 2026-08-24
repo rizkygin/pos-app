@@ -6,6 +6,7 @@ const db_1 = require("../db");
 const schema_1 = require("../db/schema");
 const auth_1 = require("../auth");
 const web_headers_1 = require("../lib/web-headers");
+const order_scope_1 = require("../lib/order-scope");
 const outlet_features_1 = require("../lib/outlet-features");
 const outlet_access_1 = require("../lib/outlet-access");
 const timezone_1 = require("../lib/timezone");
@@ -28,6 +29,37 @@ async function dashboardRoutes(app) {
         if (!outlet)
             return reply.send({ ok: false });
         const outletId = outlet.id;
+        // Timezone matters for "today": an outlet in WITA closes its books six hours
+        // before UTC does. Query param mirrors /api/owner/reports; Asia/Jakarta is
+        // the default everywhere in this codebase.
+        const { timezone = "Asia/Jakarta" } = request.query;
+        const now = new Date();
+        const todayLocal = new Intl.DateTimeFormat("en-CA", {
+            timeZone: timezone,
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+        }).format(now);
+        // Month buckets start at local midnight too. `new Date(y, m - 5, 1)` would
+        // read the *container's* zone, which is UTC in the deployed image — that puts
+        // the boundary 7 hours off and leaks orders into the neighbouring month.
+        // Derive the month from todayLocal and hand it to the same helper todayStart
+        // uses, so every window in this handler agrees on where a day begins.
+        const [localYear, localMonth] = todayLocal.split("-").map(Number);
+        const monthsAgoStart = (n) => {
+            const m = new Date(Date.UTC(localYear, localMonth - 1 - n, 1));
+            const key = `${m.getUTCFullYear()}-${String(m.getUTCMonth() + 1).padStart(2, "0")}`;
+            return (0, timezone_1.getUTCRangeFromLocalMonth)(key, timezone).startUTC;
+        };
+        const sixMonthsStart = monthsAgoStart(5);
+        const prevSixMonthsStart = monthsAgoStart(11);
+        const sevenDaysStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        const prevSevenDaysStart = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+        const todayStart = (0, timezone_1.getUTCRangeFromLocalDate)(todayLocal, timezone).startUTC;
+        const thirtyDaysStart = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        const yesterdayStart = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
+        // Widest window any bucket needs — one scan covers all six sums.
+        const windowStart = prevSixMonthsStart;
         const since = new Date((0, timezone_1.getUTCTime)().getTime() - 24 * 60 * 60 * 1000);
         const rawOrders = await db_1.db
             .select({
@@ -38,7 +70,7 @@ async function dashboardRoutes(app) {
         })
             .from(schema_1.ordersTable)
             .leftJoin(schema_1.orderDetailsTable, (0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, schema_1.ordersTable.id))
-            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ordersTable.outlet_id, outletId), (0, drizzle_orm_1.gte)(schema_1.ordersTable.createdAt, since)))
+            .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.outlet_id, outletId), (0, drizzle_orm_1.gte)(schema_1.ordersTable.createdAt, since)))
             .groupBy(schema_1.ordersTable.id);
         const recentOrders = rawOrders.map((o) => ({
             orderId: o.orderId,
@@ -51,55 +83,89 @@ async function dashboardRoutes(app) {
                     : null,
         }));
         const activeOrdersCount = rawOrders.filter((o) => !["delivered", "cancelled"].includes(o.status)).length;
-        const now = new Date();
-        const currentPeriodStart = new Date(now.getFullYear(), now.getMonth() - 5, 1);
-        const previousPeriodStart = new Date(now.getFullYear(), now.getMonth() - 11, 1);
-        const validOrderDetails = (0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ordersTable.outlet_id, outletId), (0, drizzle_orm_1.notInArray)(schema_1.ordersTable.status, ["cancelled", "pending"]));
-        const [[currentPeriod], [previousPeriod], [topProductRow]] = await Promise.all([
+        const validOrderDetails = (0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.outlet_id, outletId), (0, drizzle_orm_1.notInArray)(schema_1.ordersTable.status, ["cancelled", "pending"]));
+        // Sales invoices are a second revenue stream (Faktur Jual) that never flows
+        // through ordersTable — count them alongside POS orders so the headline
+        // number matches what the owner actually took in. Cash basis, matching the
+        // order side above: only invoices with money against them ('partial' /
+        // 'paid') count, and the amount summed below is amount_paid, not total — a
+        // posted invoice nobody has paid yet is a receivable, not sales. issue_date
+        // is the period anchor (that is the date on the invoice).
+        const validSalesInvoices = (0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.invoicesTable.outlet_id, outletId), (0, drizzle_orm_1.eq)(schema_1.invoicesTable.type, "sales"), (0, drizzle_orm_1.inArray)(schema_1.invoicesTable.status, ["partial", "paid"]));
+        // Every period in one pass: FILTER carves the buckets out of a single scan
+        // instead of firing six near-identical range queries per source.
+        const bucketSums = (amount, at) => ({
+            cur6: (0, drizzle_orm_1.sql) `coalesce(sum(${amount}) filter (where ${at} >= ${sixMonthsStart}), 0)`.mapWith(Number),
+            prev6: (0, drizzle_orm_1.sql) `coalesce(sum(${amount}) filter (where ${at} >= ${prevSixMonthsStart} and ${at} < ${sixMonthsStart}), 0)`.mapWith(Number),
+            cur7: (0, drizzle_orm_1.sql) `coalesce(sum(${amount}) filter (where ${at} >= ${sevenDaysStart}), 0)`.mapWith(Number),
+            prev7: (0, drizzle_orm_1.sql) `coalesce(sum(${amount}) filter (where ${at} >= ${prevSevenDaysStart} and ${at} < ${sevenDaysStart}), 0)`.mapWith(Number),
+            curToday: (0, drizzle_orm_1.sql) `coalesce(sum(${amount}) filter (where ${at} >= ${todayStart}), 0)`.mapWith(Number),
+            prevToday: (0, drizzle_orm_1.sql) `coalesce(sum(${amount}) filter (where ${at} >= ${yesterdayStart} and ${at} < ${todayStart}), 0)`.mapWith(Number),
+        });
+        const [[orderSums], [invoiceSums]] = await Promise.all([
             db_1.db
                 .select({
-                total: (0, drizzle_orm_1.sql) `coalesce(sum(cast(${schema_1.orderDetailsTable.summary_price} as numeric)), 0)`.mapWith(Number),
+                ...bucketSums((0, drizzle_orm_1.sql) `cast(${schema_1.orderDetailsTable.summary_price} as numeric)`, schema_1.orderDetailsTable.created_at),
+                // Order counts. count(distinct order_id) because this scan is over
+                // LINE ITEMS — a 4-item order must count once, not four times.
+                // Today's split feeds the Kasir/Online card; the 30-day total feeds
+                // the rotating counter beside it.
+                posToday: (0, drizzle_orm_1.sql) `count(distinct ${schema_1.orderDetailsTable.order_id}) filter (where ${schema_1.orderDetailsTable.created_at} >= ${todayStart} and ${schema_1.ordersTable.source} = 'pos')`.mapWith(Number),
+                appToday: (0, drizzle_orm_1.sql) `count(distinct ${schema_1.orderDetailsTable.order_id}) filter (where ${schema_1.orderDetailsTable.created_at} >= ${todayStart} and ${schema_1.ordersTable.source} = 'app')`.mapWith(Number),
+                orders30: (0, drizzle_orm_1.sql) `count(distinct ${schema_1.orderDetailsTable.order_id}) filter (where ${schema_1.orderDetailsTable.created_at} >= ${thirtyDaysStart})`.mapWith(Number),
             })
                 .from(schema_1.orderDetailsTable)
                 .innerJoin(schema_1.ordersTable, (0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, schema_1.ordersTable.id))
-                .where((0, drizzle_orm_1.and)(validOrderDetails, (0, drizzle_orm_1.gte)(schema_1.orderDetailsTable.created_at, currentPeriodStart))),
+                .where((0, drizzle_orm_1.and)(validOrderDetails, (0, drizzle_orm_1.gte)(schema_1.orderDetailsTable.created_at, windowStart))),
             db_1.db
                 .select({
-                total: (0, drizzle_orm_1.sql) `coalesce(sum(cast(${schema_1.orderDetailsTable.summary_price} as numeric)), 0)`.mapWith(Number),
+                ...bucketSums((0, drizzle_orm_1.sql) `${schema_1.invoicesTable.amount_paid}`, schema_1.invoicesTable.issue_date),
+                count30: (0, drizzle_orm_1.sql) `count(*) filter (where ${schema_1.invoicesTable.issue_date} >= ${thirtyDaysStart})`.mapWith(Number),
             })
-                .from(schema_1.orderDetailsTable)
-                .innerJoin(schema_1.ordersTable, (0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, schema_1.ordersTable.id))
-                .where((0, drizzle_orm_1.and)(validOrderDetails, (0, drizzle_orm_1.gte)(schema_1.orderDetailsTable.created_at, previousPeriodStart), (0, drizzle_orm_1.lt)(schema_1.orderDetailsTable.created_at, currentPeriodStart))),
-            db_1.db
-                .select({
-                name: schema_1.productsTable.product_name,
-                category: schema_1.productsTable.category,
-                totalSold: (0, drizzle_orm_1.sum)(schema_1.orderDetailsTable.quantity).mapWith(Number),
-            })
-                .from(schema_1.orderDetailsTable)
-                .innerJoin(schema_1.ordersTable, (0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, schema_1.ordersTable.id))
-                .innerJoin(schema_1.productsTable, (0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.product_id, schema_1.productsTable.id))
-                .where((0, drizzle_orm_1.and)(validOrderDetails, (0, drizzle_orm_1.gte)(schema_1.orderDetailsTable.created_at, currentPeriodStart)))
-                .groupBy(schema_1.productsTable.id)
-                .orderBy((0, drizzle_orm_1.desc)((0, drizzle_orm_1.sum)(schema_1.orderDetailsTable.quantity)))
-                .limit(1),
+                .from(schema_1.invoicesTable)
+                .where((0, drizzle_orm_1.and)(validSalesInvoices, (0, drizzle_orm_1.gte)(schema_1.invoicesTable.issue_date, windowStart))),
         ]);
-        const currentSales = currentPeriod?.total ?? 0;
-        const previousSales = previousPeriod?.total ?? 0;
-        const total6monthsSales = {
-            totalSales: currentSales,
-            percentage: previousSales > 0
-                ? ((currentSales - previousSales) / previousSales) * 100
-                : currentSales > 0
-                    ? 100
-                    : 0,
+        // Today's Kasir vs Online split. Revenue for the average comes from the
+        // curToday bucket the headline already computes.
+        const posToday = orderSums?.posToday ?? 0;
+        const appToday = orderSums?.appToday ?? 0;
+        const revenueToday = orderSums?.curToday ?? 0;
+        const todayChannels = {
+            pos: posToday,
+            app: appToday,
+            revenue: revenueToday,
+            aov: posToday + appToday > 0 ? Math.round(revenueToday / (posToday + appToday)) : 0,
         };
+        // Rolling 30-day counts for the rotating counter — a wider window than the
+        // card beside it on purpose, so the two aren't saying the same thing.
+        const counts30d = {
+            orders: orderSums?.orders30 ?? 0,
+            invoices: invoiceSums?.count30 ?? 0,
+        };
+        const period = (curKey, prevKey) => {
+            const totalSales = (orderSums?.[curKey] ?? 0) + (invoiceSums?.[curKey] ?? 0);
+            const previous = (orderSums?.[prevKey] ?? 0) + (invoiceSums?.[prevKey] ?? 0);
+            return {
+                totalSales,
+                percentage: previous > 0
+                    ? ((totalSales - previous) / previous) * 100
+                    : totalSales > 0
+                        ? 100
+                        : 0,
+            };
+        };
+        const total6monthsSales = period("cur6", "prev6");
+        const total7daysSales = period("cur7", "prev7");
+        const totalTodaySales = period("curToday", "prevToday");
         return reply.send({
             ok: true,
             activeOrdersCount,
             recentOrders,
             total6monthsSales,
-            topProduct: topProductRow ?? null,
+            total7daysSales,
+            totalTodaySales,
+            todayChannels,
+            counts30d,
         });
     });
     app.get("/api/dashboard/courier", async (request, reply) => {
@@ -164,11 +230,11 @@ async function dashboardRoutes(app) {
             sum: (0, drizzle_orm_1.sql) `SUM(CAST(orders.delivery_fee as NUMERIC))`,
         })
             .from(schema_1.ordersTable)
-            .where((0, drizzle_orm_1.eq)(schema_1.ordersTable.courier_id, courier.id));
+            .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.courier_id, courier.id)));
         const [{ totalCancel: cancelOrderByCourier }] = await db_1.db
             .select({ totalCancel: (0, drizzle_orm_1.count)(schema_1.ordersTable.id) })
             .from(schema_1.ordersTable)
-            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ordersTable.courier_id, courier.id), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "cancelled"), (0, drizzle_orm_1.eq)(schema_1.ordersTable.rejected_by, "courier")));
+            .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.courier_id, courier.id), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "cancelled"), (0, drizzle_orm_1.eq)(schema_1.ordersTable.rejected_by, "courier")));
         const [{ rating }] = await db_1.db
             .select({ rating: schema_1.couriersTable.ratings })
             .from(schema_1.couriersTable)
@@ -192,13 +258,13 @@ async function dashboardRoutes(app) {
                 orders: (0, drizzle_orm_1.count)(schema_1.ordersTable.id),
             })
                 .from(schema_1.ordersTable)
-                .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ordersTable.courier_id, courier.id), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "delivered"), (0, drizzle_orm_1.gte)(schema_1.ordersTable.createdAt, thisWeekStart))),
+                .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.courier_id, courier.id), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "delivered"), (0, drizzle_orm_1.gte)(schema_1.ordersTable.createdAt, thisWeekStart))),
             db_1.db
                 .select({
                 total: (0, drizzle_orm_1.sql) `coalesce(sum(cast(${schema_1.ordersTable.delivery_fee} as numeric)), 0)`.mapWith(Number),
             })
                 .from(schema_1.ordersTable)
-                .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ordersTable.courier_id, courier.id), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "delivered"), (0, drizzle_orm_1.gte)(schema_1.ordersTable.createdAt, lastWeekStart), (0, drizzle_orm_1.lt)(schema_1.ordersTable.createdAt, thisWeekStart))),
+                .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.courier_id, courier.id), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "delivered"), (0, drizzle_orm_1.gte)(schema_1.ordersTable.createdAt, lastWeekStart), (0, drizzle_orm_1.lt)(schema_1.ordersTable.createdAt, thisWeekStart))),
         ]);
         const thisWeekEarnings = thisWeekStats?.total ?? 0;
         const lastWeekEarnings = lastWeekStats?.total ?? 0;
@@ -210,7 +276,7 @@ async function dashboardRoutes(app) {
         const weekOrders = await db_1.db
             .select({ createdAt: schema_1.ordersTable.createdAt, fee: schema_1.ordersTable.delivery_fee })
             .from(schema_1.ordersTable)
-            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ordersTable.courier_id, courier.id), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "delivered"), (0, drizzle_orm_1.gte)(schema_1.ordersTable.createdAt, thisWeekStart)));
+            .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.courier_id, courier.id), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "delivered"), (0, drizzle_orm_1.gte)(schema_1.ordersTable.createdAt, thisWeekStart)));
         const DAY_LABELS = ["Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Min"];
         const dailyTotals = new Array(7).fill(0);
         for (const order of weekOrders) {
@@ -249,7 +315,7 @@ async function dashboardRoutes(app) {
             .innerJoin(schema_1.usersTable, (0, drizzle_orm_1.eq)(schema_1.customersTable.user_id, schema_1.usersTable.id))
             .innerJoin(schema_1.outletsTable, (0, drizzle_orm_1.eq)(schema_1.ordersTable.outlet_id, schema_1.outletsTable.id))
             .leftJoin(schema_1.locationsTable, (0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.locationsTable.user_id, schema_1.usersTable.id), (0, drizzle_orm_1.eq)(schema_1.locationsTable.is_default, true)))
-            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ordersTable.courier_id, courier.id), (0, drizzle_orm_1.inArray)(schema_1.ordersTable.status, ["confirmed", "preparing", "ready", "on_delivery"])))
+            .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.courier_id, courier.id), (0, drizzle_orm_1.inArray)(schema_1.ordersTable.status, ["confirmed", "preparing", "ready", "on_delivery"])))
             .orderBy((0, drizzle_orm_1.desc)(schema_1.ordersTable.createdAt))
             .limit(1);
         let currentPickUpItems = 0;
@@ -332,7 +398,7 @@ async function dashboardRoutes(app) {
                 .innerJoin(schema_1.outletsTable, (0, drizzle_orm_1.eq)(schema_1.ordersTable.outlet_id, schema_1.outletsTable.id))
                 .leftJoin(schema_1.orderDetailsTable, (0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, schema_1.ordersTable.id))
                 .leftJoin(schema_1.productsTable, (0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.product_id, schema_1.productsTable.id))
-                .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ordersTable.customer_id, customer.id), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "delivered")))
+                .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.customer_id, customer.id), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "delivered")))
                 .groupBy(schema_1.ordersTable.id, schema_1.outletsTable.id)
                 .orderBy((0, drizzle_orm_1.desc)(schema_1.ordersTable.createdAt))
                 .limit(3);
@@ -365,7 +431,7 @@ async function dashboardRoutes(app) {
             .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.productsTable.is_recommended, true), (0, drizzle_orm_1.eq)(schema_1.productsTable.isAvailable, true), (0, drizzle_orm_1.eq)(schema_1.productsTable.is_for_sale, true), (0, outlet_features_1.notInternalCategory)(), (0, drizzle_orm_1.isNull)(schema_1.productsTable.deletedAt), (0, drizzle_orm_1.eq)(schema_1.outletsTable.is_open, true)))
             .groupBy(schema_1.outletsTable.id, schema_1.productsTable.id)
             .orderBy((0, drizzle_orm_1.desc)(schema_1.productsTable.review_count))
-            .limit(3);
+            .limit(6);
         // label/address ride along for the dashboard's delivery-address header —
         // same default-address row the distances below are measured from, so what
         // the customer reads at the top is what everything under it is relative to.

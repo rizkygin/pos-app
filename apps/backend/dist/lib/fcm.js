@@ -74,7 +74,7 @@ async function getAccessToken(account) {
     return cachedToken.value;
 }
 /**
- * Ring one courier about a direct hire ("Suruh Kurir").
+ * Ring one courier about a direct hire ("Tugaskan Kurir").
  *
  * Deliberately NOT an offer push, despite the overlap. An offer carries a
  * countdown the app renders as a full-screen intent with two buttons, and it

@@ -6,6 +6,8 @@ const db_1 = require("../db");
 const schema_1 = require("../db/schema");
 const auth_1 = require("../auth");
 const web_headers_1 = require("../lib/web-headers");
+const order_scope_1 = require("../lib/order-scope");
+const verified_contact_1 = require("../lib/utils/verified-contact");
 const outlet_access_1 = require("../lib/outlet-access");
 const cashflow_categories_1 = require("../lib/cashflow-categories");
 const road_distance_1 = require("../lib/utils/road-distance");
@@ -197,15 +199,18 @@ async function orderRoutes(app) {
         // Backstop for the frontend gate (dashboard/layout.tsx renders
         // EmailVerificationGate instead of any page content for an unverified
         // customer). Enforced here too since a customer could hit this endpoint
-        // directly and skip that screen. There is no WhatsApp/phone verification in
-        // this app, so a verified email is the only identity check before money
-        // changes hands.
+        // directly and skip that screen.
         if (!session.user.emailVerified) {
             return reply.status(403).send({
                 success: false,
                 error: "Verifikasi email kamu terlebih dahulu sebelum membuat pesanan.",
                 code: "EMAIL_NOT_VERIFIED",
             });
+        }
+        // Same backstop for the second identity check: an outlet or courier calls
+        // this number mid-delivery, so an unproven one is an order nobody can chase.
+        if (!(await (0, verified_contact_1.hasVerifiedPhone)(session.user.id))) {
+            return reply.status(403).send(verified_contact_1.PHONE_NOT_VERIFIED);
         }
         const data = request.body;
         const orderId = crypto.randomUUID();
@@ -309,7 +314,7 @@ async function orderRoutes(app) {
             createdAt: schema_1.ordersTable.createdAt,
         })
             .from(schema_1.ordersTable)
-            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ordersTable.id, orderId), (0, drizzle_orm_1.eq)(schema_1.ordersTable.customer_id, customer.id)))
+            .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.id, orderId), (0, drizzle_orm_1.eq)(schema_1.ordersTable.customer_id, customer.id)))
             .limit(1);
         if (!order)
             return reply.status(404).send({ success: false, error: "Order tidak ditemukan" });
@@ -457,7 +462,7 @@ async function orderRoutes(app) {
                 const [outlet] = await tx
                     .select({ id: schema_1.ordersTable.outlet_id })
                     .from(schema_1.ordersTable)
-                    .where((0, drizzle_orm_1.eq)(schema_1.ordersTable.id, orderId))
+                    .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.id, orderId)))
                     .limit(1);
                 if (!outlet)
                     throw new Error("Not an owner");

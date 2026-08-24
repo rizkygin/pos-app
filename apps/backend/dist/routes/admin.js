@@ -14,6 +14,7 @@ const schema_1 = require("../db/schema");
 const OFFLINE_CUSTOMER_EMAIL = "rizkygin1@gmail.com";
 const auth_1 = require("../auth");
 const web_headers_1 = require("../lib/web-headers");
+const order_scope_1 = require("../lib/order-scope");
 const courier_availability_1 = require("../lib/utils/courier-availability");
 const courier_documents_1 = require("../lib/courier-documents");
 // Same folder the applicant's own uploads land in (routes/courier.ts) — one
@@ -853,16 +854,19 @@ async function adminRoutes(app) {
             db_1.db
                 .select({ total: revenueExpr })
                 .from(schema_1.ordersTable)
-                .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "delivered"), (0, drizzle_orm_1.gte)(schema_1.ordersTable.createdAt, currentPeriodStart))),
+                .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "delivered"), (0, drizzle_orm_1.gte)(schema_1.ordersTable.createdAt, currentPeriodStart))),
             db_1.db
                 .select({ total: revenueExpr })
                 .from(schema_1.ordersTable)
-                .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "delivered"), (0, drizzle_orm_1.gte)(schema_1.ordersTable.createdAt, previousPeriodStart), (0, drizzle_orm_1.lt)(schema_1.ordersTable.createdAt, currentPeriodStart))),
-            db_1.db.select({ total: (0, drizzle_orm_1.count)() }).from(schema_1.ordersTable).where((0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "pending")),
+                .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "delivered"), (0, drizzle_orm_1.gte)(schema_1.ordersTable.createdAt, previousPeriodStart), (0, drizzle_orm_1.lt)(schema_1.ordersTable.createdAt, currentPeriodStart))),
             db_1.db
                 .select({ total: (0, drizzle_orm_1.count)() })
                 .from(schema_1.ordersTable)
-                .where((0, drizzle_orm_1.notInArray)(schema_1.ordersTable.status, ["pending", "delivered", "cancelled"])),
+                .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "pending"))),
+            db_1.db
+                .select({ total: (0, drizzle_orm_1.count)() })
+                .from(schema_1.ordersTable)
+                .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.notInArray)(schema_1.ordersTable.status, ["pending", "delivered", "cancelled"]))),
             db_1.db
                 .select({ total: (0, drizzle_orm_1.countDistinct)(schema_1.courierSessionsTable.courier_id) })
                 .from(schema_1.courierSessionsTable)
@@ -890,6 +894,7 @@ async function adminRoutes(app) {
                 .innerJoin(schema_1.outletsTable, (0, drizzle_orm_1.eq)(schema_1.ordersTable.outlet_id, schema_1.outletsTable.id))
                 .leftJoin(schema_1.couriersTable, (0, drizzle_orm_1.eq)(schema_1.ordersTable.courier_id, schema_1.couriersTable.id))
                 .leftJoin(courierUser, (0, drizzle_orm_1.eq)(schema_1.couriersTable.user_id, courierUser.id))
+                .where(order_scope_1.orderNotDeleted)
                 .orderBy((0, drizzle_orm_1.desc)(schema_1.ordersTable.createdAt))
                 .limit(5),
         ]);
@@ -938,7 +943,7 @@ async function adminRoutes(app) {
         const order = sortOrder === "asc" ? drizzle_orm_1.asc : drizzle_orm_1.desc;
         const customerUser = (0, pg_core_1.alias)(schema_1.usersTable, "customer_user");
         const courierUser = (0, pg_core_1.alias)(schema_1.usersTable, "courier_user");
-        const conditions = [];
+        const conditions = [order_scope_1.orderNotDeleted];
         if (search) {
             conditions.push((0, drizzle_orm_1.or)((0, drizzle_orm_1.ilike)(schema_1.ordersTable.id, `%${search}%`), (0, drizzle_orm_1.ilike)(customerUser.name, `%${search}%`), (0, drizzle_orm_1.ilike)(schema_1.outletsTable.name, `%${search}%`)));
         }
@@ -1047,7 +1052,7 @@ async function adminRoutes(app) {
             .innerJoin(schema_1.outletsTable, (0, drizzle_orm_1.eq)(schema_1.ordersTable.outlet_id, schema_1.outletsTable.id))
             .leftJoin(schema_1.couriersTable, (0, drizzle_orm_1.eq)(schema_1.ordersTable.courier_id, schema_1.couriersTable.id))
             .leftJoin(courierUser, (0, drizzle_orm_1.eq)(schema_1.couriersTable.user_id, courierUser.id))
-            .where((0, drizzle_orm_1.eq)(schema_1.ordersTable.id, orderId))
+            .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.id, orderId)))
             .limit(1);
         if (!order)
             return reply.status(404).send({ success: false, error: "Not found" });
@@ -1225,6 +1230,83 @@ async function adminRoutes(app) {
                 .limit(historyLimit),
         ]);
         return reply.send({ success: true, online, history });
+    });
+    /**
+     * Every "Tugaskan Kurir" errand on the platform.
+     *
+     * Errands are outside the platform's accounting — no outlet, no commission,
+     * nothing booked — so they never appear in /api/admin/orders, which is built
+     * on ordersTable. Without this endpoint the whole feature is invisible to
+     * admins: a customer complaint about a courier who took the money and never
+     * arrived has no record anywhere an admin can reach.
+     *
+     * Read-only by design. The negotiation happens on WhatsApp and the lifecycle
+     * belongs to the two people in it; an admin watching is not a party to it and
+     * has nothing to move.
+     */
+    app.get("/api/admin/errands", async (request, reply) => {
+        const session = await auth_1.auth.api.getSession({ headers: (0, web_headers_1.toWebHeaders)(request.headers) });
+        if (!session?.user)
+            return reply.status(401).send({ success: false, error: "Unauthorized" });
+        if (!(await requireAdmin(session.user.id))) {
+            return reply.status(403).send({ success: false, error: "Forbidden" });
+        }
+        const { limit = "100", status } = request.query;
+        const rowLimit = Math.min(300, Math.max(1, Number(limit) || 100));
+        // Two joins onto users — the customer and the courier's own user row — so
+        // one of them needs an alias or Postgres cannot tell the columns apart.
+        const courierUser = (0, pg_core_1.alias)(schema_1.usersTable, "errand_courier_user");
+        const statuses = [
+            "pending",
+            "on_delivery",
+            "delivered",
+            "cancelled_by_customer",
+            "rejected_by_courier",
+            "rejected_by_customer",
+        ];
+        const wanted = statuses.find((s) => s === status);
+        const [rows, tallies] = await Promise.all([
+            db_1.db
+                .select({
+                id: schema_1.errandOrdersTable.id,
+                status: schema_1.errandOrdersTable.status,
+                note: schema_1.errandOrdersTable.note,
+                price: schema_1.errandOrdersTable.price,
+                rejectedReason: schema_1.errandOrdersTable.rejected_reason,
+                destinationAddress: schema_1.errandOrdersTable.destination_address,
+                destinationLat: schema_1.errandOrdersTable.destination_lat,
+                destinationLon: schema_1.errandOrdersTable.destination_lon,
+                createdAt: schema_1.errandOrdersTable.createdAt,
+                acceptedAt: schema_1.errandOrdersTable.accepted_at,
+                deliveredAt: schema_1.errandOrdersTable.delivered_at,
+                customerId: schema_1.usersTable.id,
+                customerName: schema_1.usersTable.name,
+                customerPhone: schema_1.usersTable.phone,
+                courierId: schema_1.couriersTable.id,
+                courierName: courierUser.name,
+                courierPhone: courierUser.phone,
+                courierPlate: schema_1.couriersTable.vehicle_plate,
+                courierVehicle: schema_1.couriersTable.vehicle_type,
+            })
+                .from(schema_1.errandOrdersTable)
+                .innerJoin(schema_1.usersTable, (0, drizzle_orm_1.eq)(schema_1.errandOrdersTable.user_id, schema_1.usersTable.id))
+                .innerJoin(schema_1.couriersTable, (0, drizzle_orm_1.eq)(schema_1.errandOrdersTable.courier_id, schema_1.couriersTable.id))
+                .innerJoin(courierUser, (0, drizzle_orm_1.eq)(schema_1.couriersTable.user_id, courierUser.id))
+                .where(wanted ? (0, drizzle_orm_1.eq)(schema_1.errandOrdersTable.status, wanted) : undefined)
+                .orderBy((0, drizzle_orm_1.desc)(schema_1.errandOrdersTable.createdAt))
+                .limit(rowLimit),
+            // Counted over the whole table, not the returned page: the tab badges
+            // must not shrink as the row limit trims the list.
+            db_1.db
+                .select({
+                status: schema_1.errandOrdersTable.status,
+                total: (0, drizzle_orm_1.count)(),
+            })
+                .from(schema_1.errandOrdersTable)
+                .groupBy(schema_1.errandOrdersTable.status),
+        ]);
+        const counts = Object.fromEntries(statuses.map((s) => [s, tallies.find((t) => t.status === s)?.total ?? 0]));
+        return reply.send({ success: true, errands: rows, counts });
     });
     /**
      * Courier coverage area — the circle admins draw on the map.

@@ -12,6 +12,7 @@ const drizzle_orm_1 = require("drizzle-orm");
 const resend_1 = require("resend");
 const db_1 = require("../db");
 const schema_1 = require("../db/schema");
+const timezone_1 = require("./timezone");
 // Where merchants transfer to. Set real values in env (local .env + Railway
 // backend service); these fallbacks are obviously fake on purpose.
 exports.BANK_INFO = {
@@ -63,7 +64,9 @@ async function enqueueNotification(tx, n) {
         .returning();
     return row;
 }
-const tglID = (iso) => new Date(iso).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
+// Kwitansi dates are baked into stored/mailed text, so they use the app's
+// decided zone (Asia/Jakarta) — never the bare process TZ, which is UTC.
+const tglID = (iso) => (0, timezone_1.formatDateID)(iso);
 // Invoice-style (kwitansi) HTML for the payment-confirmed email. Table-based
 // layout + inline styles only — email clients ignore stylesheets.
 function receiptEmailHtml(r) {
@@ -436,7 +439,7 @@ async function confirmPayment(paymentId, adminUserId) {
         };
         // Human-facing receipt number, stable per payment: KW/SUB/<year>/<id>.
         const receipt = {
-            receipt_no: `KW/SUB/${now.getFullYear()}/${String(paymentId).padStart(4, '0')}`,
+            receipt_no: `KW/SUB/${(0, timezone_1.yearIn)(now)}/${String(paymentId).padStart(4, '0')}`,
             plan_label: TIER_LABEL[payment.tier] ?? payment.tier,
             interval: payment.interval,
             amount: payment.amount,
@@ -448,9 +451,9 @@ async function confirmPayment(paymentId, adminUserId) {
             period_start: base.toISOString(),
             period_end: periodEnd.toISOString(),
         };
-        const tglAkhir = periodEnd.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
+        const tglAkhir = (0, timezone_1.formatDateID)(periodEnd);
         const body = scheduleDowngrade
-            ? `Pembayaran ${rupiah(payment.amount_due)} (${receipt.plan_label} ${payment.interval === 'monthly' ? 'Bulanan' : 'Tahunan'}) sudah kami terima. Paket ${receipt.plan_label} aktif mulai ${base.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })} setelah paket Pian saat ini berakhir, sampai ${tglAkhir}. Terima kasih!`
+            ? `Pembayaran ${rupiah(payment.amount_due)} (${receipt.plan_label} ${payment.interval === 'monthly' ? 'Bulanan' : 'Tahunan'}) sudah kami terima. Paket ${receipt.plan_label} aktif mulai ${(0, timezone_1.formatDateID)(base)} setelah paket Pian saat ini berakhir, sampai ${tglAkhir}. Terima kasih!`
             : `Pembayaran ${rupiah(payment.amount_due)} (${receipt.plan_label} ${payment.interval === 'monthly' ? 'Bulanan' : 'Tahunan'}) sudah kami terima. Langganan Pian aktif sampai ${tglAkhir}${bonusDays > 0 ? ` (termasuk konversi sisa masa aktif +${bonusDays} hari)` : ''}. Terima kasih!`;
         await enqueueNotification(tx, {
             user_id: payment.user_id,

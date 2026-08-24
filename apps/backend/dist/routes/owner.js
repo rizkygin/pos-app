@@ -6,6 +6,7 @@ const db_1 = require("../db");
 const schema_1 = require("../db/schema");
 const auth_1 = require("../auth");
 const web_headers_1 = require("../lib/web-headers");
+const order_scope_1 = require("../lib/order-scope");
 const outlet_id_1 = require("../lib/outlet-id");
 const outlet_access_1 = require("../lib/outlet-access");
 const order_items_1 = require("../lib/utils/order-items");
@@ -64,7 +65,7 @@ async function lobbyOrdersByStatus(outletId, status) {
         .innerJoin(schema_1.customersTable, (0, drizzle_orm_1.eq)(schema_1.ordersTable.customer_id, schema_1.customersTable.id))
         .innerJoin(schema_1.usersTable, (0, drizzle_orm_1.eq)(schema_1.customersTable.user_id, schema_1.usersTable.id))
         .leftJoin(schema_1.locationsTable, (0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.locationsTable.user_id, schema_1.usersTable.id), (0, drizzle_orm_1.eq)(schema_1.locationsTable.is_default, true)))
-        .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ordersTable.outlet_id, outletId), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, status)))
+        .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.outlet_id, outletId), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, status)))
         .orderBy(schema_1.ordersTable.createdAt);
     return (0, order_items_1.attachOrderItems)(orders);
 }
@@ -88,7 +89,7 @@ async function ownerRoutes(app) {
                 status === "aktif" ? (0, drizzle_orm_1.inArray)(schema_1.ordersTable.status, ACTIVE_STATUSES) :
                     status === "selesai" ? (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "delivered") :
                         (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, status);
-            const baseFilter = (0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.productsTable.outlet_id, outlet.id), statusFilter, search ? (0, drizzle_orm_1.or)((0, drizzle_orm_1.ilike)(schema_1.usersTable.name, `%${search}%`), (0, drizzle_orm_1.ilike)(schema_1.orderDetailsTable.order_id, `%${search}%`)) : undefined, dateStart ? (0, drizzle_orm_1.gte)(schema_1.orderDetailsTable.created_at, dateStart) : undefined, dateEnd ? (0, drizzle_orm_1.lte)(schema_1.orderDetailsTable.created_at, dateEnd) : undefined);
+            const baseFilter = (0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.productsTable.outlet_id, outlet.id), statusFilter, search ? (0, drizzle_orm_1.or)((0, drizzle_orm_1.ilike)(schema_1.usersTable.name, `%${search}%`), (0, drizzle_orm_1.ilike)(schema_1.orderDetailsTable.order_id, `%${search}%`)) : undefined, dateStart ? (0, drizzle_orm_1.gte)(schema_1.orderDetailsTable.created_at, dateStart) : undefined, dateEnd ? (0, drizzle_orm_1.lte)(schema_1.orderDetailsTable.created_at, dateEnd) : undefined);
             const [rows, countRows, statsRows] = await Promise.all([
                 db_1.db
                     .select({
@@ -96,6 +97,9 @@ async function ownerRoutes(app) {
                     itemCount: (0, drizzle_orm_1.sql) `cast(count(*) as int)`,
                     totalAmount: (0, drizzle_orm_1.sql) `coalesce(sum(${money(schema_1.orderDetailsTable.summary_price)}), 0)`,
                     status: schema_1.ordersTable.status,
+                    // Drives whether the row offers a cancel button — only cashier
+                    // orders can be cancelled here.
+                    source: schema_1.ordersTable.source,
                     createdAt: (0, drizzle_orm_1.sql) `max(${schema_1.orderDetailsTable.created_at})::text`,
                     customerName: schema_1.usersTable.name,
                 })
@@ -105,7 +109,7 @@ async function ownerRoutes(app) {
                     .innerJoin(schema_1.customersTable, (0, drizzle_orm_1.eq)(schema_1.ordersTable.customer_id, schema_1.customersTable.id))
                     .innerJoin(schema_1.usersTable, (0, drizzle_orm_1.eq)(schema_1.customersTable.user_id, schema_1.usersTable.id))
                     .where(baseFilter)
-                    .groupBy(schema_1.orderDetailsTable.order_id, schema_1.usersTable.name, schema_1.ordersTable.status)
+                    .groupBy(schema_1.orderDetailsTable.order_id, schema_1.usersTable.name, schema_1.ordersTable.status, schema_1.ordersTable.source)
                     .orderBy((0, drizzle_orm_1.desc)((0, drizzle_orm_1.sql) `max(${schema_1.orderDetailsTable.created_at})`))
                     .limit(limitNum)
                     .offset(offset),
@@ -120,7 +124,7 @@ async function ownerRoutes(app) {
                 db_1.db
                     .select({ status: schema_1.ordersTable.status })
                     .from(schema_1.ordersTable)
-                    .where((0, drizzle_orm_1.eq)(schema_1.ordersTable.outlet_id, outlet.id))
+                    .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.outlet_id, outlet.id)))
                     .groupBy(schema_1.ordersTable.id, schema_1.ordersTable.status),
             ]);
             const totalCount = Number(countRows[0]?.count ?? 0);
@@ -174,7 +178,7 @@ async function ownerRoutes(app) {
         const [row] = await db_1.db
             .select({ count: (0, drizzle_orm_1.count)() })
             .from(schema_1.ordersTable)
-            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ordersTable.outlet_id, outlet.id), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "pending")));
+            .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.outlet_id, outlet.id), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "pending")));
         return { success: true, count: row?.count ?? 0, courierReachable: true };
     });
     app.get("/api/get-preparing-orders", async (request, reply) => {
@@ -252,7 +256,7 @@ async function ownerRoutes(app) {
                 .from(schema_1.ordersTable)
                 .leftJoin(schema_1.customersTable, (0, drizzle_orm_1.eq)(schema_1.ordersTable.customer_id, schema_1.customersTable.id))
                 .leftJoin(schema_1.usersTable, (0, drizzle_orm_1.eq)(schema_1.customersTable.user_id, schema_1.usersTable.id))
-                .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ordersTable.id, order_id), (0, drizzle_orm_1.eq)(schema_1.ordersTable.outlet_id, outlet.id)))
+                .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.id, order_id), (0, drizzle_orm_1.eq)(schema_1.ordersTable.outlet_id, outlet.id)))
                 .limit(1);
             if (!order)
                 return reply.status(404).send({ success: false, error: "Order not found" });
@@ -340,7 +344,7 @@ async function ownerRoutes(app) {
                 .from(schema_1.orderDetailsTable)
                 .innerJoin(schema_1.productsTable, (0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.product_id, schema_1.productsTable.id))
                 .innerJoin(schema_1.ordersTable, (0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, schema_1.ordersTable.id))
-                .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.productsTable.outlet_id, outlet.id), search ? (0, drizzle_orm_1.ilike)(schema_1.productsTable.product_name, `%${search}%`) : undefined, dateStart ? (0, drizzle_orm_1.gte)(schema_1.orderDetailsTable.created_at, dateStart) : undefined, dateEnd ? (0, drizzle_orm_1.lte)(schema_1.orderDetailsTable.created_at, dateEnd) : undefined, (0, drizzle_orm_1.notInArray)(schema_1.ordersTable.status, ["cancelled"])))
+                .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.productsTable.outlet_id, outlet.id), search ? (0, drizzle_orm_1.ilike)(schema_1.productsTable.product_name, `%${search}%`) : undefined, dateStart ? (0, drizzle_orm_1.gte)(schema_1.orderDetailsTable.created_at, dateStart) : undefined, dateEnd ? (0, drizzle_orm_1.lte)(schema_1.orderDetailsTable.created_at, dateEnd) : undefined, (0, drizzle_orm_1.notInArray)(schema_1.ordersTable.status, ["cancelled"])))
                 .orderBy((0, drizzle_orm_1.desc)(schema_1.orderDetailsTable.created_at));
             return { success: true, data: rows };
         }
@@ -435,13 +439,30 @@ async function ownerRoutes(app) {
             const outlet = await outletFor(session.user.id, "reports", request);
             if (!outlet)
                 return reply.status(401).send({ error: "Unauthorized" });
+            // Month edges must be local midnight, not the container's. new Date(y, m, 1)
+            // reads the process zone — UTC in the deployed image — which shifts every
+            // boundary 7 hours and misfiles orders placed late on the last of the month.
+            const { timezone = "Asia/Jakarta" } = request.query;
             function getLast6Months() {
                 const months = [];
-                const now = new Date();
+                const todayLocal = new Intl.DateTimeFormat("en-CA", {
+                    timeZone: timezone,
+                    year: "numeric",
+                    month: "2-digit",
+                    day: "2-digit",
+                }).format(new Date());
+                const [localYear, localMonth] = todayLocal.split("-").map(Number);
                 for (let i = 5; i >= 0; i--) {
-                    const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
-                    const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
-                    months.push({ start, end, month: start.toLocaleString("default", { month: "short" }) });
+                    // UTC arithmetic here is just a calendar cursor; the helper turns each
+                    // year-month into the real UTC instant that local midnight falls on.
+                    const cursor = new Date(Date.UTC(localYear, localMonth - 1 - i, 1));
+                    const key = `${cursor.getUTCFullYear()}-${String(cursor.getUTCMonth() + 1).padStart(2, "0")}`;
+                    const { startUTC: start, endUTC: end } = (0, timezone_1.getUTCRangeFromLocalMonth)(key, timezone);
+                    months.push({
+                        start,
+                        end,
+                        month: cursor.toLocaleString("default", { month: "short", timeZone: "UTC" }),
+                    });
                 }
                 return months;
             }
@@ -550,7 +571,7 @@ async function ownerRoutes(app) {
             const spanMs = to.getTime() - from.getTime();
             const prevFrom = new Date(from.getTime() - spanMs);
             const prevTo = from;
-            const scope = (start, end) => (0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.productsTable.outlet_id, outlet.id), (0, drizzle_orm_1.gte)(schema_1.orderDetailsTable.created_at, start), (0, drizzle_orm_1.lt)(schema_1.orderDetailsTable.created_at, end), (0, drizzle_orm_1.notInArray)(schema_1.ordersTable.status, ["cancelled", "pending"]));
+            const scope = (start, end) => (0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.productsTable.outlet_id, outlet.id), (0, drizzle_orm_1.gte)(schema_1.orderDetailsTable.created_at, start), (0, drizzle_orm_1.lt)(schema_1.orderDetailsTable.created_at, end), (0, drizzle_orm_1.notInArray)(schema_1.ordersTable.status, ["cancelled", "pending"]));
             const kpiSelect = {
                 revenue: (0, drizzle_orm_1.sql) `coalesce(sum(${money(schema_1.orderDetailsTable.summary_price)}), 0)`.mapWith(Number),
                 cogs: (0, drizzle_orm_1.sql) `coalesce(sum(${money(schema_1.productsTable.buying_price)} * ${schema_1.orderDetailsTable.quantity}), 0)`.mapWith(Number),
@@ -805,7 +826,18 @@ async function ownerRoutes(app) {
             const total = rows.reduce((sum, r) => sum + Number(r.money_amount), 0);
             return {
                 success: true,
-                data: rows.map((r) => ({ id: r.id, category: r.category, amount: Number(r.money_amount), time: new Date(r.created_at).toLocaleTimeString() })),
+                // Formatted server-side, so it needs an explicit zone — a bare
+                // toLocaleTimeString() reads the process TZ and prints UTC.
+                data: rows.map((r) => ({
+                    id: r.id,
+                    category: r.category,
+                    amount: Number(r.money_amount),
+                    time: new Date(r.created_at).toLocaleTimeString("id-ID", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        timeZone: timezone_1.APP_TIMEZONE,
+                    }),
+                })),
                 total,
             };
         }

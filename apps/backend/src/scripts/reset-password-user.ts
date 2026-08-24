@@ -3,26 +3,26 @@
 // copies only src/, so anything outside is invisible in a deployed container.
 //
 // Run it there with plain node, no tsx (the runtime stage installs --omit=dev):
-//   node dist/scripts/reset-password-user.js <userId> <newPassword>
+//   node dist/scripts/reset-password-user.js <email> <newPassword>
 import { and, eq } from 'drizzle-orm'
 import { db } from '../db'
 import { account, usersTable } from '../db/schema'
 import { auth } from '../auth'
 
-const userId = process.argv[2]
+const email = process.argv[2]
 const newPassword = process.argv[3]
 
-if (!userId || !newPassword) {
-    console.error('❌ Usage: node dist/scripts/reset-password-user.js <userId> <newPassword>')
+if (!email || !newPassword) {
+    console.error('❌ Usage: node dist/scripts/reset-password-user.js <email> <newPassword>')
     process.exit(1)
 }
 
 const main = async () => {
-    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId))
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.email, email))
     // Check before hashing: an unknown id used to fall through to an UPDATE that
     // matched no rows, print "reset successfully", then crash on user[0].email.
     if (!user) {
-        console.error(`❌ No user with id ${userId}`)
+        console.error(`❌ No user with email ${email}`)
         process.exit(1)
     }
 
@@ -35,7 +35,7 @@ const main = async () => {
     const updated = await db
         .update(account)
         .set({ password: hashedPassword })
-        .where(and(eq(account.userId, userId), eq(account.providerId, 'credential')))
+        .where(and(eq(account.userId, user.id), eq(account.providerId, 'credential')))
         .returning({ id: account.id })
 
     if (updated.length === 0) {

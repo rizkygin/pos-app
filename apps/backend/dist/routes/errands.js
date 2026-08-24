@@ -8,11 +8,13 @@ const auth_1 = require("../auth");
 const web_headers_1 = require("../lib/web-headers");
 const courier_availability_1 = require("../lib/utils/courier-availability");
 const geo_1 = require("../lib/utils/geo");
+const coords_1 = require("../lib/utils/coords");
 const phone_1 = require("../lib/utils/phone");
+const verified_contact_1 = require("../lib/utils/verified-contact");
 const update_ratings_1 = require("../lib/update-ratings");
 const fcm_1 = require("../lib/fcm");
 /**
- * "Suruh Kurir" — hiring one courier directly, with no outlet and no products.
+ * "Tugaskan Kurir" — hiring one courier directly, with no outlet and no products.
  *
  * The negotiation happens on WhatsApp, outside the app entirely. These
  * endpoints only record the outcome: the customer names a courier, the courier
@@ -41,6 +43,36 @@ const CANCEL_FLOOR_MS = 5 * 60 * 1000;
  */
 const COOLDOWN_MS = 5 * 60 * 1000;
 /**
+ * How long a courier who declined is off-limits TO THAT CUSTOMER.
+ *
+ * Scoped to the pair on purpose. A rejection is not the customer's fault, so it
+ * must not cost them the whole courier list — every other courier stays hireable
+ * the same second. What it does stop is the one thing a "no" invites: tapping
+ * the same courier again straight away, which re-rings a phone that has already
+ * answered and turns a decline into a loop the courier cannot get out of.
+ *
+ * The courier disappears from that customer's list for the duration rather than
+ * sitting there as a tappable name that always fails.
+ */
+const REJECT_COOLDOWN_MS = 10 * 60 * 1000;
+/**
+ * How long a rejected request stays offerable back to the customer as a draft.
+ *
+ * Long enough to cover "he said no, let me find someone else" including a walk
+ * away from the phone; short enough that returning to the screen tomorrow gives
+ * a blank form rather than yesterday's job.
+ */
+const DRAFT_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+/**
+ * How long after a rejection the tracking screen still reports it.
+ *
+ * The screen polls every few seconds, so this only has to outlive one poll plus
+ * a phone that was locked in a pocket. Kept short deliberately: past this the
+ * customer has already been told, and re-announcing it on their next visit
+ * would be the app nagging about a decision they have moved on from.
+ */
+const REJECTION_NOTICE_MS = 3 * 60 * 1000;
+/**
  * How close the courier must be to the customer's pin to close the job.
  *
  * "Tandai Sudah Sampai" was previously an unguarded button: a courier could end
@@ -58,7 +90,7 @@ const ARRIVAL_RADIUS_M = 20;
  * membaik", not "you are not here".
  */
 const MAX_ACCURACY_M = 75;
-const NO_ADDRESS_MESSAGE = "Atur alamat utama pian dulu di halaman Alamat sebelum suruh kurir.";
+const NO_ADDRESS_MESSAGE = "Atur alamat utama pian dulu di halaman Alamat sebelum menugaskan kurir.";
 const NO_PHONE_MESSAGE = "Nomor HP pian belum diatur. Kurir perlu nomor buat menghubungi lewat WhatsApp.";
 /**
  * Session or a sent 401. Callers return immediately on null — the reply has
@@ -105,6 +137,34 @@ async function getDefaultLocation(userId) {
     return loc ?? null;
 }
 /**
+ * A destination the customer chose on the screen, rather than their saved
+ * default.
+ *
+ * Three sources feed this — a saved address, the phone's current position, or a
+ * pin dropped on the map with typed directions — but they all arrive here as
+ * the same thing: an address string plus a coordinate. The errand snapshots
+ * that, so a later edit to the saved address never moves a job already running.
+ *
+ * Returns `undefined` when nothing was sent (caller falls back to the saved
+ * default, which is what the older clients still do), and `null` when something
+ * was sent but is unusable — the caller must reject rather than silently
+ * substitute, or the courier rides to the wrong end of town.
+ */
+function readDestination(raw) {
+    if (raw === null || raw === undefined)
+        return undefined;
+    if (typeof raw !== "object")
+        return null;
+    const d = raw;
+    const coords = (0, coords_1.parseCoordPair)(d.lat, d.lon);
+    if (!coords)
+        return null;
+    const address = typeof d.address === "string" ? d.address.trim().slice(0, 255) : "";
+    if (!address)
+        return null;
+    return { address, lat: String(coords.lat), lon: String(coords.lon) };
+}
+/**
  * How past couriers have rated this customer.
  *
  * Not every user has a customers row — a courier can hire another courier —
@@ -146,7 +206,21 @@ async function errandRoutes(app) {
         const user = await requireUser(request, reply);
         if (!user)
             return;
-        const location = await getDefaultLocation(user.id);
+        // The screen asks where the errand ends BEFORE it shows couriers, and sends
+        // that back here — a pin on the map or the phone's own position is a
+        // perfectly good origin, and a customer using one has no reason to be told
+        // to go and save an address first. The saved default is only the fallback.
+        const query = (request.query ?? {});
+        const chosen = (0, coords_1.parseCoordPair)(query.lat, query.lon);
+        const location = chosen
+            ? {
+                address: typeof query.address === "string" && query.address.trim()
+                    ? query.address.trim().slice(0, 255)
+                    : "Titik yang pian pilih",
+                lat: String(chosen.lat),
+                lon: String(chosen.lon),
+            }
+            : await getDefaultLocation(user.id);
         if (!location) {
             // A distinct code, not an empty list. "No couriers available" and "you
             // have no address" look identical in a UI that only gets rows back, and
@@ -166,6 +240,15 @@ async function errandRoutes(app) {
             reviewCount: schema_1.couriersTable.review_count,
             lastLat: schema_1.couriersTable.last_lat,
             lastLon: schema_1.couriersTable.last_lon,
+            // When this courier last turned THIS customer down, if still inside the
+            // cooldown. Selected rather than filtered on: see the row below.
+            rejectedAt: (0, drizzle_orm_1.sql) `(
+          SELECT MAX(${schema_1.errandOrdersTable.updatedAt}) FROM ${schema_1.errandOrdersTable}
+          WHERE ${schema_1.errandOrdersTable.courier_id} = ${schema_1.couriersTable.id}
+            AND ${schema_1.errandOrdersTable.user_id} = ${user.id}
+            AND ${schema_1.errandOrdersTable.status} = 'rejected_by_courier'
+            AND ${schema_1.errandOrdersTable.updatedAt} >= ${new Date(Date.now() - REJECT_COOLDOWN_MS)}
+        )`,
         })
             .from(schema_1.couriersTable)
             .innerJoin(schema_1.usersTable, (0, drizzle_orm_1.eq)(schema_1.couriersTable.user_id, schema_1.usersTable.id))
@@ -204,6 +287,12 @@ async function errandRoutes(app) {
                 distanceKm: originValid && hasPosition
                     ? (0, geo_1.haversineKm)(originLat, originLon, lat, lon)
                     : null,
+                // Seconds until this courier can be hired by this customer again, or
+                // null when he is hireable right now. The screen disables the row and
+                // says so rather than dropping it.
+                rejectedCooldownSeconds: c.rejectedAt
+                    ? Math.max(1, Math.ceil((REJECT_COOLDOWN_MS - (Date.now() - new Date(c.rejectedAt).getTime())) / 1000))
+                    : null,
             };
         })
             // Couriers who have never reported a position sort last rather than
@@ -211,6 +300,11 @@ async function errandRoutes(app) {
             // how far away they are, and hiding them would shrink the pool for a
             // missing GPS ping.
             .sort((a, b) => {
+            // Whoever just said no sits at the bottom: still visible, so the absence
+            // is explained, but never in the way of the couriers who can be hired.
+            if (!!a.rejectedCooldownSeconds !== !!b.rejectedCooldownSeconds) {
+                return a.rejectedCooldownSeconds ? 1 : -1;
+            }
             if (a.distanceKm === null)
                 return b.distanceKm === null ? 0 : 1;
             if (b.distanceKm === null)
@@ -230,6 +324,24 @@ async function errandRoutes(app) {
             return reply.status(400).send({ success: false, error: "courierId required" });
         }
         const note = typeof body.note === "string" ? body.note.trim().slice(0, 500) : "";
+        // Required, not optional. The whole errand is this sentence — without it the
+        // courier is riding somewhere to do he does not know what, and the price he
+        // is meant to quote on WhatsApp has nothing behind it.
+        if (!note) {
+            return reply.status(400).send({
+                success: false,
+                error: "Tulis dulu tugasnya biar kurir tahu yang mau dikerjakan.",
+                code: "note_required",
+            });
+        }
+        const destination = readDestination(body.destination);
+        if (destination === null) {
+            return reply.status(400).send({
+                success: false,
+                error: "Tujuan pengantaran belum lengkap. Pilih titik dan isi alamatnya.",
+                code: "bad_destination",
+            });
+        }
         // The courier reaches the customer on WhatsApp and nowhere else, so a
         // request from someone unreachable is one nobody can act on. Checked here
         // rather than left to fail in the chat step.
@@ -243,7 +355,13 @@ async function errandRoutes(app) {
                 .status(409)
                 .send({ success: false, error: NO_PHONE_MESSAGE, code: "no_phone" });
         }
-        const location = await getDefaultLocation(user.id);
+        // Having a number is not the same as the number being real. This is the
+        // flow the whole verification exists for: the courier's only way to agree a
+        // price is a WhatsApp message to it.
+        if (!(await (0, verified_contact_1.hasVerifiedPhone)(user.id))) {
+            return reply.status(403).send(verified_contact_1.PHONE_NOT_VERIFIED);
+        }
+        const location = destination ?? (await getDefaultLocation(user.id));
         if (!location) {
             return reply
                 .status(409)
@@ -279,6 +397,24 @@ async function errandRoutes(app) {
                 secondsLeft,
             });
         }
+        // The same rejection cooldown the list already applies, enforced here too:
+        // the list is a snapshot the client polls, and this is the only place that
+        // can actually stop a request re-sent from a stale one.
+        const [recentReject] = await db_1.db
+            .select({ rejectedAt: schema_1.errandOrdersTable.updatedAt })
+            .from(schema_1.errandOrdersTable)
+            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.errandOrdersTable.user_id, user.id), (0, drizzle_orm_1.eq)(schema_1.errandOrdersTable.courier_id, courierId), (0, drizzle_orm_1.eq)(schema_1.errandOrdersTable.status, "rejected_by_courier"), (0, drizzle_orm_1.gte)(schema_1.errandOrdersTable.updatedAt, new Date(Date.now() - REJECT_COOLDOWN_MS))))
+            .orderBy((0, drizzle_orm_1.desc)(schema_1.errandOrdersTable.updatedAt))
+            .limit(1);
+        if (recentReject?.rejectedAt) {
+            const secondsLeft = Math.ceil((REJECT_COOLDOWN_MS - (Date.now() - new Date(recentReject.rejectedAt).getTime())) / 1000);
+            return reply.status(429).send({
+                success: false,
+                error: `Kurir ini baru saja menolak. Pilih kurir lain, atau coba lagi ${Math.ceil(secondsLeft / 60)} menit lagi.`,
+                code: "courier_cooldown",
+                secondsLeft,
+            });
+        }
         const id = crypto.randomUUID();
         try {
             await db_1.db.insert(schema_1.errandOrdersTable).values({
@@ -286,9 +422,9 @@ async function errandRoutes(app) {
                 user_id: user.id,
                 courier_id: courierId,
                 note: note || null,
-                pickup_address: location.address,
-                pickup_lat: location.lat,
-                pickup_lon: location.lon,
+                destination_address: location.address,
+                destination_lat: location.lat,
+                destination_lon: location.lon,
             });
         }
         catch (err) {
@@ -321,6 +457,51 @@ async function errandRoutes(app) {
         }).catch((err) => console.error("[errand] push failed", err));
         return reply.send({ success: true, errandId: id });
     });
+    /**
+     * The last errand the customer wrote but never got served, so the picker can
+     * hand it straight back to them.
+     *
+     * Being turned down is not a reason to retype the job and re-pin the map: the
+     * customer's request has not changed, only who is going to do it. This returns
+     * that request as a draft — note and destination — and the screen prefills it,
+     * still fully editable. Nothing here resurrects the errand itself; the old row
+     * stays rejected, and hiring the next courier writes a brand new one.
+     */
+    app.get("/api/errands/draft", async (request, reply) => {
+        const user = await requireUser(request, reply);
+        if (!user)
+            return;
+        const [row] = await db_1.db
+            .select({
+            note: schema_1.errandOrdersTable.note,
+            address: schema_1.errandOrdersTable.destination_address,
+            lat: schema_1.errandOrdersTable.destination_lat,
+            lon: schema_1.errandOrdersTable.destination_lon,
+            updatedAt: schema_1.errandOrdersTable.updatedAt,
+        })
+            .from(schema_1.errandOrdersTable)
+            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.errandOrdersTable.user_id, user.id), (0, drizzle_orm_1.eq)(schema_1.errandOrdersTable.status, "rejected_by_courier"), 
+        // Older than this and it is no longer "the thing I was just doing" —
+        // it is last week's errand, and prefilling it would be a surprise.
+        (0, drizzle_orm_1.gte)(schema_1.errandOrdersTable.updatedAt, new Date(Date.now() - DRAFT_MAX_AGE_MS))))
+            .orderBy((0, drizzle_orm_1.desc)(schema_1.errandOrdersTable.updatedAt))
+            .limit(1);
+        if (!row)
+            return reply.send({ success: true, draft: null });
+        const lat = Number(row.lat);
+        const lon = Number(row.lon);
+        return reply.send({
+            success: true,
+            draft: {
+                note: row.note ?? "",
+                // A destination is only worth handing back whole — an address with
+                // broken coordinates would sort the courier list by nonsense.
+                destination: row.address && Number.isFinite(lat) && Number.isFinite(lon)
+                    ? { address: row.address, lat, lon }
+                    : null,
+            },
+        });
+    });
     /** The customer's live errand, for the activeorder screen. */
     app.get("/api/errands/active", async (request, reply) => {
         const user = await requireUser(request, reply);
@@ -332,9 +513,11 @@ async function errandRoutes(app) {
             status: schema_1.errandOrdersTable.status,
             note: schema_1.errandOrdersTable.note,
             price: schema_1.errandOrdersTable.price,
-            pickupAddress: schema_1.errandOrdersTable.pickup_address,
-            pickupLat: schema_1.errandOrdersTable.pickup_lat,
-            pickupLon: schema_1.errandOrdersTable.pickup_lon,
+            // The columns are destination_* (migration 0054); the wire keys stay
+            // pickup* because the installed courier app already reads them.
+            pickupAddress: schema_1.errandOrdersTable.destination_address,
+            pickupLat: schema_1.errandOrdersTable.destination_lat,
+            pickupLon: schema_1.errandOrdersTable.destination_lon,
             createdAt: schema_1.errandOrdersTable.createdAt,
             acceptedAt: schema_1.errandOrdersTable.accepted_at,
             courierId: schema_1.couriersTable.id,
@@ -352,8 +535,34 @@ async function errandRoutes(app) {
             .innerJoin(schema_1.usersTable, (0, drizzle_orm_1.eq)(schema_1.couriersTable.user_id, schema_1.usersTable.id))
             .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.errandOrdersTable.user_id, user.id), (0, drizzle_orm_1.inArray)(schema_1.errandOrdersTable.status, ["pending", "on_delivery"])))
             .limit(1);
-        if (!row)
-            return reply.send({ success: true, errand: null });
+        if (!row) {
+            // Nothing live — but "nothing live" a second after the courier declined
+            // is not the same as an empty screen, and the customer watching this page
+            // is owed the reason. Only a fresh rejection qualifies: anything older has
+            // already been read and dismissed.
+            const [rejected] = await db_1.db
+                .select({
+                courierName: schema_1.usersTable.name,
+                reason: schema_1.errandOrdersTable.rejected_reason,
+            })
+                .from(schema_1.errandOrdersTable)
+                .innerJoin(schema_1.couriersTable, (0, drizzle_orm_1.eq)(schema_1.errandOrdersTable.courier_id, schema_1.couriersTable.id))
+                .innerJoin(schema_1.usersTable, (0, drizzle_orm_1.eq)(schema_1.couriersTable.user_id, schema_1.usersTable.id))
+                .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.errandOrdersTable.user_id, user.id), (0, drizzle_orm_1.eq)(schema_1.errandOrdersTable.status, "rejected_by_courier"), (0, drizzle_orm_1.gte)(schema_1.errandOrdersTable.updatedAt, new Date(Date.now() - REJECTION_NOTICE_MS))))
+                .orderBy((0, drizzle_orm_1.desc)(schema_1.errandOrdersTable.updatedAt))
+                .limit(1);
+            return reply.send({
+                success: true,
+                errand: null,
+                outcome: rejected
+                    ? {
+                        status: "rejected_by_courier",
+                        courierName: rejected.courierName,
+                        reason: rejected.reason,
+                    }
+                    : null,
+            });
+        }
         const createdMs = row.createdAt ? new Date(row.createdAt).getTime() : Date.now();
         const cancellableInMs = Math.max(0, CANCEL_FLOOR_MS - (Date.now() - createdMs));
         return reply.send({
@@ -433,6 +642,68 @@ async function errandRoutes(app) {
         }
         return reply.send({ success: true });
     });
+    /**
+     * Everything this customer has ever asked a courier to do.
+     *
+     * Deliberately returns EVERY status, including the ones that never became a
+     * job — a request the courier turned down, or one the customer pulled out of.
+     * Those are the entries a customer is most likely to come looking for ("did
+     * that go through, and what did I ask for?"), and a history that quietly drops
+     * them reads as data loss rather than as a filter.
+     *
+     * Separate from /api/get-customer-history rather than merged into it: that
+     * endpoint is built on ordersTable + outlets + order items, none of which an
+     * errand has. Unioning them would mean faking an outlet name and an item list
+     * for every errand row.
+     */
+    app.get("/api/errands/history", async (request, reply) => {
+        const user = await requireUser(request, reply);
+        if (!user)
+            return;
+        const rows = await db_1.db
+            .select({
+            id: schema_1.errandOrdersTable.id,
+            status: schema_1.errandOrdersTable.status,
+            note: schema_1.errandOrdersTable.note,
+            price: schema_1.errandOrdersTable.price,
+            rejectedReason: schema_1.errandOrdersTable.rejected_reason,
+            destinationAddress: schema_1.errandOrdersTable.destination_address,
+            createdAt: schema_1.errandOrdersTable.createdAt,
+            acceptedAt: schema_1.errandOrdersTable.accepted_at,
+            deliveredAt: schema_1.errandOrdersTable.delivered_at,
+            courierName: schema_1.usersTable.name,
+            courierPhone: schema_1.usersTable.phone,
+            courierAvatar: schema_1.couriersTable.avatar,
+            courierPlate: schema_1.couriersTable.vehicle_plate,
+        })
+            .from(schema_1.errandOrdersTable)
+            .innerJoin(schema_1.couriersTable, (0, drizzle_orm_1.eq)(schema_1.errandOrdersTable.courier_id, schema_1.couriersTable.id))
+            .innerJoin(schema_1.usersTable, (0, drizzle_orm_1.eq)(schema_1.couriersTable.user_id, schema_1.usersTable.id))
+            .where((0, drizzle_orm_1.eq)(schema_1.errandOrdersTable.user_id, user.id))
+            .orderBy((0, drizzle_orm_1.desc)(schema_1.errandOrdersTable.createdAt));
+        // Which of these the customer has already rated. One query for the whole
+        // page rather than one per row.
+        const ids = rows.map((r) => r.id);
+        const ratedRows = ids.length
+            ? await db_1.db
+                .select({ errandId: schema_1.ratingsTable.errand_order_id })
+                .from(schema_1.ratingsTable)
+                .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ratingsTable.reviewer, user.id), (0, drizzle_orm_1.inArray)(schema_1.ratingsTable.errand_order_id, ids)))
+            : [];
+        const rated = new Set(ratedRows.map((r) => r.errandId));
+        return reply.send({
+            success: true,
+            errands: rows.map((r) => ({
+                ...r,
+                rated: rated.has(r.id),
+                // Mirrors the rate endpoint's own guards exactly: delivered, and not
+                // already rated by this person. Note there is deliberately NO 7-day
+                // window here, unlike outlet orders — nothing in the errand rating
+                // path expires, so claiming otherwise on this screen would be a lie.
+                canRate: r.status === "delivered" && !rated.has(r.id),
+            })),
+        });
+    });
     // ------------------------------------------------------------------
     // Courier side
     // ------------------------------------------------------------------
@@ -450,9 +721,11 @@ async function errandRoutes(app) {
             status: schema_1.errandOrdersTable.status,
             note: schema_1.errandOrdersTable.note,
             price: schema_1.errandOrdersTable.price,
-            pickupAddress: schema_1.errandOrdersTable.pickup_address,
-            pickupLat: schema_1.errandOrdersTable.pickup_lat,
-            pickupLon: schema_1.errandOrdersTable.pickup_lon,
+            // The columns are destination_* (migration 0054); the wire keys stay
+            // pickup* because the installed courier app already reads them.
+            pickupAddress: schema_1.errandOrdersTable.destination_address,
+            pickupLat: schema_1.errandOrdersTable.destination_lat,
+            pickupLon: schema_1.errandOrdersTable.destination_lon,
             createdAt: schema_1.errandOrdersTable.createdAt,
             customerUserId: schema_1.usersTable.id,
             customerName: schema_1.usersTable.name,
@@ -549,7 +822,12 @@ async function errandRoutes(app) {
         }
         return reply.send({ success: true });
     });
-    /** Courier declines. pending -> rejected_by_courier. No cooldown follows. */
+    /**
+     * Courier declines. pending -> rejected_by_courier.
+     *
+     * The customer is free to hire someone else immediately; only this courier
+     * goes quiet for them, for REJECT_COOLDOWN_MS.
+     */
     app.post("/api/courier/errands/:id/reject", async (request, reply) => {
         const user = await requireUser(request, reply);
         if (!user)
@@ -615,16 +893,16 @@ async function errandRoutes(app) {
         const [errand] = await db_1.db
             .select({
             status: schema_1.errandOrdersTable.status,
-            pickupLat: schema_1.errandOrdersTable.pickup_lat,
-            pickupLon: schema_1.errandOrdersTable.pickup_lon,
+            destinationLat: schema_1.errandOrdersTable.destination_lat,
+            destinationLon: schema_1.errandOrdersTable.destination_lon,
         })
             .from(schema_1.errandOrdersTable)
             .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.errandOrdersTable.id, id), (0, drizzle_orm_1.eq)(schema_1.errandOrdersTable.courier_id, courierId)))
             .limit(1);
         if (!errand)
             return reply.status(404).send({ success: false, error: "Pesanan tidak ada." });
-        const pinLat = Number(errand.pickupLat);
-        const pinLon = Number(errand.pickupLon);
+        const pinLat = Number(errand.destinationLat);
+        const pinLon = Number(errand.destinationLon);
         // An errand without a usable pin cannot be geofenced. Rather than block the
         // courier out of a job he may well have finished, the check is skipped —
         // every errand created through /api/errands snapshots a real address, so

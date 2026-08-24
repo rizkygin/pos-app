@@ -6,7 +6,44 @@ const db_1 = require("../db");
 const schema_1 = require("../db/schema");
 const auth_1 = require("../auth");
 const web_headers_1 = require("../lib/web-headers");
+const order_scope_1 = require("../lib/order-scope");
 const update_ratings_1 = require("../lib/update-ratings");
+/**
+ * Has this person already rated this order?
+ *
+ * Asked of the WHOLE order, not of one hand-picked order detail. A rating row
+ * hangs off an order_details id, and the courier/customer rating is anchored to
+ * whichever detail the writer happened to see first — an unordered LIMIT 1,
+ * which Postgres is free to answer differently from one query plan to the next.
+ * Checking one specific detail therefore missed ratings that exist on a sibling
+ * row, and the customer was sent back to rate an order they had already rated
+ * (the submit then failed with already_rated). Any rating by this reviewer
+ * against any detail of this order settles the question.
+ */
+async function alreadyRatedOrder(reviewerUserId, orderId) {
+    const [existing] = await db_1.db
+        .select({ id: schema_1.ratingsTable.id })
+        .from(schema_1.ratingsTable)
+        .innerJoin(schema_1.orderDetailsTable, (0, drizzle_orm_1.eq)(schema_1.ratingsTable.order_details_id, schema_1.orderDetailsTable.id))
+        .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ratingsTable.reviewer, reviewerUserId), (0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, orderId)))
+        .limit(1);
+    return !!existing;
+}
+/**
+ * The order detail the courier/outlet rating hangs off.
+ *
+ * Ordered, unlike the reads it used to mirror: the anchor has to be the same row
+ * every time or the "already rated" question above has no stable answer.
+ */
+async function ratingAnchorDetail(orderId) {
+    const [detail] = await db_1.db
+        .select({ id: schema_1.orderDetailsTable.id })
+        .from(schema_1.orderDetailsTable)
+        .where((0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, orderId))
+        .orderBy((0, drizzle_orm_1.asc)(schema_1.orderDetailsTable.id))
+        .limit(1);
+    return detail ?? null;
+}
 async function ratingRoutes(app) {
     // Data for the courier's "rate the customer + outlet" page, with all the
     // page guards (must be this courier's delivered order, must have details, must
@@ -36,23 +73,13 @@ async function ratingRoutes(app) {
             .innerJoin(schema_1.customersTable, (0, drizzle_orm_1.eq)(schema_1.ordersTable.customer_id, schema_1.customersTable.id))
             .innerJoin(schema_1.usersTable, (0, drizzle_orm_1.eq)(schema_1.customersTable.user_id, schema_1.usersTable.id))
             .innerJoin(schema_1.outletsTable, (0, drizzle_orm_1.eq)(schema_1.ordersTable.outlet_id, schema_1.outletsTable.id))
-            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ordersTable.id, orderId), (0, drizzle_orm_1.eq)(schema_1.ordersTable.courier_id, courier.id), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "delivered")))
+            .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.id, orderId), (0, drizzle_orm_1.eq)(schema_1.ordersTable.courier_id, courier.id), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "delivered")))
             .limit(1);
         if (!order)
             return reply.send({ ok: false });
-        const [firstDetail] = await db_1.db
-            .select({ id: schema_1.orderDetailsTable.id })
-            .from(schema_1.orderDetailsTable)
-            .where((0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, orderId))
-            .limit(1);
-        if (!firstDetail)
+        if (!(await ratingAnchorDetail(orderId)))
             return reply.send({ ok: false });
-        const [existingRating] = await db_1.db
-            .select({ id: schema_1.ratingsTable.id })
-            .from(schema_1.ratingsTable)
-            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ratingsTable.reviewer, session.user.id), (0, drizzle_orm_1.eq)(schema_1.ratingsTable.order_details_id, firstDetail.id)))
-            .limit(1);
-        if (existingRating)
+        if (await alreadyRatedOrder(session.user.id, orderId))
             return reply.send({ ok: false });
         return reply.send({ ok: true, order });
     });
@@ -82,7 +109,7 @@ async function ratingRoutes(app) {
             .from(schema_1.ordersTable)
             .innerJoin(schema_1.couriersTable, (0, drizzle_orm_1.eq)(schema_1.ordersTable.courier_id, schema_1.couriersTable.id))
             .innerJoin(schema_1.usersTable, (0, drizzle_orm_1.eq)(schema_1.couriersTable.user_id, schema_1.usersTable.id))
-            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ordersTable.id, orderId), (0, drizzle_orm_1.eq)(schema_1.ordersTable.customer_id, customer.id), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "delivered")))
+            .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.id, orderId), (0, drizzle_orm_1.eq)(schema_1.ordersTable.customer_id, customer.id), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "delivered")))
             .limit(1);
         if (!order)
             return reply.send({ ok: false });
@@ -103,12 +130,7 @@ async function ratingRoutes(app) {
             .where((0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, orderId));
         if (products.length === 0)
             return reply.send({ ok: false });
-        const [existingRating] = await db_1.db
-            .select({ id: schema_1.ratingsTable.id })
-            .from(schema_1.ratingsTable)
-            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ratingsTable.reviewer, session.user.id), (0, drizzle_orm_1.eq)(schema_1.ratingsTable.order_details_id, products[0].orderDetailId)))
-            .limit(1);
-        if (existingRating)
+        if (await alreadyRatedOrder(session.user.id, orderId))
             return reply.send({ ok: false });
         return reply.send({ ok: true, order, products });
     });
@@ -137,7 +159,7 @@ async function ratingRoutes(app) {
         })
             .from(schema_1.ordersTable)
             .innerJoin(schema_1.couriersTable, (0, drizzle_orm_1.eq)(schema_1.ordersTable.courier_id, schema_1.couriersTable.id))
-            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ordersTable.id, orderId), (0, drizzle_orm_1.eq)(schema_1.ordersTable.customer_id, customer.id), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "delivered")))
+            .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.id, orderId), (0, drizzle_orm_1.eq)(schema_1.ordersTable.customer_id, customer.id), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "delivered")))
             .limit(1);
         if (!order)
             return reply.send({ ok: false, error: "not_found" });
@@ -146,11 +168,7 @@ async function ratingRoutes(app) {
         if (order.createdAt && Date.now() - new Date(order.createdAt).getTime() > RATING_WINDOW_MS) {
             return reply.send({ ok: false, error: "not_found" });
         }
-        const [firstDetail] = await db_1.db
-            .select({ id: schema_1.orderDetailsTable.id })
-            .from(schema_1.orderDetailsTable)
-            .where((0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, orderId))
-            .limit(1);
+        const firstDetail = await ratingAnchorDetail(orderId);
         if (!firstDetail)
             return reply.send({ ok: false, error: "not_found" });
         try {
@@ -254,7 +272,7 @@ async function ratingRoutes(app) {
             .from(schema_1.ordersTable)
             .innerJoin(schema_1.outletsTable, (0, drizzle_orm_1.eq)(schema_1.ordersTable.outlet_id, schema_1.outletsTable.id))
             .innerJoin(schema_1.usersTable, (0, drizzle_orm_1.eq)(schema_1.outletsTable.user_id, schema_1.usersTable.id))
-            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ordersTable.id, orderId), (0, drizzle_orm_1.eq)(schema_1.ordersTable.customer_id, customer.id), 
+            .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.id, orderId), (0, drizzle_orm_1.eq)(schema_1.ordersTable.customer_id, customer.id), 
         // Both courier-less lanes rate the outlet here: there is no courier
         // to rate, so the service rating page is the only path they have.
         (0, drizzle_orm_1.inArray)(schema_1.ordersTable.fulfillment, ["service", "materials"]), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "delivered")))
@@ -277,12 +295,7 @@ async function ratingRoutes(app) {
             .where((0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, orderId));
         if (products.length === 0)
             return reply.send({ ok: false });
-        const [existingRating] = await db_1.db
-            .select({ id: schema_1.ratingsTable.id })
-            .from(schema_1.ratingsTable)
-            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ratingsTable.reviewer, session.user.id), (0, drizzle_orm_1.eq)(schema_1.ratingsTable.order_details_id, products[0].orderDetailId)))
-            .limit(1);
-        if (existingRating)
+        if (await alreadyRatedOrder(session.user.id, orderId))
             return reply.send({ ok: false });
         return reply.send({
             ok: true,
@@ -315,7 +328,7 @@ async function ratingRoutes(app) {
         })
             .from(schema_1.ordersTable)
             .innerJoin(schema_1.outletsTable, (0, drizzle_orm_1.eq)(schema_1.ordersTable.outlet_id, schema_1.outletsTable.id))
-            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ordersTable.id, orderId), (0, drizzle_orm_1.eq)(schema_1.ordersTable.customer_id, customer.id), 
+            .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.id, orderId), (0, drizzle_orm_1.eq)(schema_1.ordersTable.customer_id, customer.id), 
         // Both courier-less lanes rate the outlet here: there is no courier
         // to rate, so the service rating page is the only path they have.
         (0, drizzle_orm_1.inArray)(schema_1.ordersTable.fulfillment, ["service", "materials"]), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "delivered")))
@@ -326,11 +339,7 @@ async function ratingRoutes(app) {
         if (order.createdAt && Date.now() - new Date(order.createdAt).getTime() > RATING_WINDOW_MS) {
             return reply.send({ ok: false, error: "not_found" });
         }
-        const [firstDetail] = await db_1.db
-            .select({ id: schema_1.orderDetailsTable.id })
-            .from(schema_1.orderDetailsTable)
-            .where((0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, orderId))
-            .limit(1);
+        const firstDetail = await ratingAnchorDetail(orderId);
         if (!firstDetail)
             return reply.send({ ok: false, error: "not_found" });
         try {
@@ -434,23 +443,23 @@ async function ratingRoutes(app) {
             .from(schema_1.ordersTable)
             .innerJoin(schema_1.customersTable, (0, drizzle_orm_1.eq)(schema_1.ordersTable.customer_id, schema_1.customersTable.id))
             .innerJoin(schema_1.usersTable, (0, drizzle_orm_1.eq)(schema_1.customersTable.user_id, schema_1.usersTable.id))
-            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ordersTable.id, orderId), (0, drizzle_orm_1.eq)(schema_1.ordersTable.courier_id, courier.id), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "delivered")))
+            .where((0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.ordersTable.id, orderId), (0, drizzle_orm_1.eq)(schema_1.ordersTable.courier_id, courier.id), (0, drizzle_orm_1.eq)(schema_1.ordersTable.status, "delivered")))
             .limit(1);
         if (!order)
             return reply.send({ ok: false, error: "not_found" });
-        const [firstDetail] = await db_1.db
-            .select({ id: schema_1.orderDetailsTable.id })
-            .from(schema_1.orderDetailsTable)
-            .where((0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, orderId))
-            .limit(1);
+        const firstDetail = await ratingAnchorDetail(orderId);
         if (!firstDetail)
             return reply.send({ ok: false, error: "not_found" });
         try {
             await db_1.db.transaction(async (tx) => {
+                // Order-wide, matching the page guard — a rating written against a
+                // different detail of this order still means "already rated". Kept
+                // inside the transaction so two taps cannot both pass it.
                 const [existing] = await tx
                     .select({ id: schema_1.ratingsTable.id })
                     .from(schema_1.ratingsTable)
-                    .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ratingsTable.reviewer, session.user.id), (0, drizzle_orm_1.eq)(schema_1.ratingsTable.order_details_id, firstDetail.id)))
+                    .innerJoin(schema_1.orderDetailsTable, (0, drizzle_orm_1.eq)(schema_1.ratingsTable.order_details_id, schema_1.orderDetailsTable.id))
+                    .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ratingsTable.reviewer, session.user.id), (0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, orderId)))
                     .limit(1);
                 if (existing)
                     throw new Error("already_rated");

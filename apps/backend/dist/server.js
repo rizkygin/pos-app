@@ -23,12 +23,15 @@ const locations_1 = require("./routes/locations");
 const products_1 = require("./routes/products");
 const ads_1 = require("./routes/ads");
 const me_1 = require("./routes/me");
+const phone_verification_1 = require("./routes/phone-verification");
 const dashboard_1 = require("./routes/dashboard");
 const invoices_1 = require("./routes/invoices");
 const subscriptions_1 = require("./routes/subscriptions");
 const employees_1 = require("./routes/employees");
 const push_1 = require("./routes/push");
 const routing_1 = require("./routes/routing");
+const maintenance_1 = require("./routes/maintenance");
+const reports_1 = require("./routes/reports");
 const dispatch_scheduler_1 = require("./lib/dispatch-scheduler");
 const app_env_1 = require("./lib/app-env");
 const PORT = Number(process.env.PORT ?? 4000);
@@ -103,12 +106,15 @@ async function main() {
     await app.register(products_1.productRoutes);
     await app.register(ads_1.adRoutes);
     await app.register(me_1.meRoutes);
+    await app.register(phone_verification_1.phoneVerificationRoutes);
     await app.register(dashboard_1.dashboardRoutes);
     await app.register(invoices_1.invoiceRoutes);
     await app.register(subscriptions_1.subscriptionRoutes);
     await app.register(employees_1.employeeRoutes);
     await app.register(push_1.pushRoutes);
     await app.register(routing_1.routingRoutes);
+    await app.register(maintenance_1.maintenanceRoutes);
+    await app.register(reports_1.reportRoutes);
     app.get("/health", async () => ({ ok: true }));
     // The courier dispatch clock. Started after the routes are registered so a
     // tick can never fire against a half-built app.

@@ -6,6 +6,7 @@ const db_1 = require("../db");
 const schema_1 = require("../db/schema");
 const outlet_access_1 = require("../lib/outlet-access");
 const stock_1 = require("../lib/stock");
+const timezone_1 = require("../lib/timezone");
 // Cashflow categories used when an invoice is paid (seeded in CATEGORY_OUT/IN).
 const PURCHASE_CASH_CATEGORY = "Pembelian stok barang dagang";
 const SALES_CASH_CATEGORY = "Penjualan produk/jasa";
@@ -115,7 +116,9 @@ async function recordPurchaseCashOut(tx, outletId, invoice, amount) {
 }
 async function nextInvoiceNumber(outletId, type) {
     const prefix = type === "purchase" ? "PB" : "PJ";
-    const year = new Date().getFullYear();
+    // Invoice numbers are permanent document identity: derive the year in the
+    // app's zone so one issued on 31 Dec evening is not numbered into next year.
+    const year = (0, timezone_1.yearIn)();
     const [{ n }] = await db_1.db
         .select({ n: (0, drizzle_orm_1.sql) `count(*)::int` })
         .from(schema_1.invoicesTable)
@@ -858,17 +861,32 @@ async function invoiceRoutes(app) {
         if (!outlet)
             return;
         const { period = "30d" } = request.query;
+        // Period boundaries are calendar edges, so they must land on local midnight.
+        // setHours / new Date(y, m, 1) would use the container's zone — UTC in the
+        // deployed image — and quietly shift "today" and "this month" by 7 hours.
+        const { timezone = "Asia/Jakarta" } = request.query;
         const now = new Date();
+        const todayLocal = new Intl.DateTimeFormat("en-CA", {
+            timeZone: timezone,
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+        }).format(now);
+        const [localYear, localMonth] = todayLocal.split("-").map(Number);
+        const monthsAgoStart = (n) => {
+            const m = new Date(Date.UTC(localYear, localMonth - 1 - n, 1));
+            const key = `${m.getUTCFullYear()}-${String(m.getUTCMonth() + 1).padStart(2, "0")}`;
+            return (0, timezone_1.getUTCRangeFromLocalMonth)(key, timezone).startUTC;
+        };
         let from;
         if (period === "today") {
-            from = new Date(now);
-            from.setHours(0, 0, 0, 0);
+            from = (0, timezone_1.getUTCRangeFromLocalDate)(todayLocal, timezone).startUTC;
         }
         else if (period === "7d") {
             from = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
         }
         else if (period === "month") {
-            from = new Date(now.getFullYear(), now.getMonth(), 1);
+            from = monthsAgoStart(0);
         }
         else {
             from = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
@@ -877,7 +895,7 @@ async function invoiceRoutes(app) {
         const OPEN = ["posted", "partial"];
         const base = [(0, drizzle_orm_1.eq)(schema_1.invoicesTable.outlet_id, outlet.id), (0, drizzle_orm_1.isNull)(schema_1.invoicesTable.deletedAt)];
         const remainingSql = (0, drizzle_orm_1.sql) `coalesce(sum(${schema_1.invoicesTable.total} - ${schema_1.invoicesTable.amount_paid}), 0)`;
-        const trendStart = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+        const trendStart = monthsAgoStart(5);
         const [kpiRows, openRows, lateRows, trendRows, topSales, topPurchase] = await Promise.all([
             // Billed in the selected period.
             db_1.db
@@ -906,7 +924,10 @@ async function invoiceRoutes(app) {
             db_1.db
                 .select({
                 type: schema_1.invoicesTable.type,
-                month: (0, drizzle_orm_1.sql) `to_char(date_trunc('month', ${schema_1.invoicesTable.issue_date}), 'YYYY-MM')`,
+                // issue_date is timestamptz, so date_trunc would bucket by the session
+                // TimeZone (UTC on the server). Convert to local time first, else an
+                // invoice issued late on the 31st lands in the following month.
+                month: (0, drizzle_orm_1.sql) `to_char(date_trunc('month', ${schema_1.invoicesTable.issue_date} AT TIME ZONE ${timezone}), 'YYYY-MM')`,
                 total: (0, drizzle_orm_1.sql) `coalesce(sum(${schema_1.invoicesTable.total}), 0)`,
             })
                 .from(schema_1.invoicesTable)
@@ -961,10 +982,12 @@ async function invoiceRoutes(app) {
         // Assemble a dense 6-month series (months with no invoices stay 0).
         const byKey = new Map(trendRows.map((r) => [`${r.type}:${r.month}`, Number(r.total)]));
         const trend = Array.from({ length: 6 }, (_, i) => {
-            const d = new Date(now.getFullYear(), now.getMonth() - 5 + i, 1);
-            const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+            // Built in UTC purely as a calendar cursor over localYear/localMonth — the
+            // keys must match the local-time buckets the SQL above produces.
+            const d = new Date(Date.UTC(localYear, localMonth - 1 - 5 + i, 1));
+            const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
             return {
-                month: d.toLocaleString("id-ID", { month: "short" }),
+                month: d.toLocaleString("id-ID", { month: "short", timeZone: "UTC" }),
                 sales: byKey.get(`sales:${key}`) ?? 0,
                 purchase: byKey.get(`purchase:${key}`) ?? 0,
             };

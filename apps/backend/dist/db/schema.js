@@ -1,7 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SUBSCRIPTION_TIER = exports.employeesTable = exports.recipeItemsTable = exports.stockMovementsTable = exports.invoicePaymentsTable = exports.invoiceItemsTable = exports.invoicesTable = exports.suppliersTable = exports.verification = exports.account = exports.session = exports.courierSessionsTable = exports.productAdsTable = exports.productAdsSchedule = exports.scheduleProductAdsTable = exports.promosTable = exports.cashFlows = exports.cashOutDetailTable = exports.cashInDetailTable = exports.cashOutCategoryTable = exports.cashInCategoryTable = exports.ratingsTable = exports.orderDetailsTable = exports.errandOrdersTable = exports.orderOffersTable = exports.ordersTable = exports.productsTable = exports.courierDocumentsTable = exports.couriersTable = exports.serviceAreaTable = exports.customersTable = exports.adminsTable = exports.outletsTable = exports.locationsTable = exports.usersTable = exports.STOCK_MOVEMENT_REASON = exports.INVOICE_STATUS = exports.INVOICE_TYPE = exports.AD_STATUS = exports.REJECTED_BY = exports.CASHFLOWS_TRANSACTION_TYPE = exports.RECIEPENT = exports.ERRAND_STATUS = exports.ORDER_FULFILLMENT = exports.ORDER_STATUS = exports.STATUS = exports.COURIER_DOCUMENT_KIND = exports.OFFER_STATE = exports.COURIER_VERIFICATION_STATUS = exports.VEHICLE_TYPE = void 0;
-exports.menuGroupsTable = exports.courierDevicesTable = exports.pushSubscriptionsTable = exports.subscriptionNotificationsTable = exports.subscriptionEventsTable = exports.subscriptionPaymentsTable = exports.subscriptionsTable = exports.subscriptionPlansTable = exports.NOTIFICATION_STATUS = exports.NOTIFICATION_CHANNEL = exports.SUBSCRIPTION_ACTOR = exports.SUBSCRIPTION_PAYMENT_STATUS = exports.SUBSCRIPTION_PAYMENT_METHOD = exports.SUBSCRIPTION_STATUS = exports.BILLING_INTERVAL = void 0;
+exports.recipeItemsTable = exports.stockMovementsTable = exports.invoicePaymentsTable = exports.invoiceItemsTable = exports.invoicesTable = exports.suppliersTable = exports.verification = exports.account = exports.session = exports.courierSessionsTable = exports.productAdsTable = exports.productAdsSchedule = exports.scheduleProductAdsTable = exports.promosTable = exports.cashFlows = exports.cashOutDetailTable = exports.cashInDetailTable = exports.cashOutCategoryTable = exports.cashInCategoryTable = exports.ratingsTable = exports.orderDetailsTable = exports.errandOrdersTable = exports.orderOffersTable = exports.ordersTable = exports.productsTable = exports.courierDocumentsTable = exports.couriersTable = exports.serviceAreaTable = exports.customersTable = exports.adminsTable = exports.outletsTable = exports.locationsTable = exports.phoneVerificationsTable = exports.usersTable = exports.STOCK_MOVEMENT_REASON = exports.INVOICE_STATUS = exports.INVOICE_TYPE = exports.AD_STATUS = exports.REJECTED_BY = exports.CASHFLOWS_TRANSACTION_TYPE = exports.RECIEPENT = exports.ERRAND_STATUS = exports.ORDER_FULFILLMENT = exports.ORDER_SOURCE = exports.ORDER_STATUS = exports.STATUS = exports.COURIER_DOCUMENT_KIND = exports.OFFER_STATE = exports.COURIER_VERIFICATION_STATUS = exports.VEHICLE_TYPE = void 0;
+exports.maintenanceWindowsTable = exports.menuGroupsTable = exports.courierDevicesTable = exports.pushSubscriptionsTable = exports.subscriptionNotificationsTable = exports.subscriptionEventsTable = exports.subscriptionPaymentsTable = exports.subscriptionsTable = exports.subscriptionPlansTable = exports.NOTIFICATION_STATUS = exports.NOTIFICATION_CHANNEL = exports.SUBSCRIPTION_ACTOR = exports.SUBSCRIPTION_PAYMENT_STATUS = exports.SUBSCRIPTION_PAYMENT_METHOD = exports.SUBSCRIPTION_STATUS = exports.BILLING_INTERVAL = exports.SUBSCRIPTION_TIER = exports.employeesTable = void 0;
 const pg_core_1 = require("drizzle-orm/pg-core");
 const drizzle_orm_1 = require("drizzle-orm");
 const columns_helper_1 = require("./columns.helper");
@@ -52,6 +52,21 @@ exports.ORDER_STATUS = (0, pg_core_1.pgEnum)('order_status', [
     'delivered',
     'cancelled',
 ]);
+// Where the order was rung up. pos = the cashier screen; app = a customer
+// ordering for themselves.
+//
+// This exists because "is it a cashier order?" was previously answered by
+// joining out to users.email and comparing it to the hardcoded offline-customer
+// address (routes/admin.ts, routes/owner.ts). That test is fine for a read-only
+// filter tab, but cancellation is destructive and must not depend on a string
+// literal that four files keep their own copy of — nor on the `|| 1` fallback
+// in add-order-detail, which silently attaches POS orders to customer id 1 on
+// any database where that email was never seeded. Those orders do not match
+// the email test and would be undeletable.
+//
+// The old email checks are deliberately left in place for now; this column is
+// the identity test for new work only.
+exports.ORDER_SOURCE = (0, pg_core_1.pgEnum)('order_source', ['app', 'pos']);
 // delivery = courier-fulfilled order (food/drink/mart): goes through the courier
 // lobby + on_delivery leg. service = no courier: owner drives the whole flow and
 // the customer accepts at the end (see the service order endpoints).
@@ -64,7 +79,7 @@ exports.ORDER_FULFILLMENT = (0, pg_core_1.pgEnum)('order_fulfillment', [
     'service',
     'materials',
 ]);
-// "Suruh Kurir": a courier hired directly, with no outlet and no products in
+// "Tugaskan Kurir": a courier hired directly, with no outlet and no products in
 // the picture. Deliberately its OWN enum and its own table rather than a fourth
 // ORDER_FULFILLMENT value — an errand has no outlet_id, no order_details and no
 // cash-in, so folding it into orders would have meant making outlet_id nullable
@@ -132,7 +147,7 @@ exports.usersTable = (0, pg_core_1.pgTable)('users', {
     // Canonical 628… form — see lib/utils/phone.ts. Everything that writes here
     // must go through normalizeIndonesianPhone, or the column drifts back into
     // holding six spellings of one number.
-    // Unique since "Suruh Kurir": a courier identifies the customer he is about
+    // Unique since "Tugaskan Kurir": a courier identifies the customer he is about
     // to deal with by looking their number up, and a number shared by two
     // accounts makes that lookup meaningless.
     //
@@ -141,8 +156,12 @@ exports.usersTable = (0, pg_core_1.pgTable)('users', {
     // signup after it dies on a constraint violation. Nullable rather than
     // notNull because Postgres allows unlimited NULLs under UNIQUE — that is what
     // the placeholder rows were migrated to. A user with a null phone simply
-    // cannot be reached, and cannot use Suruh Kurir until they set one.
+    // cannot be reached, and cannot use Tugaskan Kurir until they set one.
     phone: (0, pg_core_1.varchar)('phone', { length: 255 }).unique(),
+    // Proof the number is actually reachable on WhatsApp, established by the OTP
+    // flow in routes/phone-verification.ts. Resets to false on every change of
+    // `phone` — a verified flag left standing over a new number certifies nothing.
+    phone_verified: (0, pg_core_1.boolean)('phone_verified').default(false).notNull(),
     // When the user last CHANGED their number, gating the one-per-month limit.
     // Null means never changed, so the first edit is free: a typo caught right
     // after signup shouldn't cost someone a month of being uncontactable.
@@ -153,6 +172,41 @@ exports.usersTable = (0, pg_core_1.pgTable)('users', {
     image: (0, pg_core_1.text)('image').default('avatar.png'),
     ...columns_helper_1.timestamps,
 });
+/**
+ * Pending WhatsApp verification links, mirroring how email verification works:
+ * we send a one-time link, the user taps it, the number is proven reachable.
+ *
+ * The token is stored HASHED. It is a bearer secret — whoever holds it can mark
+ * a number verified — so a dump of this table in plaintext would hand over every
+ * pending verification. The link carries the raw token; only its SHA-256 lands
+ * here, exactly like a password reset token.
+ *
+ * Rows are kept after use (consumed_at set) rather than deleted: `sent_at` is
+ * what the resend cooldown and the daily send cap are counted from, and deleting
+ * the row would reset both — which is the whole cost control, since every send
+ * is a billed WhatsApp template message.
+ */
+exports.phoneVerificationsTable = (0, pg_core_1.pgTable)('phone_verifications', {
+    id: (0, pg_core_1.text)('id').primaryKey(),
+    user_id: (0, pg_core_1.text)('user_id')
+        .notNull()
+        .references(() => exports.usersTable.id),
+    // The number this link was sent to, canonical 628…. Checked again when the
+    // link is opened: a user who edits their number after requesting a link
+    // must not be able to verify the new one with the old link.
+    phone: (0, pg_core_1.varchar)('phone', { length: 255 }).notNull(),
+    token_hash: (0, pg_core_1.varchar)('token_hash', { length: 128 }).notNull(),
+    expires_at: (0, pg_core_1.timestamp)('expires_at', { withTimezone: true }).notNull(),
+    consumed_at: (0, pg_core_1.timestamp)('consumed_at', { withTimezone: true }),
+    sent_at: (0, pg_core_1.timestamp)('sent_at', { withTimezone: true }).notNull().defaultNow(),
+    ...columns_helper_1.timestamps,
+}, (table) => [
+    (0, pg_core_1.index)('phone_verifications_user_idx').on(table.user_id, table.sent_at),
+    // The lookup the verify endpoint does: hash the token from the URL, find
+    // its row. Unique because a collision here would be two users' links
+    // resolving to one record.
+    (0, pg_core_1.uniqueIndex)('phone_verifications_token_uq').on(table.token_hash),
+]);
 exports.locationsTable = (0, pg_core_1.pgTable)('locations', {
     id: (0, pg_core_1.integer)('id').primaryKey().generatedByDefaultAsIdentity(),
     user_id: (0, pg_core_1.text)('user_id')
@@ -396,6 +450,7 @@ exports.ordersTable = (0, pg_core_1.pgTable)('orders', {
         .notNull()
         .references(() => exports.outletsTable.id),
     fulfillment: (0, exports.ORDER_FULFILLMENT)('fulfillment').default('delivery').notNull(),
+    source: (0, exports.ORDER_SOURCE)('source').default('app').notNull(),
     status: (0, exports.ORDER_STATUS)('status').default('pending').notNull(),
     promo_id: (0, pg_core_1.integer)('promo_id').references(() => exports.promosTable.id),
     discount_amount: (0, pg_core_1.varchar)('discount_amount', { length: 15 }),
@@ -416,6 +471,13 @@ exports.ordersTable = (0, pg_core_1.pgTable)('orders', {
     (0, pg_core_1.index)('courier_id_idx').on(table.courier_id),
     (0, pg_core_1.index)('outlet_id_idx').on(table.outlet_id),
     (0, pg_core_1.index)('orders_outlet_status_idx').on(table.outlet_id, table.status),
+    // NOTE: migration 0059 adds four more indexes on this table by hand —
+    // expression indexes over note ->> 'paymentMethod' / 'cashierName' /
+    // 'customerName' plus (outlet_id, created_at, source), all partial on
+    // deleted_at IS NULL. They are what makes the segmented reports in
+    // routes/reports.ts affordable. Deliberately NOT declared here: drizzle-kit
+    // cannot round-trip them, and a generate would drop them. Do not remove the
+    // migration.
     (0, pg_core_1.index)('orders_courier_status_idx').on(table.courier_id, table.status),
 ]);
 /**
@@ -461,7 +523,7 @@ exports.orderOffersTable = (0, pg_core_1.pgTable)('order_offers', {
     (0, pg_core_1.index)('order_offers_expiry_idx').on(table.state, table.expires_at),
 ]);
 /**
- * A courier hired directly by a customer — "Suruh Kurir".
+ * A courier hired directly by a customer — "Tugaskan Kurir".
  *
  * Mirrors ordersTable in spirit but shares none of its machinery. There is no
  * outlet, no products, no order_details, no promo and no cash-in: the courier
@@ -495,17 +557,20 @@ exports.errandOrdersTable = (0, pg_core_1.pgTable)('errand_orders', {
     // match orders.delivery_fee rather than introduce a second money type.
     price: (0, pg_core_1.varchar)('price', { length: 15 }),
     rejected_reason: (0, pg_core_1.varchar)('rejected_reason', { length: 255 }),
-    // SNAPSHOT of the customer's default saved location (locationsTable), not a
-    // reference to it. A location row is editable: pointing at it would let a
-    // customer renaming "Rumah" months later silently rewrite where a finished
-    // errand was delivered.
+    // Where the courier rides TO: a SNAPSHOT of the customer's default saved
+    // location (locationsTable), not a reference to it. A location row is
+    // editable: pointing at it would let a customer renaming "Rumah" months
+    // later silently rewrite where a finished errand was delivered.
+    //
+    // Named pickup_* until migration 0054, which was a misnomer — an errand has
+    // no outlet to collect from, so this is the destination and nothing else.
     //
     // numeric, like couriers.last_lat/lon and deliberately NOT the varchar used
     // by outlets and locations — those columns accepted '' and the literal
     // 'NaN', which is how coordinates poisoned the map picker (migration 0041).
-    pickup_address: (0, pg_core_1.varchar)('pickup_address', { length: 255 }),
-    pickup_lat: (0, pg_core_1.numeric)('pickup_lat', { precision: 10, scale: 7 }),
-    pickup_lon: (0, pg_core_1.numeric)('pickup_lon', { precision: 10, scale: 7 }),
+    destination_address: (0, pg_core_1.varchar)('destination_address', { length: 255 }),
+    destination_lat: (0, pg_core_1.numeric)('destination_lat', { precision: 10, scale: 7 }),
+    destination_lon: (0, pg_core_1.numeric)('destination_lon', { precision: 10, scale: 7 }),
     accepted_at: (0, pg_core_1.timestamp)('accepted_at', { withTimezone: true }),
     delivered_at: (0, pg_core_1.timestamp)('delivered_at', { withTimezone: true }),
     ...columns_helper_1.timestamps,
@@ -619,7 +684,17 @@ exports.cashFlows = (0, pg_core_1.pgTable)('cashFlows', {
         .$default(() => 'cash'),
     cash_in_detail_id: (0, pg_core_1.integer)('cash_in_detail_id').references(() => exports.cashInDetailTable.id),
     cash_out_detail_id: (0, pg_core_1.integer)('cash_out_detail_id').references(() => exports.cashOutDetailTable.id),
-});
+    // The order this row was caused by, when there was one. Sales invoices got
+    // invoicePaymentsTable to tie a payment back to its invoice; POS orders had
+    // no such link at all, so the cash-in a cashier order wrote was
+    // unreachable from the order.
+    //
+    // Cancellation needs it twice over: to book the reversal against the same
+    // order, and — because the reversal is money — to answer "has this already
+    // been reversed?" from the ledger itself rather than trusting the caller
+    // not to double-submit.
+    order_id: (0, pg_core_1.text)('order_id').references(() => exports.ordersTable.id),
+}, (table) => [(0, pg_core_1.index)('cash_flows_order_id_idx').on(table.order_id)]);
 exports.promosTable = (0, pg_core_1.pgTable)('promos', {
     id: (0, pg_core_1.integer)('id').primaryKey().generatedByDefaultAsIdentity(),
     code: (0, pg_core_1.varchar)('code', { length: 20 }).notNull().unique(),
@@ -1273,4 +1348,31 @@ exports.menuGroupsTable = (0, pg_core_1.pgTable)('menu_groups', {
     (0, pg_core_1.index)('menu_groups_outlet_idx').on(t.outlet_id, t.sort_order),
     // One group name per outlet — the picker relies on names being distinct.
     (0, pg_core_1.uniqueIndex)('menu_groups_outlet_name_uq').on(t.outlet_id, t.name),
+]);
+// Platform-wide maintenance windows. A row is a PLANNED window, not a flag:
+// scheduling it ahead of time is what lets the app warn people before the doors
+// close ("maintenance in 25 minutes") instead of vanishing under them mid-order.
+//
+// Rows are kept after they pass — the history of when the platform was down is
+// worth more than the storage — so "are we in maintenance right now" is always
+// a time comparison, never a stored boolean that can be left switched on.
+exports.maintenanceWindowsTable = (0, pg_core_1.pgTable)('maintenance_windows', {
+    id: (0, pg_core_1.integer)('id').primaryKey().generatedByDefaultAsIdentity(),
+    starts_at: (0, pg_core_1.timestamp)('starts_at', { withTimezone: true }).notNull(),
+    ends_at: (0, pg_core_1.timestamp)('ends_at', { withTimezone: true }).notNull(),
+    // Shown verbatim on the banner and the maintenance page. Optional: the UI
+    // has a sensible Indonesian default so an admin in a hurry can skip it.
+    message: (0, pg_core_1.text)('message'),
+    // How long before starts_at the warning banner appears.
+    notice_minutes: (0, pg_core_1.integer)('notice_minutes').notNull().default(60),
+    // Set when an admin calls it off, or ends it early (ends_at is moved to now
+    // for an early finish; this column is only for "it never happened").
+    cancelled_at: (0, pg_core_1.timestamp)('cancelled_at', { withTimezone: true }),
+    created_by: (0, pg_core_1.text)('created_by').references(() => exports.usersTable.id, { onDelete: 'set null' }),
+    ...columns_helper_1.timestamps,
+}, (t) => [
+    // The public status lookup runs on every proxied request, so it must hit an
+    // index: newest-first over the window bounds.
+    (0, pg_core_1.index)('maintenance_windows_window_idx').on(t.ends_at, t.starts_at),
+    (0, pg_core_1.check)('maintenance_windows_order_ck', (0, drizzle_orm_1.sql) `${t.ends_at} > ${t.starts_at}`),
 ]);
