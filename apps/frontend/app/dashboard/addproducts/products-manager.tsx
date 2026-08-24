@@ -28,7 +28,10 @@ import {
   AlertTriangle,
   Barcode,
   Truck,
+  HelpCircle,
 } from 'lucide-react';
+import { driver, type DriveStep } from 'driver.js';
+import 'driver.js/dist/driver.css';
 import QRCode from 'react-qr-code';
 import { Button } from '@/components/ui/button';
 import {
@@ -141,6 +144,50 @@ export const ProductsManager = ({
   // Inventory list filters
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
+
+  // ── Purchasable toggle ────────────────────────────────────────────────────
+  // `isAvailable` is the owner's "customers may buy this right now" switch: the
+  // backend hides false products from every customer-facing read (menu, browse,
+  // search) while the owner still sees them here, stock and history intact.
+  // Optimistic per-id overrides layered over the server props, so the switch
+  // moves under the finger instead of after a round trip + router.refresh().
+  const [availabilityOverrides, setAvailabilityOverrides] = useState<
+    Record<string, boolean>
+  >({});
+  const [togglingId, setTogglingId] = useState<string | null>(null);
+
+  const isPurchasable = (p: Product) =>
+    availabilityOverrides[p.id] ?? p.isAvailable;
+
+  const toggleAvailability = async (product: Product) => {
+    const next = !isPurchasable(product);
+    setAvailabilityOverrides((prev) => ({ ...prev, [product.id]: next }));
+    setTogglingId(product.id);
+    try {
+      const res = await fetch(
+        `${API_URL}/api/products/${product.id}/availability`,
+        {
+          method: 'PATCH',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ isAvailable: next }),
+        },
+      );
+      if (!res.ok) throw new Error('failed');
+      // Keep anything else reading these products (menu preview, counts) honest.
+      router.refresh();
+    } catch {
+      // Roll back to the server's value rather than leaving the owner believing
+      // a product is hidden from customers when it is still on sale.
+      setAvailabilityOverrides((prev) => {
+        const { [product.id]: _dropped, ...rest } = prev;
+        return rest;
+      });
+      alert('Gagal mengubah status produk. Coba lagi.');
+    } finally {
+      setTogglingId(null);
+    }
+  };
   // If the products is not deliverable the price must be shape on range value
 
   // ── Menu groups: owner-defined sections for the public /menu page ─────────
@@ -236,8 +283,10 @@ export const ProductsManager = ({
   );
   // Column sorting for the inventory table. Click a header to sort, click again
   // to flip direction. Applied after search/category filtering.
-  type SortKey = 'name' | 'price' | 'stock';
-  const [sortBy, setSortBy] = useState<SortKey>('name');
+  type SortKey = 'name' | 'group' | 'price' | 'stock';
+  // Default: the owner's own menu ordering, so the table reads like the public
+  // menu page rather than as one flat alphabetical list.
+  const [sortBy, setSortBy] = useState<SortKey>('group');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
   const toggleSort = (key: SortKey) => {
@@ -245,10 +294,22 @@ export const ProductsManager = ({
       setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
     } else {
       setSortBy(key);
-      // Names read naturally A-Z; numbers are almost always wanted biggest-first.
-      setSortDir(key === 'name' ? 'asc' : 'desc');
+      // Names and groups read naturally in their own order; numbers are almost
+      // always wanted biggest-first.
+      setSortDir(key === 'name' || key === 'group' ? 'asc' : 'desc');
     }
   };
+
+  // Menu groups are ordered by the owner's arrows, not by name — sort on that
+  // position. Ungrouped products sink to the bottom either way (they'd sort
+  // above everything on a descending flip otherwise, which reads as noise).
+  const groupById = useMemo(
+    () => new Map(menuGroups.map((g, i) => [g.id, { name: g.name, index: i }])),
+    [menuGroups],
+  );
+  const groupRank = (p: Product) =>
+    (p.menu_group_id != null ? groupById.get(p.menu_group_id)?.index : undefined) ??
+    Number.MAX_SAFE_INTEGER;
 
   // A service product's headline figure is its range floor, not `price` — the
   // backend mirrors price = lowest_price, but read it explicitly so sorting
@@ -272,10 +333,22 @@ export const ProductsManager = ({
         // localeCompare so "Ayam" vs "ayam" and accented names order sensibly.
         return a.product_name.localeCompare(b.product_name, 'id') * dir;
       }
+      if (sortBy === 'group') {
+        const ra = groupRank(a);
+        const rb = groupRank(b);
+        // Ungrouped always last, regardless of direction.
+        if (ra !== rb) {
+          if (ra === Number.MAX_SAFE_INTEGER) return 1;
+          if (rb === Number.MAX_SAFE_INTEGER) return -1;
+          return (ra - rb) * dir;
+        }
+        // Within a group, name order — a group's rows should still be scannable.
+        return a.product_name.localeCompare(b.product_name, 'id');
+      }
       if (sortBy === 'price') return (sortPrice(a) - sortPrice(b)) * dir;
       return ((Number(a.stock) || 0) - (Number(b.stock) || 0)) * dir;
     });
-  }, [initialProducts, search, categoryFilter, sortBy, sortDir]);
+  }, [initialProducts, search, categoryFilter, sortBy, sortDir, groupById]);
 
   // Source candidates for the composition editor: the outlet's stock-tracked
   // products. Self-exclusion matters more than it looks — a "Batako 10 pcs"
@@ -326,6 +399,118 @@ export const ProductsManager = ({
         )}
       </button>
     );
+  };
+
+  /**
+   * Guided tour of the inventory list.
+   *
+   * Owners here are warung/toko owners, not software users: several controls on
+   * this screen (Grup Menu, the Dijual switch, "Tanpa kurir") change what their
+   * CUSTOMERS see, and nothing on a button's face says so. Rather than pack the
+   * page with explanatory text nobody reads, the explanation is one tap away.
+   *
+   * Steps are built at click time, not defined as a constant: the table only
+   * exists once the outlet has products, and driver.js silently skips nothing —
+   * a step pointing at a missing element opens a popover floating in the middle
+   * of the screen with no context.
+   */
+  const startTour = () => {
+    window.scrollTo({ top: 0, behavior: 'instant' });
+
+    const hasRows = filteredProducts.length > 0;
+    const steps: DriveStep[] = [
+      {
+        element: '[data-tour="add-product"]',
+        popover: {
+          title: 'Tambah Produk',
+          description:
+            'Mulai di sini. Pian pilih dulu jenis produknya (makanan, mart, jasa, bahan bangunan), baru isi harga, stok, dan fotonya.',
+          side: 'bottom',
+          align: 'end',
+        },
+      },
+      {
+        element: '[data-tour="menu-groups"]',
+        popover: {
+          title: 'Grup Menu',
+          description:
+            'Grup Menu itu <b>judul bagian di halaman menu pelanggan</b> — misal "Nasi", "Minuman Dingin", "Semen &amp; Pasir". Beda dengan Kategori: kategori itu daftar tetap dari sistem, grup ini punya pian sendiri. Urutan grup di sini = urutan yang dilihat pelanggan.',
+          side: 'bottom',
+        },
+      },
+      {
+        element: '[data-tour="share"]',
+        popover: {
+          title: 'Share Produk',
+          description:
+            'Keluar QR Code &amp; link menu pian. Tempel QR-nya di meja atau etalase — pelanggan scan, langsung lihat menu dan bisa pesan.',
+          side: 'bottom',
+        },
+      },
+      {
+        element: '[data-tour="filters"]',
+        popover: {
+          title: 'Cari &amp; Saring',
+          description:
+            'Ketik nama produk untuk mencari, atau pilih kategori kalau produk pian sudah banyak.',
+          side: 'bottom',
+        },
+      },
+    ];
+
+    if (hasRows) {
+      steps.push(
+        {
+          element: '[data-tour="col-group"]',
+          popover: {
+            title: 'Kolom Grup',
+            description:
+              'Daftar ini diurutkan mengikuti urutan Grup Menu pian, jadi tampilannya sama seperti yang dilihat pelanggan. Produk tanpa grup selalu di paling bawah. Klik judul kolom mana saja untuk mengubah urutan.',
+            side: 'bottom',
+          },
+        },
+        {
+          element: '[data-tour="col-stock"]',
+          popover: {
+            title: 'Kolom Stok',
+            description:
+              'Angka merah artinya habis, kuning artinya tinggal sedikit (5 atau kurang). Tanda "—" artinya produk ini memang tidak dihitung stoknya.',
+            side: 'bottom',
+          },
+        },
+        {
+          element: '[data-tour="row-status"]',
+          popover: {
+            title: 'Tombol Dijual / Disembunyikan',
+            description:
+              'Ini saklar "boleh dibeli sekarang". Kalau dimatikan, produk <b>langsung hilang dari menu, pencarian, dan halaman pelanggan</b> — tapi tetap ada di sini, stok dan riwayat penjualannya aman. Pas buat barang yang lagi habis: matikan dulu, nyalakan lagi kalau sudah ada.',
+            side: 'left',
+          },
+        },
+        {
+          element: '[data-tour="row-actions"]',
+          popover: {
+            title: 'Edit &amp; Hapus',
+            description:
+              'Pensil untuk mengubah harga, foto, grup, atau resep. Tong sampah untuk menghapus — produk yang sudah pernah terjual tidak benar-benar dihapus, hanya diarsipkan supaya laporan penjualan lama tidak rusak.',
+            side: 'left',
+          },
+        },
+      );
+    }
+
+    driver({
+      showProgress: true,
+      progressText: '{{current}} / {{total}}',
+      nextBtnText: 'Lanjut',
+      prevBtnText: 'Kembali',
+      doneBtnText: 'OK',
+      overlayColor: 'rgba(0, 0, 0, 0.6)',
+      stagePadding: 6,
+      stageRadius: 12,
+      popoverClass: 'app-tour-popover',
+      steps,
+    }).drive();
   };
 
   // Rendered in BOTH the product list header and the product form. A plain
@@ -674,20 +859,37 @@ export const ProductsManager = ({
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4 md:mb-6">
             <div>
               <h2 className="text-xl md:text-3xl font-extrabold tracking-tight text-foreground">
-                Manajemen Produk
+                Menajemen Produk
               </h2>
               <p className="text-sm text-muted-foreground mt-1">
                 {initialProducts.length} produk · kelola harga, stok, &amp; ketersediaan.
               </p>
+              {/* Same affordance as the Promosi page: several controls here
+                  change what CUSTOMERS see, which no button face can say. */}
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={startTour}
+                className="mt-1 -ml-2 h-8 gap-1.5 rounded-lg px-2 text-blue-600 hover:bg-blue-50 hover:text-blue-700 dark:hover:bg-blue-950/30"
+              >
+                <HelpCircle className="h-4 w-4" />
+                Apa fungsi tombol-tombol ini?
+              </Button>
             </div>
-            <div className="flex items-center gap-2">
+            {/* Wraps on a phone: three fixed-width buttons on one non-wrapping
+                row pushed "Tambah Produk" — the primary action — clean off the
+                right edge. It now takes its own full-width line first, with the
+                two secondary buttons splitting the line under it. */}
+            <div className="flex flex-wrap items-center gap-2">
               {/* Reachable without opening a product: an owner organising their
                   menu shouldn't have to edit an item to create a section, and
                   an outlet with no products yet had no path to it at all. */}
               <Button
                 variant="outline"
                 onClick={() => setGroupManagerOpen((v) => !v)}
-                className="rounded-xl border-border hover:bg-muted/50 transition-colors"
+                data-tour="menu-groups"
+                className="flex-1 sm:flex-none rounded-xl border-border hover:bg-muted/50 transition-colors"
               >
                 <Layers className="mr-2 h-4 w-4" />
                 Grup Menu
@@ -700,7 +902,8 @@ export const ProductsManager = ({
               <Button
                 variant="outline"
                 onClick={() => setShareOpen(true)}
-                className="rounded-xl border-border hover:bg-muted/50 transition-colors"
+                data-tour="share"
+                className="flex-1 sm:flex-none rounded-xl border-border hover:bg-muted/50 transition-colors"
               >
                 <Share2 className="mr-2 h-4 w-4" />
                 Share Produk
@@ -723,7 +926,8 @@ export const ProductsManager = ({
                   setSelectedFeatures([]);
                   setView('category');
                 }}
-                className="bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-lg shadow-blue-600/20 transition-all hover:scale-105"
+                data-tour="add-product"
+                className="order-first sm:order-0 w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-lg shadow-blue-600/20 transition-all sm:hover:scale-105"
               >
                 <Plus className="mr-2 h-5 w-5" />
                 Tambah Produk
@@ -766,7 +970,10 @@ export const ProductsManager = ({
           ) : (
             <>
               {/* Toolbar: search + category filter */}
-              <div className="flex flex-col sm:flex-row gap-2 sm:items-center mb-4">
+              <div
+                className="flex flex-col sm:flex-row gap-2 sm:items-center mb-4"
+                data-tour="filters"
+              >
                 <div className="relative flex-1">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <input
@@ -799,13 +1006,19 @@ export const ProductsManager = ({
                         <th className="px-3 py-2.5 font-semibold">
                           <SortHeader label="Produk" sortKey="name" />
                         </th>
+                        <th className="px-3 py-2.5 font-semibold" data-tour="col-group">
+                          <SortHeader label="Grup" sortKey="group" />
+                        </th>
                         <th className="px-3 py-2.5 text-right font-semibold">
                           <SortHeader label="Harga" sortKey="price" align="right" />
                         </th>
-                        <th className="px-3 py-2.5 text-right font-semibold">
+                        <th
+                          className="px-3 py-2.5 text-right font-semibold"
+                          data-tour="col-stock"
+                        >
                           <SortHeader label="Stok" sortKey="stock" align="right" />
                         </th>
-                        <th className="hidden md:table-cell px-3 py-2.5 font-semibold">Status</th>
+                        <th className="px-3 py-2.5 font-semibold">Status</th>
                         <th className="px-3 py-2.5 text-right font-semibold">Aksi</th>
                       </tr>
                     </thead>
@@ -819,6 +1032,11 @@ export const ProductsManager = ({
                           product.lowest_price !== '0';
                         const stockNum = Number(product.stock) || 0;
                         const lowStock = product.track_stock && stockNum <= 5;
+                        const purchasable = isPurchasable(product);
+                        const groupName =
+                          product.menu_group_id != null
+                            ? groupById.get(product.menu_group_id)?.name
+                            : null;
                         return (
                           <tr
                             key={product.id}
@@ -864,6 +1082,19 @@ export const ProductsManager = ({
                                   )}
                                 </div>
                               </div>
+                            </td>
+                            {/* Grup menu — shown at every width: it's the column
+                                the table now sorts by, so hiding it on a phone
+                                hid the reason for the row order. */}
+                            <td className="px-3 py-2.5">
+                              {groupName ? (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold">
+                                  <Layers className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                  {groupName}
+                                </span>
+                              ) : (
+                                <span className="text-muted-foreground">—</span>
+                              )}
                             </td>
                             {/* Harga */}
                             <td className="px-3 py-2.5 text-right tabular-nums whitespace-nowrap">
@@ -916,20 +1147,53 @@ export const ProductsManager = ({
                                 </span>
                               )}
                             </td>
-                            {/* Status */}
-                            <td className="hidden md:table-cell px-3 py-2.5">
-                              <span
-                                className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                                  product.isAvailable
-                                    ? 'bg-emerald-50 text-emerald-700'
-                                    : 'bg-rose-50 text-rose-600'
-                                }`}
+                            {/* Status — a switch, not a label: this is the
+                                owner's "boleh dibeli sekarang" control, and a
+                                sold-out item should be one tap away from being
+                                hidden from customers. */}
+                            {/* Every row carries the anchor; driver.js targets
+                                the first match, i.e. the top row. */}
+                            <td className="px-3 py-2.5" data-tour="row-status">
+                              <button
+                                type="button"
+                                role="switch"
+                                aria-checked={purchasable}
+                                aria-label={`${purchasable ? 'Sembunyikan' : 'Tampilkan'} ${product.product_name} dari pelanggan`}
+                                title={
+                                  purchasable
+                                    ? 'Bisa dibeli pelanggan — klik untuk menyembunyikan'
+                                    : 'Disembunyikan dari pelanggan — klik untuk menjual lagi'
+                                }
+                                disabled={togglingId === product.id}
+                                onClick={() => toggleAvailability(product)}
+                                className="inline-flex items-center gap-2 disabled:opacity-50"
                               >
-                                {product.isAvailable ? 'Aktif' : 'Nonaktif'}
-                              </span>
+                                <span
+                                  className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
+                                    purchasable
+                                      ? 'bg-emerald-500'
+                                      : 'bg-zinc-300 dark:bg-zinc-700'
+                                  }`}
+                                >
+                                  <span
+                                    className={`absolute top-0.5 size-4 rounded-full bg-white shadow transition-all ${
+                                      purchasable ? 'left-4.5' : 'left-0.5'
+                                    }`}
+                                  />
+                                </span>
+                                <span
+                                  className={`whitespace-nowrap text-[11px] font-semibold ${
+                                    purchasable
+                                      ? 'text-emerald-700 dark:text-emerald-500'
+                                      : 'text-muted-foreground'
+                                  }`}
+                                >
+                                  {purchasable ? 'Dijual' : 'Disembunyikan'}
+                                </span>
+                              </button>
                             </td>
                             {/* Aksi */}
-                            <td className="px-3 py-2.5">
+                            <td className="px-3 py-2.5" data-tour="row-actions">
                               <div className="flex items-center justify-end gap-1">
                                 <button
                                   onClick={() => handleEdit(product)}
@@ -954,7 +1218,7 @@ export const ProductsManager = ({
                       {filteredProducts.length === 0 && (
                         <tr>
                           <td
-                            colSpan={5}
+                            colSpan={6}
                             className="px-3 py-10 text-center text-sm text-muted-foreground"
                           >
                             Tidak ada produk yang cocok dengan pencarian.

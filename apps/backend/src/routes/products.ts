@@ -465,6 +465,48 @@ export async function productRoutes(app: FastifyInstance) {
     }
   });
 
+  /**
+   * Flip one product between purchasable and not.
+   *
+   * Deliberately NOT folded into /api/products/update: that route resolves
+   * courier_deliverable, the price range and the barcode from the body, so a
+   * one-field call through it would need the whole product resent just to hide
+   * an item — and any field the owner forgot would be rewritten. This is the
+   * toggle in the inventory table, so it stays a single column write.
+   *
+   * `isAvailable=false` removes the product from every customer-facing read
+   * (get-menu, get-all-product, search-products all filter on it); it stays
+   * fully visible to the owner, in stock, and on past orders.
+   */
+  app.patch("/api/products/:id/availability", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, "products");
+    if (!access) return;
+
+    const productId = (request.params as { id?: string }).id;
+    const isAvailable = (request.body as { isAvailable?: unknown })?.isAvailable;
+    if (!productId || typeof isAvailable !== "boolean") {
+      return reply.status(400).send({ success: false, message: "productId dan isAvailable wajib diisi" });
+    }
+
+    // Scoped to the caller's outlet so an id from another outlet can't be flipped.
+    const updated = await db
+      .update(productsTable)
+      .set({ isAvailable })
+      .where(
+        and(
+          eq(productsTable.id, productId),
+          eq(productsTable.outlet_id, access.outlet.id),
+          isNull(productsTable.deletedAt),
+        ),
+      )
+      .returning({ id: productsTable.id, isAvailable: productsTable.isAvailable });
+
+    if (updated.length === 0) {
+      return reply.status(404).send({ success: false, message: "Produk tidak ditemukan" });
+    }
+    return reply.send({ success: true, isAvailable: updated[0].isAvailable });
+  });
+
   // ── Recipe (bill-of-materials) ─────────────────────────────────────────
   // Strictly opt-in: only track_stock=false products can have one, and a
   // product without recipe rows simply moves no stock when sold.
