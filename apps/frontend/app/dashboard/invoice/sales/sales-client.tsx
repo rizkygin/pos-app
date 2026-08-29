@@ -36,6 +36,13 @@ import {
   SheetClose,
 } from "@/components/ui/sheet";
 import { DataTable } from "@/app/dashboard/reports/data-table";
+import {
+  PaymentMethodPicker,
+  PaymentMethodBadge,
+  methodMeta,
+  type PaymentMethod,
+} from "../_components/payment-method";
+import { LocalDateTime } from "@/components/local-datetime";
 import { API_URL } from "@/lib/api-url";
 import { resolveProductImage, isBackendImage } from "@/lib/image-src";
 import { formatNumberInput, parseNumberInput } from "@/lib/utils/format";
@@ -49,7 +56,16 @@ import {
   lateDays,
 } from "./columns";
 
-type Product = { id: string; product_name: string; price: string; image: string; is_for_sale: boolean };
+type Product = {
+  id: string;
+  product_name: string;
+  price: string;
+  image: string;
+  is_for_sale: boolean;
+  // Stock unit (pcs, kg, liter…) — shown next to the unit price instead of a
+  // hardcoded "item". Older/synthesized lines may not carry one.
+  unit?: string | null;
+};
 type CartItem = {
   product: Product;
   quantity: number;
@@ -75,9 +91,18 @@ type DetailInvoice = SalesRow & {
   tax_amount: string;
   discount: string;
   down_payment: string;
+  down_payment_method: PaymentMethod;
   created_by_name?: string | null;
   notes: string | null;
   items: DetailItem[];
+  // One row per payment actually received (DP booked on post + installments).
+  payments?: InvoicePayment[];
+};
+type InvoicePayment = {
+  id: number;
+  amount: string;
+  method: PaymentMethod;
+  created_at: string;
 };
 
 const rupiah = (v: number | string) =>
@@ -115,6 +140,7 @@ export function SalesClient() {
   // down payment (uang muka) — any amount up to the remaining balance.
   const [payTarget, setPayTarget] = useState<{ id: number; number: string; total: number; paid: number } | null>(null);
   const [payAmount, setPayAmount] = useState("");
+  const [payMethod, setPayMethod] = useState<PaymentMethod>("cash");
   const [paying, setPaying] = useState(false);
   const [payError, setPayError] = useState("");
 
@@ -128,6 +154,7 @@ export function SalesClient() {
   const [discount, setDiscount] = useState("0");
   // Uang muka (DP) agreed on the draft; booked as the first payment on post.
   const [downPayment, setDownPayment] = useState("0");
+  const [dpMethod, setDpMethod] = useState<PaymentMethod>("cash");
   const [dueDate, setDueDate] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -192,6 +219,7 @@ export function SalesClient() {
       setTaxRate(String(Number(d.tax_rate) || 0));
       setDiscount(String(Number(d.discount) || 0));
       setDownPayment(String(Number(d.down_payment) || 0));
+      setDpMethod(d.down_payment_method ?? "cash");
       setDueDate(d.due_date ? String(d.due_date).slice(0, 10) : "");
       setCart(
         d.items.map((it) => {
@@ -302,6 +330,7 @@ export function SalesClient() {
             tax_rate: Number(taxRate || 0),
             discount: Number(discount || 0),
             down_payment: Number(downPayment || 0),
+            down_payment_method: dpMethod,
             items: cart.map((i) => ({
               product_id: i.product.id,
               description: i.product.product_name,
@@ -335,6 +364,7 @@ export function SalesClient() {
     const paid = Number(inv.amount_paid);
     setPayTarget({ id: inv.id, number: inv.number, total, paid });
     setPayAmount(String(Math.max(0, +(total - paid).toFixed(2))));
+    setPayMethod("cash");
     setPayError("");
   };
 
@@ -353,7 +383,7 @@ export function SalesClient() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ amount }),
+        body: JSON.stringify({ amount, method: payMethod }),
       });
       const json = await res.json();
       if (!json.success) {
@@ -481,6 +511,8 @@ export function SalesClient() {
                 Lunas ({rupiah(payRemaining)})
               </Button>
             </div>
+
+            <PaymentMethodPicker value={payMethod} onChange={setPayMethod} />
 
             <p className="text-[11px] text-muted-foreground">
               Pembayaran sebagian membuat status faktur menjadi{" "}
@@ -619,7 +651,8 @@ export function SalesClient() {
                     </span>
                   </div>
                   <p className="text-[10px] text-muted-foreground">
-                    DP dicatat sebagai kas masuk saat faktur diposting.
+                    DP dicatat sebagai kas masuk ({methodMeta(detail.down_payment_method).label}) saat
+                    faktur diposting.
                   </p>
                 </>
               )}
@@ -646,6 +679,30 @@ export function SalesClient() {
                 </div>
               )}
             </div>
+
+            {(detail.payments?.length ?? 0) > 0 && (
+              <div className="rounded-2xl border bg-muted/20 p-4">
+                <h3 className="text-sm font-semibold">Riwayat Pembayaran</h3>
+                <ul className="mt-2 divide-y">
+                  {detail.payments!.map((pmt, i) => (
+                    <li key={pmt.id} className="flex items-center gap-2 py-2 text-sm">
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium">
+                          {i === 0 && Number(detail.down_payment) > 0 ? "Uang Muka (DP)" : `Pembayaran ${i + 1}`}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">
+                          <LocalDateTime value={pmt.created_at} />
+                        </p>
+                      </div>
+                      <PaymentMethodBadge method={pmt.method} />
+                      <span className="w-28 shrink-0 text-right font-semibold tabular-nums">
+                        {rupiah(pmt.amount)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
             <div className="flex flex-wrap justify-end gap-2">
               {busyId === detail.id ? (
@@ -877,6 +934,13 @@ export function SalesClient() {
                         Dicatat otomatis sebagai pembayaran pertama (kas masuk) saat faktur diposting.
                       </span>
                     </label>
+                    {Number(downPayment) > 0 && (
+                      <PaymentMethodPicker
+                        value={dpMethod}
+                        onChange={setDpMethod}
+                        label="Metode Penerimaan DP"
+                      />
+                    )}
                     <label className="block space-y-1.5">
                       <span className="text-xs font-medium text-muted-foreground">Syarat &amp; Ketentuan</span>
                       <textarea
@@ -949,7 +1013,7 @@ export function SalesClient() {
                       <div className="min-w-0 flex-1">
                         <p className="line-clamp-2 text-sm font-medium leading-snug">{i.product.product_name}</p>
                         <p className="mt-0.5 text-[11px] text-muted-foreground tabular-nums">
-                          {rupiah(i.unit_price || 0)} / item
+                          {rupiah(i.unit_price || 0)} / {i.product.unit || "pcs"}
                         </p>
                       </div>
                       <button

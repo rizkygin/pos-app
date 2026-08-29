@@ -2,10 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { Printer, Loader2, Sparkles, Layout, ScrollText, Terminal } from "lucide-react";
+import { Printer, Loader2, Sparkles, Layout, ScrollText, Terminal, ChevronDown, FileText } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { API_URL } from "@/lib/api-url";
 import { resolveOutletImage } from "@/lib/image-src";
 import { getSalesTerms } from "@/lib/invoice-terms";
+import { ThermalPrintOptions } from "../../../_components/thermal-invoice";
 
 type Item = { id: number; description: string; quantity: string; unit_price: string; discount_pct: string; line_total: string };
 
@@ -739,12 +741,31 @@ export function PrintClient() {
             )}
           </div>
 
-          <button
-            onClick={handlePrint}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700"
-          >
-            <Printer className="size-4" /> Cetak / Simpan PDF
-          </button>
+          {/* All output routes live behind one button: A4 and the two thermal
+              transports side by side made the toolbar wrap into a wall. */}
+          <Popover>
+            <PopoverTrigger className="inline-flex items-center gap-1.5 rounded-xl bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700">
+              <Printer className="size-4" /> Cetak
+              <ChevronDown className="size-3.5 opacity-80" />
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-64 gap-1">
+              <button
+                onClick={handlePrint}
+                className="flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-accent"
+              >
+                <FileText className="mt-0.5 size-4 text-muted-foreground" />
+                <span>
+                  <span className="block text-sm font-medium">Cetak / Simpan PDF</span>
+                  <span className="block text-[11px] text-muted-foreground">Ukuran A4, sesuai tema di atas</span>
+                </span>
+              </button>
+
+              <div className="my-1 border-t" />
+
+              {/* Thermal (58/80mm) output — its own layout, terms omitted. */}
+              <ThermalPrintOptions inv={inv} />
+            </PopoverContent>
+          </Popover>
         </div>
 
         <div id="invoice-print">

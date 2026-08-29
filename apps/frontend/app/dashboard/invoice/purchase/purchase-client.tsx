@@ -6,6 +6,21 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DataTable } from "@/app/dashboard/reports/data-table";
 import { API_URL } from "@/lib/api-url";
+import { LocalDateTime } from "@/components/local-datetime";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import {
+  PaymentMethodPicker,
+  PaymentMethodBadge,
+  methodMeta,
+  type PaymentMethod,
+} from "../_components/payment-method";
 import {
   getPurchaseColumns,
   type PurchaseRow,
@@ -14,18 +29,35 @@ import {
 } from "./columns";
 
 type Supplier = { id: number; name: string };
-type Product = { id: string; product_name: string; price: string; buying_price: string };
+type Product = { id: string; product_name: string; price: string; buying_price: string; unit: string };
 type LineItem = { product_id: string; description: string; quantity: string; unit_price: string };
-type DetailItem = { id: number; description: string; quantity: string; unit_price: string; line_total: string };
+// `unit` is joined from the product, so it's null on product-less lines.
+type DetailItem = {
+  id: number;
+  description: string;
+  quantity: string;
+  unit: string | null;
+  unit_price: string;
+  line_total: string;
+};
 type DetailInvoice = PurchaseRow & {
   subtotal: string;
   tax_rate: string;
   tax_amount: string;
   discount: string;
   down_payment: string;
+  down_payment_method: PaymentMethod;
   notes: string | null;
   created_by_name?: string | null;
   items: DetailItem[];
+  // One row per payment actually made (DP booked on post + installments).
+  payments?: InvoicePayment[];
+};
+type InvoicePayment = {
+  id: number;
+  amount: string;
+  method: PaymentMethod;
+  created_at: string;
 };
 
 const rupiah = (v: number | string) =>
@@ -53,11 +85,18 @@ export function PurchaseClient() {
     due_date: "",
     tax_rate: "0",
     down_payment: "0",
+    down_payment_method: "cash" as PaymentMethod,
     notes: "",
     items: [{ ...emptyItem }] as LineItem[],
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+
+  // Payment sheet: purchase settles the whole remaining balance in one go, so
+  // the only thing to ask is how the money left the business.
+  const [payTarget, setPayTarget] = useState<{ id: number; number: string; remaining: number } | null>(null);
+  const [payMethod, setPayMethod] = useState<PaymentMethod>("cash");
+  const [paying, setPaying] = useState(false);
 
   const fetchInvoices = async () => {
     setLoading(true);
@@ -86,7 +125,15 @@ export function PurchaseClient() {
   }, []);
 
   const openCreate = async () => {
-    setForm({ supplier_id: "", due_date: "", tax_rate: "0", down_payment: "0", notes: "", items: [{ ...emptyItem }] });
+    setForm({
+      supplier_id: "",
+      due_date: "",
+      tax_rate: "0",
+      down_payment: "0",
+      down_payment_method: "cash",
+      notes: "",
+      items: [{ ...emptyItem }],
+    });
     setError("");
     await fetchFormData();
     setView("create");
@@ -138,6 +185,7 @@ export function PurchaseClient() {
           due_date: form.due_date || null,
           tax_rate: Number(form.tax_rate || 0),
           down_payment: Number(form.down_payment || 0),
+          down_payment_method: form.down_payment_method,
           notes: form.notes,
           items: items.map((it) => ({
             product_id: it.product_id || null,
@@ -161,7 +209,41 @@ export function PurchaseClient() {
     }
   };
 
+  const submitPay = async () => {
+    if (!payTarget) return;
+    setPaying(true);
+    try {
+      await fetch(`${API_URL}/api/purchase-invoices/${payTarget.id}/pay`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ method: payMethod }),
+      });
+      const paidId = payTarget.id;
+      setPayTarget(null);
+      await fetchInvoices();
+      if (view === "detail" && detail?.id === paidId) await openDetail(detail);
+    } finally {
+      setPaying(false);
+    }
+  };
+
   const action = async (id: number, kind: "post" | "pay" | "void") => {
+    // Paying asks how the money left first; post/void have nothing to ask.
+    if (kind === "pay") {
+      const inv = invoices.find((i) => i.id === id) ?? (detail?.id === id ? detail : null);
+      setPayTarget(
+        inv
+          ? {
+              id,
+              number: inv.number,
+              remaining: Math.max(0, +(Number(inv.total) - Number(inv.amount_paid)).toFixed(2)),
+            }
+          : null,
+      );
+      setPayMethod("cash");
+      return;
+    }
     setBusyId(id);
     try {
       await fetch(`${API_URL}/api/purchase-invoices/${id}/${kind}`, {
@@ -192,6 +274,40 @@ export function PurchaseClient() {
   };
 
   // ===================================================================== detail
+  // Payment sheet — rendered in both the list and detail views so "Bayar" works
+  // from either place.
+  const paySheet = (
+    <Sheet open={payTarget !== null} onOpenChange={(open) => !open && setPayTarget(null)}>
+      <SheetContent side="right" className="w-full gap-0 sm:max-w-md">
+        <SheetHeader className="border-b">
+          <SheetTitle>Catat Pembayaran</SheetTitle>
+          <SheetDescription>
+            Faktur {payTarget?.number} — melunasi sisa tagihan{" "}
+            {payTarget ? rupiah(payTarget.remaining) : ""}.
+          </SheetDescription>
+        </SheetHeader>
+        {payTarget && (
+          <div className="flex-1 space-y-4 overflow-y-auto p-4">
+            <PaymentMethodPicker value={payMethod} onChange={setPayMethod} />
+            <p className="text-[11px] text-muted-foreground">
+              Selain tunai, pembayaran dicatat sebagai transaksi non-tunai di arus kas.
+            </p>
+          </div>
+        )}
+        <SheetFooter className="border-t">
+          <Button
+            onClick={submitPay}
+            disabled={paying}
+            className="w-full bg-green-600 text-white hover:bg-green-700"
+          >
+            {paying && <Loader2 className="size-4 animate-spin" />}
+            Catat Pembayaran
+          </Button>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
+  );
+
   if (view === "detail") {
     return (
       <div className="p-4 md:p-6 space-y-5">
@@ -242,6 +358,7 @@ export function PurchaseClient() {
                   <tr>
                     <th className="px-3 py-2 font-medium">Item</th>
                     <th className="px-3 py-2 text-right font-medium">Qty</th>
+                    <th className="px-3 py-2 font-medium">UoM</th>
                     <th className="px-3 py-2 text-right font-medium">Harga</th>
                     <th className="px-3 py-2 text-right font-medium">Jumlah</th>
                   </tr>
@@ -251,6 +368,7 @@ export function PurchaseClient() {
                     <tr key={it.id} className="border-b last:border-0">
                       <td className="px-3 py-2">{it.description}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{Number(it.quantity)}</td>
+                      <td className="px-3 py-2 text-muted-foreground">{it.unit || "—"}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{rupiah(it.unit_price)}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{rupiah(it.line_total)}</td>
                     </tr>
@@ -287,7 +405,8 @@ export function PurchaseClient() {
                     </span>
                   </div>
                   <p className="text-[10px] text-muted-foreground">
-                    DP dicatat sebagai kas keluar saat faktur diposting.
+                    DP dicatat sebagai kas keluar ({methodMeta(detail.down_payment_method).label}) saat
+                    faktur diposting.
                   </p>
                 </>
               )}
@@ -316,6 +435,30 @@ export function PurchaseClient() {
                 </div>
               )}
             </div>
+
+            {(detail.payments?.length ?? 0) > 0 && (
+              <div className="rounded-2xl border bg-muted/20 p-4">
+                <h3 className="text-sm font-semibold">Riwayat Pembayaran</h3>
+                <ul className="mt-2 divide-y">
+                  {detail.payments!.map((pmt, i) => (
+                    <li key={pmt.id} className="flex items-center gap-2 py-2 text-sm">
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium">
+                          {i === 0 && Number(detail.down_payment) > 0 ? "Uang Muka (DP)" : `Pembayaran ${i + 1}`}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">
+                          <LocalDateTime value={pmt.created_at} />
+                        </p>
+                      </div>
+                      <PaymentMethodBadge method={pmt.method} />
+                      <span className="w-28 shrink-0 text-right font-semibold tabular-nums">
+                        {rupiah(pmt.amount)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
             <div className="flex flex-wrap justify-end gap-2">
               {busyId === detail.id ? (
@@ -360,6 +503,7 @@ export function PurchaseClient() {
             </div>
           </div>
         )}
+        {paySheet}
       </div>
     );
   }
@@ -411,7 +555,8 @@ export function PurchaseClient() {
 
         <div className="rounded-xl border">
           <div className="grid grid-cols-12 gap-2 border-b px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-            <div className="col-span-5">Produk</div>
+            <div className="col-span-4">Produk</div>
+            <div className="col-span-1">UoM</div>
             <div className="col-span-2 text-right">Qty</div>
             <div className="col-span-2 text-right">Harga</div>
             <div className="col-span-2 text-right">Subtotal</div>
@@ -419,7 +564,7 @@ export function PurchaseClient() {
           </div>
           {form.items.map((it, i) => (
             <div key={i} className="grid grid-cols-12 items-center gap-2 px-3 py-2">
-              <div className="col-span-5">
+              <div className="col-span-4">
                 <select
                   value={it.product_id}
                   onChange={(e) => onPickProduct(i, e.target.value)}
@@ -432,6 +577,11 @@ export function PurchaseClient() {
                     </option>
                   ))}
                 </select>
+              </div>
+              {/* Read-only: the unit belongs to the product, so picking the
+                  product is what sets it. Blank until one is chosen. */}
+              <div className="col-span-1 truncate text-sm text-muted-foreground">
+                {products.find((p) => p.id === it.product_id)?.unit || "—"}
               </div>
               <Input
                 className="col-span-2 text-right"
@@ -476,6 +626,13 @@ export function PurchaseClient() {
               Dicatat otomatis sebagai kas keluar pertama saat faktur diposting.
             </span>
           </label>
+          {dpAmount > 0 && (
+            <PaymentMethodPicker
+              value={form.down_payment_method}
+              onChange={(v) => setForm({ ...form, down_payment_method: v })}
+              label="Metode Pembayaran DP"
+            />
+          )}
 
           <div className="space-y-1 text-sm">
             <Row label="Subtotal" value={rupiah(totals.subtotal)} />
@@ -547,6 +704,7 @@ export function PurchaseClient() {
           onRowClick={(row) => openDetail(row)}
         />
       )}
+      {paySheet}
     </div>
   );
 }

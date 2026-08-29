@@ -1,6 +1,19 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
-import { and, eq, desc, isNull, sql, gte, lte, lt, or, ilike, inArray } from "drizzle-orm";
-import { db } from "../db";
+import {
+  and,
+  eq,
+  desc,
+  isNull,
+  sql,
+  gte,
+  lte,
+  lt,
+  or,
+  ilike,
+  inArray,
+  type AnyColumn,
+} from "drizzle-orm";
+import { db, reportDb } from "../db";
 import {
   suppliersTable,
   invoicesTable,
@@ -14,12 +27,18 @@ import {
   cashInCategoryTable,
   cashInDetailTable,
   usersTable,
+  INVOICE_PAYMENT_METHOD,
 } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 import { requireOutletAccess, type EmployeePermission } from "../lib/outlet-access";
 import { applySaleStockOut } from "../lib/stock";
-import { getUTCRangeFromLocalDate, getUTCRangeFromLocalMonth, yearIn } from "../lib/timezone";
+import { loadFailure } from "./reports";
+import {
+  getUTCRangeFromLocalDate,
+  getUTCRangeFromLocalMonth,
+  yearIn,
+} from "../lib/timezone";
 
 // Cashflow categories used when an invoice is paid (seeded in CATEGORY_OUT/IN).
 const PURCHASE_CASH_CATEGORY = "Pembelian stok barang dagang";
@@ -80,6 +99,23 @@ function computeTotals(
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
+type PaymentMethod = (typeof INVOICE_PAYMENT_METHOD.enumValues)[number];
+
+// Whatever the owner picked, the cashflow ledger only knows cash vs transfer:
+// anything that isn't physical money in the drawer is 'transfer' there, so cash
+// opname reconciles. The finer label survives on invoice_payments.method.
+function cashflowTypeFor(method: PaymentMethod) {
+  return method === "cash" ? ("cash" as const) : ("transfer" as const);
+}
+
+// Coerce untrusted input to a known method; anything unrecognised falls back to
+// cash, which is what every payment was booked as before this existed.
+function parseMethod(v: unknown): PaymentMethod {
+  return INVOICE_PAYMENT_METHOD.enumValues.includes(v as PaymentMethod)
+    ? (v as PaymentMethod)
+    : "cash";
+}
+
 // Record `amount` as a cash-IN payment on a sales invoice inside an open
 // transaction: find-or-create the category, write the cashflow detail + link +
 // payment row, then bump amount_paid/status. Used by /pay and by /post when the
@@ -89,6 +125,7 @@ async function recordSalesCashIn(
   outletId: number,
   invoice: { id: number; total: string; amount_paid: string },
   amount: number,
+  method: PaymentMethod = "cash",
 ) {
   let [cat] = await tx
     .select({ id: cashInCategoryTable.id })
@@ -104,13 +141,18 @@ async function recordSalesCashIn(
 
   const [detail] = await tx
     .insert(cashInDetailTable)
-    .values({ category_id: cat.id, money_amount: String(amount), type: "cash" })
+    .values({
+      category_id: cat.id,
+      money_amount: String(amount),
+      type: cashflowTypeFor(method),
+    })
     .returning();
   await tx.insert(cashFlows).values({ outlet_id: outletId, cash_in_detail_id: detail.id });
   await tx.insert(invoicePaymentsTable).values({
     invoice_id: invoice.id,
     cash_in_detail_id: detail.id,
     amount: String(amount),
+    method,
   });
 
   const newPaid = +(Number(invoice.amount_paid) + amount).toFixed(2);
@@ -132,6 +174,7 @@ async function recordPurchaseCashOut(
   outletId: number,
   invoice: { id: number; total: string; amount_paid: string },
   amount: number,
+  method: PaymentMethod = "cash",
 ) {
   let [cat] = await tx
     .select({ id: cashOutCategoryTable.id })
@@ -147,13 +190,18 @@ async function recordPurchaseCashOut(
 
   const [detail] = await tx
     .insert(cashOutDetailTable)
-    .values({ category_id: cat.id, money_amount: String(amount), type: "cash" })
+    .values({
+      category_id: cat.id,
+      money_amount: String(amount),
+      type: cashflowTypeFor(method),
+    })
     .returning();
   await tx.insert(cashFlows).values({ outlet_id: outletId, cash_out_detail_id: detail.id });
   await tx.insert(invoicePaymentsTable).values({
     invoice_id: invoice.id,
     cash_out_detail_id: detail.id,
     amount: String(amount),
+    method,
   });
 
   const newPaid = +(Number(invoice.amount_paid) + amount).toFixed(2);
@@ -164,6 +212,90 @@ async function recordPurchaseCashOut(
     .where(eq(invoicesTable.id, invoice.id))
     .returning();
   return updated;
+}
+
+// Payment history for one invoice, oldest first — the DP booked on post plus
+// every later installment. Fed to the "Riwayat Pembayaran" list on the detail
+// view so the owner can see how each slice actually came in.
+async function paymentHistory(invoiceId: number) {
+  return db
+    .select({
+      id: invoicePaymentsTable.id,
+      amount: invoicePaymentsTable.amount,
+      method: invoicePaymentsTable.method,
+      created_at: invoicePaymentsTable.created_at,
+    })
+    .from(invoicePaymentsTable)
+    .where(eq(invoicePaymentsTable.invoice_id, invoiceId))
+    .orderBy(invoicePaymentsTable.created_at, invoicePaymentsTable.id);
+}
+
+// Resolve a period key ("today" | "7d" | "30d" | "month") to the instant the
+// window opens, plus the calendar cursors the trend series needs.
+//
+// Period boundaries are calendar edges, so they must land on LOCAL midnight.
+// setHours / new Date(y, m, 1) would use the container's zone — UTC in the
+// deployed image — and quietly shift "today" and "this month" by 7 hours.
+function periodWindow(period: string, timezone: string) {
+  const now = new Date();
+  const todayLocal = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
+  const [localYear, localMonth] = todayLocal.split("-").map(Number);
+  const monthsAgoStart = (n: number) => {
+    const m = new Date(Date.UTC(localYear, localMonth - 1 - n, 1));
+    const key = `${m.getUTCFullYear()}-${String(m.getUTCMonth() + 1).padStart(2, "0")}`;
+    return getUTCRangeFromLocalMonth(key, timezone).startUTC;
+  };
+
+  let from: Date;
+  if (period === "today") {
+    from = getUTCRangeFromLocalDate(todayLocal, timezone).startUTC;
+  } else if (period === "7d") {
+    from = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  } else if (period === "month") {
+    from = monthsAgoStart(0);
+  } else {
+    from = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  }
+  return { from, todayLocal, localYear, localMonth, monthsAgoStart };
+}
+
+// The invoice report is now driven by an explicit date range (the filter popup
+// on /dashboard/invoice/reports), with the old period tabs kept as the fallback
+// for any caller that still sends `period`. `to` is EXCLUSIVE — the client sends
+// the day after the last day it wants shown — and the span is capped so one
+// request can never sweep the whole invoice history.
+export const MAX_REPORT_RANGE_DAYS = 93;
+
+function rangeWindow(query: { period?: string; from?: string; to?: string }, timezone: string) {
+  const w = periodWindow(query.period ?? "30d", timezone);
+  const isDay = (v?: string) => !!v && /^\d{4}-\d{2}-\d{2}$/.test(v);
+  if (isDay(query.from) && isDay(query.to)) {
+    const from = getUTCRangeFromLocalDate(query.from!, timezone).startUTC;
+    const to = getUTCRangeFromLocalDate(query.to!, timezone).startUTC;
+    const days = (to.getTime() - from.getTime()) / 86_400_000;
+    if (days > 0 && days <= MAX_REPORT_RANGE_DAYS) return { ...w, from, to };
+  }
+  return { ...w, to: null as Date | null };
+}
+
+// Narrow to invoices that carry a line for one product, or for any product in
+// one menu group. EXISTS keeps this a filter on invoices — a join would multiply
+// an invoice by its matching lines and inflate every sum.
+function itemFilter(query: { productId?: string; menuGroupId?: string }) {
+  const productId = query.productId?.trim();
+  const menuGroupId = Number(query.menuGroupId);
+  if (productId) {
+    return sql`exists (select 1 from invoice_items ii where ii.invoice_id = ${invoicesTable.id} and ii.product_id = ${productId})`;
+  }
+  if (Number.isFinite(menuGroupId) && menuGroupId > 0) {
+    return sql`exists (select 1 from invoice_items ii join products p on p.id = ii.product_id where ii.invoice_id = ${invoicesTable.id} and p.menu_group_id = ${menuGroupId})`;
+  }
+  return undefined;
 }
 
 async function nextInvoiceNumber(outletId: number, type: "purchase" | "sales") {
@@ -290,8 +422,30 @@ export async function invoiceRoutes(app: FastifyInstance) {
       .from(invoicesTable)
       .where(and(eq(invoicesTable.id, id), eq(invoicesTable.outlet_id, outlet.id), eq(invoicesTable.type, "purchase")))
       .limit(1);
-    if (!invoice) return reply.status(404).send({ success: false, error: "Faktur tidak ditemukan" });
-    const items = await db.select().from(invoiceItemsTable).where(eq(invoiceItemsTable.invoice_id, id));
+    if (!invoice)
+      return reply
+        .status(404)
+        .send({ success: false, error: "Faktur tidak ditemukan" });
+    // UoM isn't stored on the line — it belongs to the product, so it's joined
+    // in rather than duplicated. Null for product-less lines (delivery, jasa).
+    const items = await db
+      .select({
+        id: invoiceItemsTable.id,
+        invoice_id: invoiceItemsTable.invoice_id,
+        product_id: invoiceItemsTable.product_id,
+        description: invoiceItemsTable.description,
+        quantity: invoiceItemsTable.quantity,
+        unit_price: invoiceItemsTable.unit_price,
+        discount_pct: invoiceItemsTable.discount_pct,
+        line_total: invoiceItemsTable.line_total,
+        unit: productsTable.unit,
+      })
+      .from(invoiceItemsTable)
+      .leftJoin(
+        productsTable,
+        eq(invoiceItemsTable.product_id, productsTable.id),
+      )
+      .where(eq(invoiceItemsTable.invoice_id, id));
     // Include the outlet (for the print header/logo) and the supplier (recipient).
     let supplier = null;
     if (invoice.supplier_id) {
@@ -310,7 +464,11 @@ export async function invoiceRoutes(app: FastifyInstance) {
         .limit(1);
       created_by_name = creator?.name ?? null;
     }
-    return { success: true, data: { ...invoice, items, outlet, supplier, created_by_name } };
+    const payments = await paymentHistory(id);
+    return {
+      success: true,
+      data: { ...invoice, items, outlet, supplier, created_by_name, payments },
+    };
   });
 
   app.post("/api/purchase-invoices", async (request, reply) => {
@@ -326,6 +484,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
       tax_inclusive?: boolean;
       discount?: number | string;
       down_payment?: number | string;
+      down_payment_method?: string;
       notes?: string;
       items?: ItemInput[];
     };
@@ -338,7 +497,11 @@ export async function invoiceRoutes(app: FastifyInstance) {
     const taxInclusive = !!body.tax_inclusive;
     const { lines, subtotal, tax_amount, total } = computeTotals(items, taxRate, discount, taxInclusive);
     // Clamp the agreed DP to [0, total]; it's booked as a cash-out on post.
-    const downPayment = Math.max(0, Math.min(Number(body.down_payment ?? 0), total));
+    const downPayment = Math.max(
+      0,
+      Math.min(Number(body.down_payment ?? 0), total),
+    );
+    const dpMethod = parseMethod(body.down_payment_method);
 
     const number = await nextInvoiceNumber(outlet.id, "purchase");
 
@@ -363,6 +526,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
           amount_paid: "0",
           created_by: access.userId,
           down_payment: String(downPayment),
+          down_payment_method: dpMethod,
           notes: body.notes ?? "",
         })
         .returning();
@@ -439,6 +603,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
             outlet.id,
             { id, total: invoice.total, amount_paid: invoice.amount_paid },
             dp,
+            invoice.down_payment_method,
           );
         }
         return updated;
@@ -458,7 +623,8 @@ export async function invoiceRoutes(app: FastifyInstance) {
     const outlet = await getOwnerOutlet(request, reply, "purchaseInvoice");
     if (!outlet) return;
     const id = Number((request.params as { id: string }).id);
-    const body = request.body as { amount?: number | string };
+    const body = request.body as { amount?: number | string; method?: string };
+    const method = parseMethod(body.method);
 
     try {
       const result = await db.transaction(async (tx) => {
@@ -476,7 +642,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
         const amount = body.amount != null ? Number(body.amount) : remaining;
         if (!(amount > 0) || amount > remaining + 0.001) throw new Error("BAD_AMOUNT");
 
-        return recordPurchaseCashOut(tx, outlet.id, invoice, amount);
+        return recordPurchaseCashOut(tx, outlet.id, invoice, amount, method);
       });
       return { success: true, data: result };
     } catch (e) {
@@ -665,7 +831,11 @@ export async function invoiceRoutes(app: FastifyInstance) {
         .limit(1);
       created_by_name = creator?.name ?? null;
     }
-    return { success: true, data: { ...invoice, items, outlet, created_by_name } };
+    const payments = await paymentHistory(id);
+    return {
+      success: true,
+      data: { ...invoice, items, outlet, created_by_name, payments },
+    };
   });
 
   app.post("/api/sales-invoices", async (request, reply) => {
@@ -680,6 +850,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
       tax_rate?: number | string;
       discount?: number | string;
       down_payment?: number | string;
+      down_payment_method?: string;
       notes?: string;
       items?: ItemInput[];
     };
@@ -691,7 +862,11 @@ export async function invoiceRoutes(app: FastifyInstance) {
     const discount = Number(body.discount ?? 0);
     const { lines, subtotal, tax_amount, total } = computeTotals(items, taxRate, discount, false);
     // Clamp the agreed DP to [0, total]; it's booked as a payment on post.
-    const downPayment = Math.max(0, Math.min(Number(body.down_payment ?? 0), total));
+    const downPayment = Math.max(
+      0,
+      Math.min(Number(body.down_payment ?? 0), total),
+    );
+    const dpMethod = parseMethod(body.down_payment_method);
     const number = await nextInvoiceNumber(outlet.id, "sales");
 
     const created = await db.transaction(async (tx) => {
@@ -715,6 +890,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
           amount_paid: "0",
           created_by: access.userId,
           down_payment: String(downPayment),
+          down_payment_method: dpMethod,
           notes: body.notes ?? "",
         })
         .returning();
@@ -751,6 +927,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
       tax_rate?: number | string;
       discount?: number | string;
       down_payment?: number | string;
+      down_payment_method?: string;
       notes?: string;
       items?: ItemInput[];
     };
@@ -760,8 +937,17 @@ export async function invoiceRoutes(app: FastifyInstance) {
 
     const taxRate = Number(body.tax_rate ?? 0);
     const discount = Number(body.discount ?? 0);
-    const { lines, subtotal, tax_amount, total } = computeTotals(items, taxRate, discount, false);
-    const downPayment = Math.max(0, Math.min(Number(body.down_payment ?? 0), total));
+    const { lines, subtotal, tax_amount, total } = computeTotals(
+      items,
+      taxRate,
+      discount,
+      false,
+    );
+    const downPayment = Math.max(
+      0,
+      Math.min(Number(body.down_payment ?? 0), total),
+    );
+    const dpMethod = parseMethod(body.down_payment_method);
 
     try {
       const result = await db.transaction(async (tx) => {
@@ -786,6 +972,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
             discount: String(discount),
             total: String(total),
             down_payment: String(downPayment),
+            down_payment_method: dpMethod,
             notes: body.notes ?? "",
           })
           .where(eq(invoicesTable.id, id))
@@ -860,6 +1047,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
             outlet.id,
             { id, total: invoice.total, amount_paid: invoice.amount_paid },
             dp,
+            invoice.down_payment_method,
           );
         }
         return { updated, warnings };
@@ -878,7 +1066,8 @@ export async function invoiceRoutes(app: FastifyInstance) {
     const outlet = await getOwnerOutlet(request, reply, "salesInvoice");
     if (!outlet) return;
     const id = Number((request.params as { id: string }).id);
-    const body = request.body as { amount?: number | string };
+    const body = request.body as { amount?: number | string; method?: string };
+    const method = parseMethod(body.method);
     try {
       const result = await db.transaction(async (tx) => {
         const [invoice] = await tx
@@ -895,7 +1084,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
         const amount = body.amount != null ? Number(body.amount) : remaining;
         if (!(amount > 0) || amount > remaining + 0.001) throw new Error("BAD_AMOUNT");
 
-        return recordSalesCashIn(tx, outlet.id, invoice, amount);
+        return recordSalesCashIn(tx, outlet.id, invoice, amount, method);
       });
       return { success: true, data: result };
     } catch (e) {
@@ -980,149 +1169,327 @@ export async function invoiceRoutes(app: FastifyInstance) {
   app.get("/api/invoices/report", async (request, reply) => {
     const outlet = await getOwnerOutlet(request, reply, "reports");
     if (!outlet) return;
-    const { period = "30d" } = request.query as { period?: string };
-
-    // Period boundaries are calendar edges, so they must land on local midnight.
-    // setHours / new Date(y, m, 1) would use the container's zone — UTC in the
-    // deployed image — and quietly shift "today" and "this month" by 7 hours.
-    const { timezone = "Asia/Jakarta" } = request.query as Record<string, string>;
-    const now = new Date();
-    const todayLocal = new Intl.DateTimeFormat("en-CA", {
-      timeZone: timezone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).format(now);
-    const [localYear, localMonth] = todayLocal.split("-").map(Number);
-    const monthsAgoStart = (n: number) => {
-      const m = new Date(Date.UTC(localYear, localMonth - 1 - n, 1));
-      const key = `${m.getUTCFullYear()}-${String(m.getUTCMonth() + 1).padStart(2, "0")}`;
-      return getUTCRangeFromLocalMonth(key, timezone).startUTC;
+    const q = request.query as {
+      period?: string;
+      from?: string;
+      to?: string;
+      timezone?: string;
+      productId?: string;
+      menuGroupId?: string;
     };
-
-    let from: Date;
-    if (period === "today") {
-      from = getUTCRangeFromLocalDate(todayLocal, timezone).startUTC;
-    } else if (period === "7d") {
-      from = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    } else if (period === "month") {
-      from = monthsAgoStart(0);
-    } else {
-      from = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-    }
+    const { period = "30d" } = q;
+    const timezone = q.timezone || "Asia/Jakarta";
+    const { from, to, localYear, localMonth, monthsAgoStart } = rangeWindow(q, timezone);
+    // `to` is exclusive, so lt() is what makes the last day inclusive.
+    const inWindow = (col: AnyColumn) =>
+      to ? and(gte(col, from), lt(col, to)) : gte(col, from);
+    const item = itemFilter(q);
 
     const BILLED = ["posted", "partial", "paid"] as const;
     const OPEN = ["posted", "partial"] as const;
-    const base = [eq(invoicesTable.outlet_id, outlet.id), isNull(invoicesTable.deletedAt)];
+    const base = [
+      eq(invoicesTable.outlet_id, outlet.id),
+      isNull(invoicesTable.deletedAt),
+      ...(item ? [item] : []),
+    ];
     const remainingSql = sql<string>`coalesce(sum(${invoicesTable.total} - ${invoicesTable.amount_paid}), 0)`;
 
     const trendStart = monthsAgoStart(5);
-    const [kpiRows, openRows, lateRows, trendRows, topSales, topPurchase] = await Promise.all([
-      // Billed in the selected period.
-      db
+    // Everything below runs on the capped reports pool, so "busy" and "too
+    // slow" are expected outcomes, not bugs — loadFailure turns both into a 503
+    // the owner can act on. See reportDb in db/index.ts.
+    try {
+      const [kpiRows, openRows, lateRows, trendRows, topSales, topPurchase] =
+        await Promise.all([
+          // Billed in the selected period.
+          reportDb
+            .select({
+              type: invoicesTable.type,
+              count: sql<number>`count(*)::int`,
+              total: sql<string>`coalesce(sum(${invoicesTable.total}), 0)`,
+              paid: sql<string>`coalesce(sum(${invoicesTable.amount_paid}), 0)`,
+            })
+            .from(invoicesTable)
+            .where(
+              and(
+                ...base,
+                inArray(invoicesTable.status, [...BILLED]),
+                inWindow(invoicesTable.issue_date),
+              ),
+            )
+            .groupBy(invoicesTable.type),
+          // Open balance right now (piutang for sales, hutang for purchase).
+          reportDb
+            .select({
+              type: invoicesTable.type,
+              count: sql<number>`count(*)::int`,
+              outstanding: remainingSql,
+            })
+            .from(invoicesTable)
+            .where(and(...base, inArray(invoicesTable.status, [...OPEN])))
+            .groupBy(invoicesTable.type),
+          // The overdue slice of that open balance.
+          reportDb
+            .select({
+              type: invoicesTable.type,
+              count: sql<number>`count(*)::int`,
+              outstanding: remainingSql,
+            })
+            .from(invoicesTable)
+            .where(
+              and(
+                ...base,
+                inArray(invoicesTable.status, [...OPEN]),
+                lt(invoicesTable.due_date, sql`CURRENT_DATE`),
+              ),
+            )
+            .groupBy(invoicesTable.type),
+          // Billed totals per month, last 6 months.
+          reportDb
+            .select({
+              type: invoicesTable.type,
+              // issue_date is timestamptz, so date_trunc would bucket by the session
+              // TimeZone (UTC on the server). Convert to local time first, else an
+              // invoice issued late on the 31st lands in the following month.
+              month: sql<string>`to_char(date_trunc('month', ${invoicesTable.issue_date} AT TIME ZONE ${timezone}), 'YYYY-MM')`,
+              total: sql<string>`coalesce(sum(${invoicesTable.total}), 0)`,
+            })
+            .from(invoicesTable)
+            .where(
+              and(
+                ...base,
+                inArray(invoicesTable.status, [...BILLED]),
+                gte(invoicesTable.issue_date, trendStart),
+              ),
+            )
+            .groupBy(invoicesTable.type, sql`2`),
+          // Largest open invoices per side, for the follow-up lists.
+          reportDb
+            .select({
+              id: invoicesTable.id,
+              number: invoicesTable.number,
+              party_name: invoicesTable.party_name,
+              due_date: invoicesTable.due_date,
+              total: invoicesTable.total,
+              amount_paid: invoicesTable.amount_paid,
+              status: invoicesTable.status,
+            })
+            .from(invoicesTable)
+            .where(
+              and(
+                ...base,
+                eq(invoicesTable.type, "sales"),
+                inArray(invoicesTable.status, [...OPEN]),
+              ),
+            )
+            .orderBy(
+              desc(sql`${invoicesTable.total} - ${invoicesTable.amount_paid}`),
+            )
+            .limit(8),
+          reportDb
+            .select({
+              id: invoicesTable.id,
+              number: invoicesTable.number,
+              party_name: sql<string>`coalesce(nullif(${invoicesTable.party_name}, ''), ${suppliersTable.name}, '')`,
+              due_date: invoicesTable.due_date,
+              total: invoicesTable.total,
+              amount_paid: invoicesTable.amount_paid,
+              status: invoicesTable.status,
+            })
+            .from(invoicesTable)
+            .leftJoin(
+              suppliersTable,
+              eq(invoicesTable.supplier_id, suppliersTable.id),
+            )
+            .where(
+              and(
+                ...base,
+                eq(invoicesTable.type, "purchase"),
+                inArray(invoicesTable.status, [...OPEN]),
+              ),
+            )
+            .orderBy(
+              desc(sql`${invoicesTable.total} - ${invoicesTable.amount_paid}`),
+            )
+            .limit(8),
+        ]);
+
+      const side = (type: "sales" | "purchase", top: typeof topSales) => {
+        const kpi = kpiRows.find((r) => r.type === type);
+        const open = openRows.find((r) => r.type === type);
+        const late = lateRows.find((r) => r.type === type);
+        return {
+          billed_count: kpi?.count ?? 0,
+          billed_total: Number(kpi?.total ?? 0),
+          paid_total: Number(kpi?.paid ?? 0),
+          outstanding_count: open?.count ?? 0,
+          outstanding: Number(open?.outstanding ?? 0),
+          late_count: late?.count ?? 0,
+          late_outstanding: Number(late?.outstanding ?? 0),
+          top_outstanding: top,
+        };
+      };
+
+      // Assemble a dense 6-month series (months with no invoices stay 0).
+      const byKey = new Map(
+        trendRows.map((r) => [`${r.type}:${r.month}`, Number(r.total)]),
+      );
+      const trend = Array.from({ length: 6 }, (_, i) => {
+        // Built in UTC purely as a calendar cursor over localYear/localMonth — the
+        // keys must match the local-time buckets the SQL above produces.
+        const d = new Date(Date.UTC(localYear, localMonth - 1 - 5 + i, 1));
+        const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+        return {
+          month: d.toLocaleString("id-ID", { month: "short", timeZone: "UTC" }),
+          sales: byKey.get(`sales:${key}`) ?? 0,
+          purchase: byKey.get(`purchase:${key}`) ?? 0,
+        };
+      });
+
+      return {
+        success: true,
+        period,
+        from: from.toISOString(),
+        to: to?.toISOString() ?? null,
+        sales: side("sales", topSales),
+        purchase: side("purchase", topPurchase),
+        trend,
+      };
+    } catch (error) {
+      request.log.error(error);
+      const busy = loadFailure(error);
+      if (busy)
+        return reply
+          .status(busy.status)
+          .send({ success: false, error: busy.error });
+      return reply
+        .status(500)
+        .send({ success: false, error: "Gagal memuat laporan" });
+    }
+  });
+
+  // Segmented invoice report: the same period window as /report, sliced three
+  // ways. Sales invoices only — "per sales" (who issued it) and "per pelanggan"
+  // are meaningless on the purchase side, and mixing the two would double-count
+  // the money. Payment rows are grouped by WHEN THE MONEY MOVED
+  // (invoice_payments.created_at), the other two by when the invoice was issued.
+  app.get("/api/invoices/report/breakdown", async (request, reply) => {
+    const outlet = await getOwnerOutlet(request, reply, "reports");
+    if (!outlet) return;
+    const q = request.query as {
+      period?: string;
+      from?: string;
+      to?: string;
+      timezone?: string;
+      dimension?: string;
+      productId?: string;
+      menuGroupId?: string;
+    };
+    const { dimension = "payment" } = q;
+    const timezone = q.timezone || "Asia/Jakarta";
+    const { from, to } = rangeWindow(q, timezone);
+    const inWindow = (col: AnyColumn) =>
+      to ? and(gte(col, from), lt(col, to)) : gte(col, from);
+    const item = itemFilter(q);
+
+    // Capped reports pool: see the sibling handler above.
+    try {
+      const BILLED = ["posted", "partial", "paid"] as const;
+      const base = [
+        eq(invoicesTable.outlet_id, outlet.id),
+        eq(invoicesTable.type, "sales"),
+        isNull(invoicesTable.deletedAt),
+
+        ...(item ? [item] : []),
+      ];
+
+      if (dimension === "payment") {
+        // Money actually received in the window, by how it came in. Void invoices
+        // have their payment rows deleted, so no status filter is needed here.
+        const rows = await reportDb
+          .select({
+            key: invoicePaymentsTable.method,
+            count: sql<number>`count(*)::int`,
+            invoices: sql<number>`count(distinct ${invoicePaymentsTable.invoice_id})::int`,
+            amount: sql<string>`coalesce(sum(${invoicePaymentsTable.amount}), 0)`,
+          })
+          .from(invoicePaymentsTable)
+          .innerJoin(
+            invoicesTable,
+            eq(invoicesTable.id, invoicePaymentsTable.invoice_id),
+          )
+          .where(and(...base, inWindow(invoicePaymentsTable.created_at)))
+          .groupBy(invoicePaymentsTable.method)
+          .orderBy(desc(sql`coalesce(sum(${invoicePaymentsTable.amount}), 0)`));
+
+        return {
+          success: true,
+          dimension,
+          groups: rows.map((r) => ({
+            key: r.key,
+            label: r.key,
+            count: r.count,
+            invoices: r.invoices,
+            amount: Number(r.amount),
+          })),
+        };
+      }
+
+      // Staff and customer both slice the invoices ISSUED in the window, so they
+      // share a shape: billed / paid / outstanding per bucket.
+      const isStaff = dimension === "staff";
+      const keyExpr = isStaff
+        ? sql<string>`coalesce(${invoicesTable.created_by}, '-')`
+        : sql<string>`coalesce(nullif(trim(${invoicesTable.party_name}), ''), '-')`;
+      const labelExpr = isStaff
+        ? sql<string>`coalesce(${usersTable.name}, 'Tanpa Nama')`
+        : sql<string>`coalesce(nullif(trim(${invoicesTable.party_name}), ''), 'Tanpa Nama')`;
+
+      const rows = await reportDb
         .select({
-          type: invoicesTable.type,
+          key: keyExpr,
+          label: labelExpr,
           count: sql<number>`count(*)::int`,
-          total: sql<string>`coalesce(sum(${invoicesTable.total}), 0)`,
+          billed: sql<string>`coalesce(sum(${invoicesTable.total}), 0)`,
           paid: sql<string>`coalesce(sum(${invoicesTable.amount_paid}), 0)`,
+          outstanding: sql<string>`coalesce(sum(${invoicesTable.total} - ${invoicesTable.amount_paid}), 0)`,
         })
         .from(invoicesTable)
-        .where(and(...base, inArray(invoicesTable.status, [...BILLED]), gte(invoicesTable.issue_date, from)))
-        .groupBy(invoicesTable.type),
-      // Open balance right now (piutang for sales, hutang for purchase).
-      db
-        .select({ type: invoicesTable.type, count: sql<number>`count(*)::int`, outstanding: remainingSql })
-        .from(invoicesTable)
-        .where(and(...base, inArray(invoicesTable.status, [...OPEN])))
-        .groupBy(invoicesTable.type),
-      // The overdue slice of that open balance.
-      db
-        .select({ type: invoicesTable.type, count: sql<number>`count(*)::int`, outstanding: remainingSql })
-        .from(invoicesTable)
-        .where(and(...base, inArray(invoicesTable.status, [...OPEN]), lt(invoicesTable.due_date, sql`CURRENT_DATE`)))
-        .groupBy(invoicesTable.type),
-      // Billed totals per month, last 6 months.
-      db
-        .select({
-          type: invoicesTable.type,
-          // issue_date is timestamptz, so date_trunc would bucket by the session
-          // TimeZone (UTC on the server). Convert to local time first, else an
-          // invoice issued late on the 31st lands in the following month.
-          month: sql<string>`to_char(date_trunc('month', ${invoicesTable.issue_date} AT TIME ZONE ${timezone}), 'YYYY-MM')`,
-          total: sql<string>`coalesce(sum(${invoicesTable.total}), 0)`,
-        })
-        .from(invoicesTable)
-        .where(and(...base, inArray(invoicesTable.status, [...BILLED]), gte(invoicesTable.issue_date, trendStart)))
-        .groupBy(invoicesTable.type, sql`2`),
-      // Largest open invoices per side, for the follow-up lists.
-      db
-        .select({
-          id: invoicesTable.id,
-          number: invoicesTable.number,
-          party_name: invoicesTable.party_name,
-          due_date: invoicesTable.due_date,
-          total: invoicesTable.total,
-          amount_paid: invoicesTable.amount_paid,
-          status: invoicesTable.status,
-        })
-        .from(invoicesTable)
-        .where(and(...base, eq(invoicesTable.type, "sales"), inArray(invoicesTable.status, [...OPEN])))
-        .orderBy(desc(sql`${invoicesTable.total} - ${invoicesTable.amount_paid}`))
-        .limit(8),
-      db
-        .select({
-          id: invoicesTable.id,
-          number: invoicesTable.number,
-          party_name: sql<string>`coalesce(nullif(${invoicesTable.party_name}, ''), ${suppliersTable.name}, '')`,
-          due_date: invoicesTable.due_date,
-          total: invoicesTable.total,
-          amount_paid: invoicesTable.amount_paid,
-          status: invoicesTable.status,
-        })
-        .from(invoicesTable)
-        .leftJoin(suppliersTable, eq(invoicesTable.supplier_id, suppliersTable.id))
-        .where(and(...base, eq(invoicesTable.type, "purchase"), inArray(invoicesTable.status, [...OPEN])))
-        .orderBy(desc(sql`${invoicesTable.total} - ${invoicesTable.amount_paid}`))
-        .limit(8),
-    ]);
+        .leftJoin(usersTable, eq(usersTable.id, invoicesTable.created_by))
+        .where(
+          and(
+            ...base,
+            inArray(invoicesTable.status, [...BILLED]),
+            inWindow(invoicesTable.issue_date),
+          ),
+        )
+        .groupBy(keyExpr, labelExpr)
+        .orderBy(desc(sql`coalesce(sum(${invoicesTable.total}), 0)`))
+        .limit(50);
 
-    const side = (type: "sales" | "purchase", top: typeof topSales) => {
-      const kpi = kpiRows.find((r) => r.type === type);
-      const open = openRows.find((r) => r.type === type);
-      const late = lateRows.find((r) => r.type === type);
       return {
-        billed_count: kpi?.count ?? 0,
-        billed_total: Number(kpi?.total ?? 0),
-        paid_total: Number(kpi?.paid ?? 0),
-        outstanding_count: open?.count ?? 0,
-        outstanding: Number(open?.outstanding ?? 0),
-        late_count: late?.count ?? 0,
-        late_outstanding: Number(late?.outstanding ?? 0),
-        top_outstanding: top,
+        success: true,
+        dimension,
+        groups: rows.map((r) => ({
+          key: r.key,
+          label: r.label,
+          count: r.count,
+          amount: Number(r.billed),
+          paid: Number(r.paid),
+          outstanding: Number(r.outstanding),
+        })),
       };
-    };
-
-    // Assemble a dense 6-month series (months with no invoices stay 0).
-    const byKey = new Map(trendRows.map((r) => [`${r.type}:${r.month}`, Number(r.total)]));
-    const trend = Array.from({ length: 6 }, (_, i) => {
-      // Built in UTC purely as a calendar cursor over localYear/localMonth — the
-      // keys must match the local-time buckets the SQL above produces.
-      const d = new Date(Date.UTC(localYear, localMonth - 1 - 5 + i, 1));
-      const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-      return {
-        month: d.toLocaleString("id-ID", { month: "short", timeZone: "UTC" }),
-        sales: byKey.get(`sales:${key}`) ?? 0,
-        purchase: byKey.get(`purchase:${key}`) ?? 0,
-      };
-    });
-
-    return {
-      success: true,
-      period,
-      sales: side("sales", topSales),
-      purchase: side("purchase", topPurchase),
-      trend,
-    };
+    } catch (error) {
+      request.log.error(error);
+      const busy = loadFailure(error);
+      if (busy)
+        return reply
+          .status(busy.status)
+          .send({ success: false, error: busy.error });
+      return reply
+        .status(500)
+        .send({ success: false, error: "Gagal memuat laporan" });
+    }
   });
 
   // ============================================================ stock opname

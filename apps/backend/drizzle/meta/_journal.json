@@ -421,6 +421,13 @@
       "when": 1787067862644,
       "tag": "0059_report_segment_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1787935807469,
+      "tag": "0060_invoice_payment_method",
+      "breakpoints": true
     }
   ]
 }

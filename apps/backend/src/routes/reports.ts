@@ -33,7 +33,7 @@ const MAX_RANGE_DAYS = 93; // ~3 months, the hard cap the UI also enforces
  * a rush of reports queues here rather than starving the cashier (see reportDb
  * in db/index.ts). 503 + "coba lagi" is the honest answer.
  */
-function loadFailure(error: unknown): { status: number; error: string } | null {
+export function loadFailure(error: unknown): { status: number; error: string } | null {
   // Drizzle rethrows its own "Failed query: ..." Error and hangs the real pg
   // error off .cause, so neither code nor message is on the object handed to
   // us. Checking the top level only — which is the obvious way to write this —

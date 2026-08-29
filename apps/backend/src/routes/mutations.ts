@@ -96,6 +96,22 @@ export async function mutationRoutes(app: FastifyInstance) {
         }
       }
 
+      // The cashier's name is what the report groups on, so it must never be
+      // left blank: clients that don't send one (the web cashier historically
+      // didn't) fall back to the signed-in user's name.
+      let cashierName: string | null =
+        typeof body.cashierName === "string" && body.cashierName.trim() !== ""
+          ? body.cashierName.trim()
+          : null;
+      if (!cashierName) {
+        const [actor] = await db
+          .select({ name: usersTable.name })
+          .from(usersTable)
+          .where(eq(usersTable.id, access.userId))
+          .limit(1);
+        cashierName = actor?.name?.trim() || null;
+      }
+
       // Find offline customer and courier (hardcoded for now, can be made dynamic)
       const EMAIL = "rizkygin1@gmail.com";
       const EMAIL_COURIER = "rizkygin3@gmail.com";
@@ -133,7 +149,7 @@ export async function mutationRoutes(app: FastifyInstance) {
               outlet_id: body.outletId,
               note: {
                 customerName: body.customerName || null,
-                cashierName: body.cashierName || null,
+                cashierName,
                 discountAmount: body.discountAmount ?? 0,
                 paymentMethod: body.paymentMethod ?? "cash",
                 amountPaid: body.amountPaid ?? 0,

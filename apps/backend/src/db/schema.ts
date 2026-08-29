@@ -123,6 +123,18 @@ export const CASHFLOWS_TRANSACTION_TYPE = pgEnum('cashflows_transaction_type', [
   'transfer',
   'cash',
 ]);
+// How an invoice payment actually came in. Finer than the cash/transfer split
+// the cashflow ledger needs — every non-cash method still books as 'transfer'
+// there (see cashflowTypeFor), this enum just keeps the real-world label so the
+// owner can tell a QRIS settlement from a bank transfer on the invoice.
+export const INVOICE_PAYMENT_METHOD = pgEnum('invoice_payment_method', [
+  'cash',
+  'transfer',
+  'qris',
+  'debit',
+  'credit',
+  'ewallet',
+]);
 export const REJECTED_BY = pgEnum('rejected_by', [
   'courier',
   'customer',
@@ -1008,6 +1020,11 @@ export const invoicesTable = pgTable(
     down_payment: numeric('down_payment', { precision: 14, scale: 2 })
       .notNull()
       .default('0'),
+    // How that DP will be received. Lives on the header because the draft is
+    // agreed before /post books the actual invoice_payments row.
+    down_payment_method: INVOICE_PAYMENT_METHOD('down_payment_method')
+      .notNull()
+      .default('cash'),
     notes: varchar('notes', { length: 500 }).default(''),
     // Who created the invoice (owner or employee) — staff attribution for the
     // "dibuat oleh" line. Nullable: rows predating the column stay unattributed.
@@ -1078,6 +1095,9 @@ export const invoicePaymentsTable = pgTable(
       () => cashOutDetailTable.id,
     ),
     amount: numeric('amount', { precision: 14, scale: 2 }).notNull(),
+    // Rows predating this column were all booked as cash, which is what the
+    // default records — so the backfill is a no-op and the history stays honest.
+    method: INVOICE_PAYMENT_METHOD('method').notNull().default('cash'),
     created_at: timestamp('created_at').defaultNow().notNull(),
   },
   (table) => [index('invoice_payments_invoice_id_idx').on(table.invoice_id)],

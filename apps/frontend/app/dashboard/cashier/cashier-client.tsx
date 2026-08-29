@@ -691,6 +691,9 @@ export const CashierClient = ({
           cart: snapshot,
           total: snapshotFinalTotal,
           customerName: snapshotCustomerName,
+          // Without this the order's note carries no cashierName and the
+          // cashier report buckets every web sale under "-".
+          cashierName,
           discountAmount: snapshotDiscountAmount,
           paymentMethod: snapshotPaymentMethod,
           amountPaid: snapshotAmountPaid,
@@ -1413,7 +1416,10 @@ export const CashierClient = ({
             </button>
           </div>
 
-          {!lazyMode && (
+          {/* Cash tendered/change only makes sense for a cash sale the cashier
+              actually counts: lazy mode assumes uang pas, and a non-cash sale
+              has nothing to tender. */}
+          {!lazyMode && paymentMethod === 'cash' && (
             <div className="mb-3 space-y-2 rounded-xl border bg-muted/30 p-3">
               <div className="flex items-center justify-between gap-2">
                 <label className="text-sm font-semibold text-muted-foreground">

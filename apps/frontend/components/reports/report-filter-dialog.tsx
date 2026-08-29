@@ -48,11 +48,15 @@ export function ReportFilterDialog({
   initial,
   onClose,
   onApply,
+  // Invoices carry no rating, so the invoice report hides that row rather than
+  // offering a filter the server would have to ignore.
+  showRating = true,
 }: {
   open: boolean;
   initial: ReportFilters;
   onClose: () => void;
   onApply: (f: ReportFilters) => void;
+  showRating?: boolean;
 }) {
   const [f, setF] = useState<ReportFilters>(initial);
   const [options, setOptions] = useState<Options | null>(null);
@@ -169,21 +173,23 @@ export function ReportFilterDialog({
             </select>
           </label>
 
-          <label className="block">
-            <span className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Rating</span>
-            <select
-              value={f.rating}
-              onChange={(e) => setF({ ...f, rating: e.target.value })}
-              className={`mt-1 ${selectClass}`}
-            >
-              <option value="">Semua rating</option>
-              {[5, 4, 3, 2, 1].map((r) => (
-                <option key={r} value={String(r)}>
-                  {r} bintang
-                </option>
-              ))}
-            </select>
-          </label>
+          {showRating && (
+            <label className="block">
+              <span className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Rating</span>
+              <select
+                value={f.rating}
+                onChange={(e) => setF({ ...f, rating: e.target.value })}
+                className={`mt-1 ${selectClass}`}
+              >
+                <option value="">Semua rating</option>
+                {[5, 4, 3, 2, 1].map((r) => (
+                  <option key={r} value={String(r)}>
+                    {r} bintang
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
         </div>
 
         {error && <p className="mt-3 text-xs font-bold text-destructive">{error}</p>}
