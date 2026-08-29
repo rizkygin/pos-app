@@ -350,18 +350,23 @@ export const ProductsManager = ({
     });
   }, [initialProducts, search, categoryFilter, sortBy, sortDir, groupById]);
 
-  // Source candidates for the composition editor: the outlet's stock-tracked
-  // products. Self-exclusion matters more than it looks — a "Batako 10 pcs"
-  // bundle sits right next to plain "Batako" in this list.
+  // Source candidates for the composition editor: every other product in the
+  // outlet. NOT just stock-tracked ones — a composition may draw on another
+  // composition (a "bumbu dasar" defined once and used by five dishes), which
+  // is what makes multi-level work. Self-exclusion matters more than it looks —
+  // a "Batako 10 pcs" bundle sits right next to plain "Batako" in this list.
+  // Deeper loops (A uses B uses A) are caught by the server on save, since only
+  // it can see the whole graph.
   const recipeIngredientOptions = useMemo(
     () =>
       initialProducts
-        .filter((p) => p.track_stock && p.id !== editingProductId)
+        .filter((p) => p.id !== editingProductId)
         .map((p) => ({
           id: p.id,
           product_name: p.product_name,
           unit: p.unit,
           stock: p.stock,
+          track_stock: p.track_stock,
         })),
     [initialProducts, editingProductId],
   );
@@ -1792,18 +1797,21 @@ export const ProductsManager = ({
                 </button>
               </div>
 
-              {/* Composition editor: only for saved products without own stock,
-                  and only when the outlet has stock-tracked products to draw
-                  from. Serves food (nasi goreng -> beras) and non-food alike
+              {/* Composition editor: any saved product may have one, with or
+                  without stock of its own. Without = a menu item or a
+                  pass-through sub-composition, expanded at sale time. With =
+                  an in-house intermediate (sambal, adonan) that is PRODUCED in
+                  batches and then drawn down like any other stock.
+                  Serves food (nasi goreng -> beras) and non-food alike
                   ("Batako 10 pcs" -> 10 batako) — the decrement never looks at
                   category. Absence of a composition is a valid permanent state,
                   so nothing is shown or nagged otherwise. */}
-              {!trackStock &&
-                editingProductId &&
+              {editingProductId &&
                 recipeIngredientOptions.length > 0 && (
                   <RecipeEditor
                     productId={editingProductId}
                     ingredients={recipeIngredientOptions}
+                    trackStock={trackStock}
                   />
                 )}
 

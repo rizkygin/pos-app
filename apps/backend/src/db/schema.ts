@@ -167,6 +167,10 @@ export const STOCK_MOVEMENT_REASON = pgEnum('stock_movement_reason', [
   'sales',
   'adjustment',
   'void',
+  // An in-house production batch: the ingredients go out, the batch comes in.
+  // Not 'purchase' (no cash moved — it moved when the ingredients were bought)
+  // and not 'adjustment' (nothing was recounted).
+  'production',
 ]);
 
 export const usersTable = pgTable('users', {
@@ -492,6 +496,26 @@ export const productsTable = pgTable(
     // Scale 3 matches recipe_items.qty so gram/ml-size recipe decrements
     // (e.g. 0.005 kg per portion) survive the write without rounding.
     stock: numeric('stock', { precision: 12, scale: 3 }).notNull().default('0'),
+    // How many stock units ONE production batch of this product yields
+    // ("sekali masak sambal jadi 2.5 kg"). Only meaningful for a product that
+    // both tracks stock and has recipe rows — an in-house intermediate.
+    // This is a DEFAULT FOR THE PRODUCTION FORM, nothing else reads it:
+    // recipe_items.qty stays "per one output unit" for every kind of product,
+    // so lib/stock.ts can expand any recipe without asking what it is looking at.
+    yield_qty: numeric('yield_qty', { precision: 12, scale: 3 })
+      .notNull()
+      .default('1'),
+    // Running weighted-average unit cost, maintained by the cost ledger
+    // (lib/cost.ts). Cached balance derived from stock_movements.cost_change,
+    // exactly as `stock` above is derived from qty_change.
+    //
+    // This is what the goods on the shelf are actually worth, as opposed to
+    // buying_price, which is what the owner last typed into the form. For a
+    // produced intermediate it is the only honest figure there is — nobody ever
+    // bought a batch of sambal. Scale 4 so per-gram costs do not round to zero.
+    avg_cost: numeric('avg_cost', { precision: 14, scale: 4 })
+      .notNull()
+      .default('0'),
     ...timestamps,
   },
   (table) => [
@@ -1117,8 +1141,28 @@ export const stockMovementsTable = pgTable(
     // Scale 3 to carry recipe-precision decrements losslessly.
     qty_change: numeric('qty_change', { precision: 12, scale: 3 }).notNull(),
     reason: STOCK_MOVEMENT_REASON('reason').notNull(),
+    // ── Cost ledger ────────────────────────────────────────────────────────
+    // The money side of this movement. Null on rows written before migration
+    // 0063; readers must treat null as "unknown", never as zero.
+    //
+    // Stock coming IN carries the price it came in at (purchase price, or a
+    // batch's computed cost); stock going OUT carries the weighted-average cost
+    // at that moment. Frozen at write time on purpose: editing a price or a
+    // recipe today must not rewrite the profit on sales that already happened.
+    unit_cost: numeric('unit_cost', { precision: 14, scale: 4 }),
+    // Signed money, qty_change * unit_cost. Positive = value in, negative =
+    // value out. COGS over a period is -sum(cost_change) where reason='sales';
+    // voids net themselves out, carrying the opposite sign.
+    cost_change: numeric('cost_change', { precision: 14, scale: 2 }),
     // The invoice that caused this movement (null for manual adjustments).
     invoice_id: integer('invoice_id').references(() => invoicesTable.id),
+    // The POS order that caused this movement — the cashier-side twin of
+    // invoice_id above, and null for everything that did not come from a POS
+    // sale. Cancelling a cashier order replays these rows (flip the sign) rather
+    // than re-expanding the recipe, so a recipe edited after the sale cannot
+    // change how much comes back. Movements written before migration 0062 have
+    // no order_id; applySaleStockReturn keeps a re-expansion fallback for them.
+    order_id: text('order_id').references((): AnyPgColumn => ordersTable.id),
     note: varchar('note', { length: 255 }).default(''),
     created_at: timestamp('created_at', { withTimezone: true })
       .defaultNow()
@@ -1128,6 +1172,10 @@ export const stockMovementsTable = pgTable(
     index('stock_movements_product_idx').on(table.product_id),
     index('stock_movements_outlet_idx').on(table.outlet_id),
     index('stock_movements_invoice_idx').on(table.invoice_id),
+    // Serves the cancellation replay: "the sales movements of THIS order".
+    index('stock_movements_order_idx').on(table.order_id),
+    // Serves the reports' per-order cost drill-down.
+    index('stock_movements_order_reason_idx').on(table.order_id, table.reason),
     // Opname history: filter by outlet + reason, range/sort on created_at.
     index('stock_movements_outlet_reason_created_idx').on(
       table.outlet_id,
@@ -1137,11 +1185,23 @@ export const stockMovementsTable = pgTable(
   ],
 );
 
-// Optional bill-of-materials: what one sold unit of `product_id` consumes.
-// Only consulted when the sold product has track_stock=false (a menu item with
-// no countable stock of its own); a menu item with no rows here moves no stock
-// at all — recipes are strictly opt-in per product. Rows are kept (dormant) if
-// the owner toggles track_stock back on. Hard-deleted, replace-on-save.
+// Optional bill-of-materials: what ONE unit of `product_id` consumes. A product
+// with no rows here moves no stock through a recipe at all — recipes are
+// strictly opt-in. Hard-deleted, replace-on-save.
+//
+// Recipes NEST: an ingredient may itself have a recipe. Expansion (lib/stock.ts)
+// walks down and stops at the first ingredient that tracks its own stock:
+//
+//   * ingredient tracks stock  -> LEAF. Decrement it and stop. This is the
+//     prep-batch boundary: you count sambal, so a sold dish just draws sambal
+//     down, and the chilies left stock when the batch was PRODUCED.
+//   * ingredient does not      -> pass-through. Recurse into its recipe. This is
+//     a "bumbu dasar" you define once and never count.
+//
+// So the same edge table carries both levels, and which kind of node something
+// is falls out of products.track_stock rather than a separate flag. Cycles and
+// depth are rejected at write time (routes/products.ts), with a second guard at
+// expansion time so bad data can never spin inside a transaction.
 export const recipeItemsTable = pgTable(
   'recipe_items',
   {
@@ -1149,15 +1209,18 @@ export const recipeItemsTable = pgTable(
     outlet_id: integer('outlet_id')
       .notNull()
       .references(() => outletsTable.id),
-    // The menu item being sold (track_stock = false).
+    // The product being made: a sold menu item, or an in-house intermediate
+    // that is itself produced in batches.
     product_id: text('product_id')
       .notNull()
       .references(() => productsTable.id, { onDelete: 'cascade' }),
-    // The ingredient consumed (track_stock = true), in its own stock unit.
+    // What it consumes, in that ingredient's own stock unit. May itself have a
+    // recipe (see the nesting rules above).
     ingredient_id: text('ingredient_id')
       .notNull()
       .references(() => productsTable.id, { onDelete: 'cascade' }),
-    // Consumed per ONE unit sold. Scale 3 (not 2) so gram/ml-size amounts of
+    // Consumed per ONE unit of product_id — never per batch, even for a product
+    // with a yield_qty. Scale 3 (not 2) so gram/ml-size amounts of
     // kg/L-stocked ingredients fit, e.g. 0.005 kg of garlic per portion.
     qty: numeric('qty', { precision: 12, scale: 3 }).notNull(),
     created_at: timestamp('created_at', { withTimezone: true })

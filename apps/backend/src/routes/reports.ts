@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, isNull, sql, type SQL } from "drizzle-orm";
 import { db, reportDb } from "../db";
+import { orderCogsSql } from "../lib/cogs";
 import { menuGroupsTable, productsTable } from "../db/schema";
 import { requireOutletAccess } from "../lib/outlet-access";
 import { money } from "../lib/money-sql";
@@ -211,7 +212,7 @@ function baseWhere(outletId: number, dimension: ReportDimension, f: Filters): SQ
 const lineAgg = (over: SQL) => sql`
   select od.order_id,
          coalesce(sum(${money(sql`od.summary_price`)}), 0) as revenue,
-         coalesce(sum(${money(sql`p.buying_price`)} * od.quantity), 0) as cogs,
+         ${orderCogsSql(sql`od.order_id`)} as cogs,
          coalesce(sum(od.quantity), 0) as qty
   from "orderDetails" od
   join products p on p.id = od.product_id

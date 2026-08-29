@@ -26,6 +26,7 @@ import { getOutletAccess, hasPermission, parseActiveOutletId, getSubscriptionGat
 import { attachOrderItems } from "../lib/utils/order-items";
 import { APP_TIMEZONE, getUTCRangeFromLocalDate, getUTCRangeFromLocalMonth } from "../lib/timezone";
 import { money } from "../lib/money-sql";
+import { orderCogsSql } from "../lib/cogs";
 
 // Money columns (summary_price, buying_price) are varchar and a single blank
 // row makes the cast throw, killing the whole aggregate. See lib/money-sql.ts.
@@ -680,11 +681,37 @@ export async function ownerRoutes(app: FastifyInstance) {
 
       const kpiSelect = {
         revenue: sql<number>`coalesce(sum(${money(orderDetailsTable.summary_price)}), 0)`.mapWith(Number),
-        cogs: sql<number>`coalesce(sum(${money(productsTable.buying_price)} * ${orderDetailsTable.quantity}), 0)`.mapWith(Number),
         orders: sql<number>`count(distinct ${orderDetailsTable.order_id})`.mapWith(Number),
       };
 
-      const [cur, prev, trendRows, topRows, hourRows] = await Promise.all([
+      // COGS comes from the cost ledger, and therefore has to be aggregated per
+      // ORDER rather than per line: a menu item's movements are written against
+      // its INGREDIENTS, so there is no line to attach them to. Hence a separate
+      // query instead of another column in kpiSelect.
+      //
+      // Windowed on orders.created_at rather than orderDetails.created_at (what
+      // `scope` above uses). They are written in the same transaction, so the
+      // two agree in practice; the order's own timestamp is the right key for an
+      // order-level total.
+      const cogsFor = async (start: Date, end: Date) => {
+        const res = await db.execute(sql`
+          select coalesce(sum(c.cogs), 0)::float8 as cogs
+          from (
+            select ${orderCogsSql(sql`o.id`)} as cogs
+            from orders o
+            where o.outlet_id = ${outlet.id}
+              and o.deleted_at is null
+              and o.status not in ('cancelled', 'pending')
+              and o.created_at >= ${start}
+              and o.created_at < ${end}
+          ) c
+        `);
+        const row = (res as unknown as { rows?: { cogs: number }[] }).rows?.[0]
+          ?? (Array.isArray(res) ? (res[0] as { cogs: number }) : undefined);
+        return Number(row?.cogs ?? 0);
+      };
+
+      const [cur, prev, curCogs, prevCogs, trendRows, topRows, hourRows] = await Promise.all([
         db
           .select(kpiSelect)
           .from(orderDetailsTable)
@@ -697,6 +724,8 @@ export async function ownerRoutes(app: FastifyInstance) {
           .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
           .innerJoin(ordersTable, eq(orderDetailsTable.order_id, ordersTable.id))
           .where(scope(prevFrom, prevTo)),
+        cogsFor(from, to),
+        cogsFor(prevFrom, prevTo),
         db
           .select({
             day: sql<string>`(${orderDetailsTable.created_at} at time zone ${timezone})::date`,
@@ -713,6 +742,12 @@ export async function ownerRoutes(app: FastifyInstance) {
             name: productsTable.product_name,
             qty: sql<number>`coalesce(sum(${orderDetailsTable.quantity}), 0)`.mapWith(Number),
             revenue: sql<number>`coalesce(sum(${money(orderDetailsTable.summary_price)}), 0)`.mapWith(Number),
+            // Still the live buying_price join, NOT the cost ledger, and it can
+            // therefore disagree with the profit KPI above. Per-product cost
+            // cannot be read from the ledger: a menu item's movements are
+            // written against its ingredients, so cost attaches to the order,
+            // never to the product line that caused it. Treat this column as
+            // indicative ranking, not as the books.
             profit: sql<number>`coalesce(sum(${money(orderDetailsTable.summary_price)} - ${money(productsTable.buying_price)} * ${orderDetailsTable.quantity}), 0)`.mapWith(Number),
           })
           .from(orderDetailsTable)
@@ -736,8 +771,8 @@ export async function ownerRoutes(app: FastifyInstance) {
           .orderBy(sql`1`),
       ]);
 
-      const c = cur[0] ?? { revenue: 0, cogs: 0, orders: 0 };
-      const p = prev[0] ?? { revenue: 0, cogs: 0, orders: 0 };
+      const c = { ...(cur[0] ?? { revenue: 0, orders: 0 }), cogs: curCogs };
+      const p = { ...(prev[0] ?? { revenue: 0, orders: 0 }), cogs: prevCogs };
       const pct = (a: number, b: number) => (b > 0 ? ((a - b) / b) * 100 : a > 0 ? 100 : 0);
 
       const hourly = Array.from({ length: 24 }, (_, i) => ({ hour: i, orders: 0, revenue: 0 }));

@@ -18,7 +18,7 @@ import {
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 import { requireOutletAccess } from "../lib/outlet-access";
-import { applySaleStockOut, applySaleStockReturn } from "../lib/stock";
+import { applyOrderStockReturn, applySaleStockOut, applySaleStockReturn } from "../lib/stock";
 import { CATEGORY_POS_SALE, CATEGORY_POS_CANCELLATION } from "../lib/cashflow-categories";
 import { normalizeIndonesianPhone } from "../lib/utils/phone";
 import { DEFAULT_COORDS, parseCoordPair } from "../lib/utils/coords";
@@ -181,6 +181,9 @@ export async function mutationRoutes(app: FastifyInstance) {
                 outletId: body.outletId,
                 productId: item.product.id,
                 qty,
+                // Stamped so cancelling this order can replay these exact
+                // movements instead of re-expanding the recipe later.
+                orderId: new_order_id,
                 note: `POS ${new_order_id}`,
               });
             }
@@ -312,23 +315,35 @@ export async function mutationRoutes(app: FastifyInstance) {
           });
         }
 
-        // Hand the stock back, line by line.
-        const lines = await tx
-          .select({
-            productId: orderDetailsTable.product_id,
-            quantity: orderDetailsTable.quantity,
-          })
-          .from(orderDetailsTable)
-          .where(eq(orderDetailsTable.order_id, orderId));
+        // Hand the stock back. Preferred path replays the order's own ledger,
+        // which returns exactly what left even if a recipe changed since the
+        // sale; it reports false only for orders placed before migration 0062
+        // stamped order_id onto movements, and those fall back to re-deriving
+        // each line from the recipe as it stands now.
+        const replayed = await applyOrderStockReturn(tx, {
+          outletId: access.outlet.id,
+          orderId,
+          note: `Batal POS ${orderId}`,
+        });
 
-        for (const line of lines) {
-          if (!line.productId) continue;
-          await applySaleStockReturn(tx, {
-            outletId: access.outlet.id,
-            productId: line.productId,
-            qty: Number(line.quantity),
-            note: `Batal POS ${orderId}`,
-          });
+        if (!replayed) {
+          const lines = await tx
+            .select({
+              productId: orderDetailsTable.product_id,
+              quantity: orderDetailsTable.quantity,
+            })
+            .from(orderDetailsTable)
+            .where(eq(orderDetailsTable.order_id, orderId));
+
+          for (const line of lines) {
+            if (!line.productId) continue;
+            await applySaleStockReturn(tx, {
+              outletId: access.outlet.id,
+              productId: line.productId,
+              qty: Number(line.quantity),
+              note: `Batal POS ${orderId}`,
+            });
+          }
         }
 
         // status alongside deleted_at: the soft-delete filter is what hides the

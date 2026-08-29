@@ -20,6 +20,7 @@ import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 import { getOutletAccess, requireOutletAccess, parseActiveOutletId } from "../lib/outlet-access";
 import { recalcOutletFeatures } from "../lib/outlet-features";
+import { RecipeGraphError, applyProduction, findRecipeCycle } from "../lib/stock";
 
 const UPLOADS_ROOT = path.join(process.cwd(), "uploads");
 const PRODUCTS_DIR = path.join(UPLOADS_ROOT, "products");
@@ -151,6 +152,20 @@ export async function productRoutes(app: FastifyInstance) {
         ),
       );
 
+    // Which products have a composition at all. One flat query over the
+    // outlet's recipe rows rather than an EXISTS per product: the Stok page
+    // needs this only to decide whether to offer the "Produksi" button, and
+    // recipe_items is small enough per outlet that the set is cheaper than the
+    // correlated subquery would be.
+    const withRecipe = new Set(
+      (
+        await db
+          .selectDistinct({ product_id: recipeItemsTable.product_id })
+          .from(recipeItemsTable)
+          .where(eq(recipeItemsTable.outlet_id, outlet.id))
+      ).map((r) => r.product_id),
+    );
+
     // Flattened back to bare product rows: faktur and stok also read this
     // endpoint and index straight into product fields, so the join must not
     // change the shape. The section name rides along as two extra keys, which
@@ -159,6 +174,7 @@ export async function productRoutes(app: FastifyInstance) {
       ...r.products,
       menu_group: r.menu_groups?.name ?? null,
       menu_group_order: r.menu_groups?.sort_order ?? null,
+      has_recipe: withRecipe.has(r.products.id),
     }));
 
     return reply.send({ outlet, products });
@@ -508,8 +524,11 @@ export async function productRoutes(app: FastifyInstance) {
   });
 
   // ── Recipe (bill-of-materials) ─────────────────────────────────────────
-  // Strictly opt-in: only track_stock=false products can have one, and a
-  // product without recipe rows simply moves no stock when sold.
+  // Strictly opt-in: a product without recipe rows simply moves no stock
+  // through a recipe. Recipes NEST — an ingredient may have its own recipe —
+  // and both a menu item (track_stock=false) and an in-house intermediate
+  // (track_stock=true, produced in batches) can carry one. See recipeItemsTable
+  // in db/schema.ts for how expansion decides where to stop.
 
   // Recipe rows + ingredient display info for the product-form editor.
   app.get("/api/products/:id/recipe", async (request, reply) => {
@@ -518,7 +537,11 @@ export async function productRoutes(app: FastifyInstance) {
     const productId = (request.params as { id: string }).id;
 
     const [product] = await db
-      .select({ outlet_id: productsTable.outlet_id, track_stock: productsTable.track_stock })
+      .select({
+        outlet_id: productsTable.outlet_id,
+        track_stock: productsTable.track_stock,
+        yield_qty: productsTable.yield_qty,
+      })
       .from(productsTable)
       .where(and(eq(productsTable.id, productId), eq(productsTable.outlet_id, access.outlet.id)))
       .limit(1);
@@ -537,17 +560,36 @@ export async function productRoutes(app: FastifyInstance) {
       .innerJoin(ingredient, eq(ingredient.id, recipeItemsTable.ingredient_id))
       .where(eq(recipeItemsTable.product_id, productId));
 
-    return reply.send({ success: true, items });
+    return reply.send({ success: true, items, yield_qty: product.yield_qty });
   });
 
   // Replace-on-save: the submitted list becomes the whole recipe (empty list
-  // clears it). Rejected for track_stock products — one stock mode at a time.
+  // clears it).
+  //
+  // An ingredient may itself be a composite, so this is where cycles have to be
+  // stopped. The check runs INSIDE the transaction, AFTER the rows are written:
+  // validating the post-write graph is exact, whereas simulating the
+  // delete-then-insert merge in JS would be a second implementation of the same
+  // rule waiting to drift. A cycle throws and the whole save rolls back.
   app.put("/api/products/:id/recipe", async (request, reply) => {
     const access = await requireOutletAccess(request, reply, "products");
     if (!access) return;
     const productId = (request.params as { id: string }).id;
-    const body = (request.body as { items?: { ingredient_id?: string; qty?: number | string }[] }) ?? {};
+    const body =
+      (request.body as {
+        items?: { ingredient_id?: string; qty?: number | string }[];
+        yield_qty?: number | string;
+      }) ?? {};
     const items = Array.isArray(body.items) ? body.items : [];
+
+    // Batch size rides along with the composition rather than the product form:
+    // it only means anything alongside a composition, and this is the one place
+    // that edits them together. Omitted / unparseable leaves it untouched.
+    const rawYield = body.yield_qty;
+    const parsedYield = rawYield === undefined || rawYield === "" ? null : Number(rawYield);
+    if (parsedYield !== null && (!Number.isFinite(parsedYield) || parsedYield <= 0)) {
+      return reply.status(400).send({ success: false, message: "Hasil sekali produksi harus lebih dari 0" });
+    }
 
     const [product] = await db
       .select({ outlet_id: productsTable.outlet_id, track_stock: productsTable.track_stock })
@@ -555,12 +597,6 @@ export async function productRoutes(app: FastifyInstance) {
       .where(and(eq(productsTable.id, productId), eq(productsTable.outlet_id, access.outlet.id)))
       .limit(1);
     if (!product) return reply.status(404).send({ success: false, message: "Product not found" });
-    if (product.track_stock && items.length > 0) {
-      return reply.status(409).send({
-        success: false,
-        message: "Produk dengan stok sendiri tidak bisa punya resep — matikan 'lacak stok' dulu.",
-      });
-    }
 
     // Validate every line against the caller's own products before writing.
     const clean: { ingredient_id: string; qty: string }[] = [];
@@ -580,27 +616,91 @@ export async function productRoutes(app: FastifyInstance) {
       if (!ing || ing.outlet_id !== product.outlet_id) {
         return reply.status(400).send({ success: false, message: "Bahan tidak ditemukan di outlet ini" });
       }
-      if (!ing.track_stock) {
-        return reply.status(400).send({ success: false, message: "Bahan harus produk yang melacak stok" });
-      }
+      // No track_stock requirement: an ingredient that does not track stock is
+      // a pass-through composite, which is exactly how sub-recipes are built.
       clean.push({ ingredient_id: it.ingredient_id, qty: qty.toFixed(3) });
     }
 
-    await db.transaction(async (tx) => {
-      await tx.delete(recipeItemsTable).where(eq(recipeItemsTable.product_id, productId));
-      if (clean.length) {
-        await tx.insert(recipeItemsTable).values(
-          clean.map((c) => ({
-            outlet_id: product.outlet_id,
-            product_id: productId,
-            ingredient_id: c.ingredient_id,
-            qty: c.qty,
-          })),
-        );
+    try {
+      await db.transaction(async (tx) => {
+        await tx.delete(recipeItemsTable).where(eq(recipeItemsTable.product_id, productId));
+        if (clean.length) {
+          await tx.insert(recipeItemsTable).values(
+            clean.map((c) => ({
+              outlet_id: product.outlet_id,
+              product_id: productId,
+              ingredient_id: c.ingredient_id,
+              qty: c.qty,
+            })),
+          );
+        }
+        if (parsedYield !== null) {
+          await tx
+            .update(productsTable)
+            .set({ yield_qty: parsedYield.toFixed(3) })
+            .where(eq(productsTable.id, productId));
+        }
+        const bad = await findRecipeCycle(tx, productId);
+        if (bad) throw new RecipeGraphError(bad);
+      });
+    } catch (e) {
+      if (e instanceof RecipeGraphError) {
+        return reply.status(409).send({ success: false, message: e.message });
       }
-    });
+      throw e;
+    }
 
     return reply.send({ success: true });
+  });
+
+  // ── Production batch ────────────────────────────────────────────────────
+  // Make an in-house intermediate: its ingredients go out, the batch comes in.
+  // qty is in the product's OWN stock unit (2.5 kg of sambal), not in batches —
+  // products.yield_qty is only the form's default for that number.
+  app.post("/api/products/:id/production", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, "stock");
+    if (!access) return;
+    const productId = (request.params as { id: string }).id;
+    const body = (request.body as { qty?: number | string; note?: string }) ?? {};
+
+    const qty = Number(body.qty);
+    if (!Number.isFinite(qty) || qty <= 0) {
+      return reply.status(400).send({ success: false, message: "Jumlah produksi harus lebih dari 0" });
+    }
+
+    try {
+      const warnings = await db.transaction((tx) =>
+        applyProduction(tx, {
+          outletId: access.outlet.id,
+          productId,
+          qty,
+          note: (body.note?.trim() || "").slice(0, 120),
+        }),
+      );
+      return reply.send({ success: true, warnings });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // Everything applyProduction throws is a client mistake, not a fault.
+      if (msg === "PRODUCT_NOT_FOUND") {
+        return reply.status(404).send({ success: false, message: "Product not found" });
+      }
+      if (msg === "NOT_STOCKED") {
+        return reply.status(409).send({
+          success: false,
+          message: "Aktifkan 'lacak stok' dulu — hasil produksi butuh tempat disimpan.",
+        });
+      }
+      if (msg === "NO_RECIPE") {
+        return reply.status(409).send({
+          success: false,
+          message: "Produk ini belum punya resep, jadi tidak ada yang bisa diproduksi.",
+        });
+      }
+      if (msg.startsWith("RECIPE_CYCLE") || msg.startsWith("RECIPE_TOO_DEEP")) {
+        return reply.status(409).send({ success: false, message: "Resep produk ini berputar — perbaiki dulu." });
+      }
+      throw e;
+    }
   });
 
   // ── Menu groups: owner-defined sections for the public /menu page ────────

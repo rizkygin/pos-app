@@ -2,7 +2,7 @@
 
 import { ColumnDef } from "@tanstack/react-table";
 import { Button } from "@/components/ui/button";
-import { ArrowUpDown, History } from "lucide-react";
+import { ArrowUpDown, ChefHat, History } from "lucide-react";
 import { fmtIDR } from "@/lib/utils/format";
 
 export type StockRow = {
@@ -12,6 +12,12 @@ export type StockRow = {
   stock: number;
   buying_price: number;
   value: number;
+  // This product is made in-house from other products: it both tracks its own
+  // stock and has a composition. Only these get the "Produksi" action — for
+  // everything else stock arrives by purchase, and the button would be a lie.
+  has_recipe: boolean;
+  // Default batch size for the production dialog, straight from the product.
+  yield_qty: number;
 };
 
 const sortHeader = (label: string) =>
@@ -28,6 +34,7 @@ const sortHeader = (label: string) =>
 // "open per-item flow" callback.
 export const stockColumns = (
   onFlow: (row: StockRow) => void,
+  onProduce: (row: StockRow) => void,
 ): ColumnDef<StockRow>[] => [
   {
     accessorKey: "product_name",
@@ -77,16 +84,28 @@ export const stockColumns = (
   },
   {
     id: "flow",
-    header: () => <span className="px-3">Alur</span>,
+    header: () => <span className="px-3">Aksi</span>,
     cell: ({ row }) => (
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() => onFlow(row.original)}
-        className="text-teal-700 hover:bg-teal-50 hover:text-teal-800 dark:text-teal-400"
-      >
-        <History className="size-4" /> Alur Stok
-      </Button>
+      <div className="flex items-center gap-1">
+        {row.original.has_recipe && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => onProduce(row.original)}
+            className="text-violet-700 hover:bg-violet-50 hover:text-violet-800 dark:text-violet-400"
+          >
+            <ChefHat className="size-4" /> Produksi
+          </Button>
+        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => onFlow(row.original)}
+          className="text-teal-700 hover:bg-teal-50 hover:text-teal-800 dark:text-teal-400"
+        >
+          <History className="size-4" /> Alur Stok
+        </Button>
+      </div>
     ),
   },
 ];
