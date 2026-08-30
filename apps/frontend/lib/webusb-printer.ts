@@ -36,6 +36,10 @@ type UsbDevice = {
   claimInterface(n: number): Promise<void>;
   releaseInterface(n: number): Promise<void>;
   selectAlternateInterface(n: number, alt: number): Promise<void>;
+  // Chrome 101+. Revokes this origin's permission for the device; without it a
+  // "forgotten" printer keeps coming back from getDevices() and the picker
+  // never reopens.
+  forget?(): Promise<void>;
   transferOut(endpoint: number, data: Uint8Array): Promise<{ status: string; bytesWritten: number }>;
 };
 type Usb = {
@@ -74,8 +78,16 @@ function recalledIds(): { vendorId: number; productId: number } | null {
   }
 }
 
-/** Forget the paired printer so the next print re-opens the browser picker. */
-export function forgetUsbPrinter() {
+/** Forget the paired printer so the next print re-opens the browser picker.
+    Revokes the WebUSB grant itself — clearing only DEVICE_KEY would leave the
+    device in getDevices(), and the picker would never be shown again. */
+export async function forgetUsbPrinter() {
+  const device = await getPairedPrinter().catch(() => null);
+  try {
+    await device?.forget?.();
+  } catch {
+    /* older Chrome without forget(): the grant stays, nothing else to do */
+  }
   try {
     localStorage.removeItem(DEVICE_KEY);
   } catch {
@@ -94,27 +106,60 @@ export async function getPairedPrinter(): Promise<UsbDevice | null> {
   if (!devices.length) return null;
   const ids = recalledIds();
   const match = ids && devices.find((d) => d.vendorId === ids.vendorId && d.productId === ids.productId);
-  return match || devices[0];
+  // Without a remembered id, fall back only to a device that could actually be
+  // a printer: the origin may hold grants for other hardware entirely.
+  return match || devices.find((d) => !!findBulkOut(d)) || null;
 }
 
 /**
- * Open the browser's device picker. Printer-class devices are listed first;
- * many cheap ESC/POS boards declare themselves vendor-specific instead, so the
- * caller can pass `allDevices` to widen the filter on a second attempt.
+ * Open the browser's device picker. Printer-class devices only by default; many
+ * cheap ESC/POS boards declare themselves vendor-specific instead, so
+ * `allDevices` widens the filter to everything.
  *
- * Must be called from a user gesture. Returns null if the user cancels.
+ * Must be called from a user gesture, and only ONCE per gesture: requestDevice
+ * consumes the transient activation, so a filtered-then-unfiltered retry inside
+ * one click is rejected without a picker ever appearing. The wide picker needs
+ * its own click.
+ *
+ * Returns null if the user closes the picker without choosing. Every other
+ * failure throws with an operator-actionable Indonesian message — silently
+ * returning null there is what makes a blocked permission look like nothing
+ * happening at all.
  */
 export async function pairUsbPrinter(allDevices = false): Promise<UsbDevice | null> {
   const u = usb();
   if (!u) throw new Error("WebUSB tidak didukung browser ini.");
+  const startedAt = Date.now();
   try {
     // classCode 7 = printer. An empty filter list lists everything.
     const device = await u.requestDevice({ filters: allDevices ? [] : [{ classCode: 7 }] });
     rememberDevice(device);
     return device;
-  } catch {
-    // NotFoundError is also what a cancelled picker throws — treat both as "no pick".
-    return null;
+  } catch (e) {
+    const err = e as { name?: string; message?: string };
+    if (err.name === "SecurityError") {
+      // Chrome's wording for "requestDevice outside a user gesture". Its own
+      // activation was consumed by an earlier requestDevice in the same click.
+      if (/user gesture|activation/i.test(err.message ?? "")) {
+        throw new Error("Dialog printer harus dibuka dari klik langsung. Klik tombolnya sekali lagi.");
+      }
+      throw new Error(
+        "Akses USB diblokir untuk situs ini (Permissions-Policy atau koneksi tidak aman). Buka lewat HTTPS dan izinkan perangkat USB di setelan situs.",
+      );
+    }
+    if (err.name === "NotFoundError") {
+      // A blocked site setting rejects with NotFoundError too — the same error a
+      // cancelled picker throws, with no flag to tell them apart. Nobody opens,
+      // reads and dismisses a chooser in a fifth of a second, so a rejection
+      // this fast means no chooser was ever drawn: report the block.
+      if (Date.now() - startedAt < 200) {
+        throw new Error(
+          "Izin perangkat USB ditolak otomatis — dialog pemilih printer tidak sempat muncul. Buka ikon gembok di address bar → Setelan situs → Perangkat USB, ubah dari \"Blokir\", lalu muat ulang halaman.",
+        );
+      }
+      return null; // picker closed without a pick
+    }
+    throw new Error(err.message || "Gagal membuka pemilih printer USB.");
   }
 }
 
@@ -166,8 +211,13 @@ export async function printBytesOverUsb(device: UsbDevice, bytes: number[] | Uin
       await device.claimInterface(target.iface);
     } catch {
       // Almost always the OS driver holding the interface — see the file header.
-      throw new Error(
-        "Printer sedang dipakai driver sistem. Lepaskan driver printer (Windows: Zadig/WinUSB, Linux: unload usblp) lalu coba lagi.",
+      // keepPairing: the grant is fine, the interface is not — re-pairing would
+      // only make the operator pick the same printer again to hit the same wall.
+      throw Object.assign(
+        new Error(
+          "Printer sedang dipakai driver sistem. Lepaskan driver printer (Windows: Zadig/WinUSB, Linux: unload usblp) lalu coba lagi.",
+        ),
+        { keepPairing: true },
       );
     }
     if (target.alt !== 0) {
