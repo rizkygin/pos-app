@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Receipt, Usb, Loader2 } from "lucide-react";
+import { Receipt, Ruler, Usb, Loader2 } from "lucide-react";
 import { resolveOutletImage } from "@/lib/image-src";
 import {
   forgetUsbPrinter,
@@ -74,6 +74,12 @@ const PAPER_KEY = "pos_paper_width";
 // Raw USB is where this shows: RawBT/ThermalBridge re-render the text to their
 // own printer profile and hide the mismatch, the bulk endpoint does not.
 const LINE_CHARS: Record<PaperWidth, number> = { "58": 32, "80": 42 };
+// ...and where the default is wrong, the operator overrides it per paper width
+// rather than waiting on a deploy: the ruler print says what this printer is,
+// this remembers it. Bounds are the plausible range for 203dpi Font A.
+const CHARS_KEY = (p: PaperWidth) => `pos_line_chars_${p}`;
+const MIN_CHARS = 24;
+const MAX_CHARS = 56;
 // Full print-head width in dots at 203dpi (only the 58mm figure is relied on —
 // see LINE_CHARS for why the 80mm figure can't be trusted).
 const PAPER_DOTS: Record<PaperWidth, number> = { "58": 384, "80": 576 };
@@ -181,10 +187,51 @@ function wrapText(s: string, width: number): string[] {
   return out;
 }
 
+/* A character ruler printed 60 columns wide — wider than any head — so the
+   operator can read off where the paper actually stops.
+
+   ESC/POS has no query for printable width and 80mm heads ship as 512 or 576
+   dots depending on the model, so LINE_CHARS is otherwise a guess: 48 clips a
+   512-dot head, 42 clips anything narrower still, and both look the same from
+   here. This prints the answer instead. */
+function buildRulerEscposBytes(paper: PaperWidth, lineChars: number): number[] {
+  const MAX = 60;
+  const bytes: number[] = [];
+  const push = (...b: number[]) => bytes.push(...b);
+  const line = (s = "") => {
+    for (const ch of s) push(ch.charCodeAt(0));
+    push(0x0a);
+  };
+  const cols = Array.from({ length: MAX }, (_, i) => i + 1);
+
+  push(0x1b, 0x40); // initialize
+  push(0x1d, 0x4c, 0x00, 0x00); // left margin 0 — measure the head, not a margin
+  push(0x1b, 0x61, 0x00); // align left
+  push(0x1b, 0x45, 1);
+  line("TES LEBAR KERTAS");
+  push(0x1b, 0x45, 0);
+  line(`Setelan sekarang: ${paper}mm, ${lineChars} kolom`);
+  line();
+  line(cols.map((c) => String(c % 10)).join(""));
+  line(cols.map((c) => (c % 10 === 0 ? String((c / 10) % 10) : " ")).join(""));
+  line();
+  line("Baris atas = satuan, bawah = puluhan.");
+  line("Kolom terakhir yang tercetak = lebar");
+  line("printer ini.");
+  push(0x0a, 0x0a, 0x0a);
+  push(0x1d, 0x56, 0x00); // full cut
+  return bytes;
+}
+
 // Build the ESC/POS invoice. The same byte stream feeds all three transports:
 // ThermalBridge/RawBT on Android (base64 in a URL) and WebUSB on desktop.
-function buildInvoiceEscposBytes(inv: ThermalInvoice, paper: PaperWidth, logoBytes: number[] = []): number[] {
-  const LINE = LINE_CHARS[paper];
+function buildInvoiceEscposBytes(
+  inv: ThermalInvoice,
+  paper: PaperWidth,
+  logoBytes: number[] = [],
+  lineChars = LINE_CHARS[paper],
+): number[] {
+  const LINE = lineChars;
   const ESC = 0x1b;
   const GS = 0x1d;
   const bytes: number[] = [];
@@ -217,6 +264,10 @@ function buildInvoiceEscposBytes(inv: ThermalInvoice, paper: PaperWidth, logoByt
   };
 
   push(ESC, 0x40); // initialize
+  // GS L 0 0: left margin to zero. Memory-switch margins are NOT cleared by
+  // ESC @ on much firmware, and a margin shifts every line right until its tail
+  // falls off the head — indistinguishable from printing too many characters.
+  push(GS, 0x4c, 0x00, 0x00);
 
   if (logoBytes.length) {
     align(paper === "80" ? 1 : 0); // see buildLogoEscposBytes
@@ -464,10 +515,29 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
     if (typeof window === "undefined") return "80";
     return window.localStorage.getItem(PAPER_KEY) === "58" ? "58" : "80";
   });
+  // Per-paper override, falling back to the default for that width.
+  const readChars = (w: PaperWidth) => {
+    if (typeof window === "undefined") return LINE_CHARS[w];
+    const stored = Number(window.localStorage.getItem(CHARS_KEY(w)));
+    return stored >= MIN_CHARS && stored <= MAX_CHARS ? stored : LINE_CHARS[w];
+  };
+  const [lineChars, setLineChars] = useState<number>(() => readChars(paper));
+
   const pickPaper = (w: PaperWidth) => {
     setPaper(w);
+    setLineChars(readChars(w)); // each width remembers its own printer
     try {
       window.localStorage.setItem(PAPER_KEY, w);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const nudgeChars = (delta: number) => {
+    const next = Math.min(MAX_CHARS, Math.max(MIN_CHARS, lineChars + delta));
+    setLineChars(next);
+    try {
+      window.localStorage.setItem(CHARS_KEY(paper), String(next));
     } catch {
       /* ignore */
     }
@@ -515,7 +585,7 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
         // Logo unavailable (load/CORS failure) — print without it.
       }
     }
-    return buildInvoiceEscposBytes(inv, paper, logoBytes);
+    return buildInvoiceEscposBytes(inv, paper, logoBytes, lineChars);
   };
 
   const handlePrint = async () => {
@@ -529,7 +599,10 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
     openPrintApp(`thermalbridge://print?back=1&data=${b64url}`, `rawbt:base64,${b64}`);
   };
 
-  const handleUsbPrint = async (allDevices = false) => {
+  /* Pair (if needed) and send. Both USB payloads — the invoice and the width
+     ruler — go through here so the gesture and error handling stay in one
+     place. */
+  const runUsb = async (makeBytes: () => Promise<number[]> | number[], allDevices = false) => {
     setUsbBusy(true);
     try {
       // requestDevice needs the user gesture, so pairing happens inline on the
@@ -545,7 +618,7 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
           return;
         }
       }
-      await printBytesOverUsb(device, await buildBytes());
+      await printBytesOverUsb(device, await makeBytes());
       setUsbPaired(true);
       setOfferAllDevices(false);
     } catch (e) {
@@ -565,6 +638,9 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
     }
   };
 
+  const handleUsbPrint = (allDevices = false) => runUsb(buildBytes, allDevices);
+  const handleUsbRuler = () => runUsb(() => buildRulerEscposBytes(paper, lineChars));
+
   return (
     <>
       {/* Paper width first: it's read at click time and applies to both rows. */}
@@ -582,6 +658,31 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
               {w}mm
             </button>
           ))}
+        </div>
+      </div>
+
+      {/* Only the raw ESC/POS routes use this; the browser dialog lays out in
+          millimetres and needs no column count. */}
+      <div className="flex items-center justify-between gap-2 px-1">
+        <span className="text-xs text-muted-foreground">Kolom cetak</span>
+        <div className="flex items-center gap-1 rounded-lg border p-0.5">
+          <button
+            onClick={() => nudgeChars(-1)}
+            disabled={lineChars <= MIN_CHARS}
+            aria-label="Kurangi kolom"
+            className="rounded-md px-2 py-1 text-xs font-bold text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+          >
+            −
+          </button>
+          <span className="w-6 text-center text-xs font-bold tabular-nums">{lineChars}</span>
+          <button
+            onClick={() => nudgeChars(1)}
+            disabled={lineChars >= MAX_CHARS}
+            aria-label="Tambah kolom"
+            className="rounded-md px-2 py-1 text-xs font-bold text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+          >
+            +
+          </button>
         </div>
       </div>
 
@@ -607,6 +708,15 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
           label="Printer tidak muncul?"
           hint="Tampilkan semua perangkat USB, bukan hanya kelas printer"
           onClick={() => handleUsbPrint(true)}
+          disabled={usbBusy}
+        />
+      )}
+      {usbAvailable && usbPaired && (
+        <MenuRow
+          icon={<Ruler className="size-4" />}
+          label="Tes lebar kertas"
+          hint="Cetak penggaris kolom — untuk menyetel lebar cetak"
+          onClick={handleUsbRuler}
           disabled={usbBusy}
         />
       )}
