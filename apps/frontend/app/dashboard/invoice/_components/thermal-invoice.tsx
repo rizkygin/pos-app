@@ -65,15 +65,21 @@ type PaperWidth = "58" | "80";
 // Same device-level preference the cashier receipt uses: one printer per device.
 const PAPER_KEY = "pos_paper_width";
 // Font A characters per line at 12 dots each. 58mm heads are 384 dots
-// everywhere, so 32 is exact. 80mm heads are 512 OR 576 depending on the model
-// and nothing in ESC/POS reports which: 42 fits both (512/12), where 48 runs 72
-// dots past a 512-dot head and loses the right of every line. The cost of
-// guessing low is a blank strip on a 576-dot printer; the cost of guessing high
-// is unreadable totals, so this stays at the width that always prints.
+// everywhere, so 32 is exact. 80mm is a guess by construction — heads are 512
+// or 576 depending on the model and nothing in ESC/POS reports which — so this
+// is a MEASURED default, not a derived one: 48 clipped, and so did the 42 that
+// 512/12 predicts. A real printer chopped every row at column 40 (counted back
+// from three right-aligned values on one receipt), which means ~24 dots go
+// somewhere unaccounted for. `GS L 0 0` did not recover them, so it is not a
+// stored left margin; whatever it is, 40 is what actually reaches paper.
+//
+// Guessing low costs a blank strip on the right of a wider printer. Guessing
+// high costs the totals column. The stepper below is the real answer for any
+// printer this default is wrong for.
 //
 // Raw USB is where this shows: RawBT/ThermalBridge re-render the text to their
 // own printer profile and hide the mismatch, the bulk endpoint does not.
-const LINE_CHARS: Record<PaperWidth, number> = { "58": 32, "80": 42 };
+const LINE_CHARS: Record<PaperWidth, number> = { "58": 32, "80": 40 };
 // ...and where the default is wrong, the operator overrides it per paper width
 // rather than waiting on a deploy: the ruler print says what this printer is,
 // this remembers it. Bounds are the plausible range for 203dpi Font A.
@@ -625,10 +631,10 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
       // Every realistic failure here is operator-actionable; the lib phrases
       // them in Indonesian already.
       const msg = e instanceof Error ? e.message : "Gagal mencetak ke printer USB.";
-      // A device that's been unplugged or re-paired stays in the permission
-      // list but can't be opened; revoke it so the next attempt re-prompts.
-      // A busy interface is the exception: the pairing is still the right one.
-      if (!(e as { keepPairing?: boolean })?.keepPairing) {
+      // Only drop the pairing when the device handle is genuinely dead. Revoking
+      // on any failure (a busy interface, a stalled transfer) means the picker
+      // reopens on every retry while the grant was never the problem.
+      if ((e as { deviceGone?: boolean })?.deviceGone) {
         await forgetUsbPrinter();
         setUsbPaired(false);
       }
@@ -711,11 +717,11 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
           disabled={usbBusy}
         />
       )}
-      {usbAvailable && usbPaired && (
+      {usbAvailable && (
         <MenuRow
           icon={<Ruler className="size-4" />}
           label="Tes lebar kertas"
-          hint="Cetak penggaris kolom — untuk menyetel lebar cetak"
+          hint="Cetak penggaris kolom lewat USB — untuk menyetel lebar cetak"
           onClick={handleUsbRuler}
           disabled={usbBusy}
         />

@@ -204,7 +204,29 @@ export async function printBytesOverUsb(device: UsbDevice, bytes: number[] | Uin
   const target = findBulkOut(device);
   if (!target) throw new Error("Perangkat ini tidak punya endpoint printer (bulk OUT).");
 
-  if (!device.opened) await device.open();
+  // Disposition is part of every failure here: `deviceGone` means the handle is
+  // dead and the pairing should be dropped, `keepPairing` means the grant is
+  // fine and re-picking would only waste the operator's time. The DOMException
+  // name rides along in the text — it is the one thing that makes a report from
+  // the counter diagnosable.
+  try {
+    if (!device.opened) await device.open();
+  } catch (e) {
+    const err = e as { name?: string; message?: string };
+    if (err.name === "NotFoundError") {
+      throw Object.assign(new Error("Printer tidak terhubung lagi. Cek kabel dan daya, lalu pilih printer sekali lagi."), {
+        deviceGone: true,
+      });
+    }
+    // NetworkError/SecurityError here is the OS holding the device, not a bad
+    // pairing: on macOS that is the printer being installed as a system printer.
+    throw Object.assign(
+      new Error(
+        `Tidak bisa membuka printer (${err.name || "Error"}). Printer mungkin dipakai driver sistem — hapus printer dari daftar printer OS (macOS: Pengaturan > Printer), atau Windows: Zadig/WinUSB, Linux: unload usblp.`,
+      ),
+      { keepPairing: true },
+    );
+  }
   try {
     if (!device.configuration) await device.selectConfiguration(target.configValue);
     try {
@@ -231,8 +253,14 @@ export async function printBytesOverUsb(device: UsbDevice, bytes: number[] | Uin
 
     const data = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes.map((b) => b & 0xff));
     for (let i = 0; i < data.length; i += CHUNK) {
-      const res = await device.transferOut(target.endpoint, data.subarray(i, i + CHUNK));
-      if (res.status !== "ok") throw new Error(`Pengiriman ke printer gagal (${res.status}).`);
+      const res = await device.transferOut(target.endpoint, data.subarray(i, i + CHUNK)).catch((e) => {
+        const err = e as { name?: string; message?: string };
+        throw Object.assign(new Error(`Pengiriman ke printer gagal (${err.name || "Error"}: ${err.message || ""}).`), {
+          keepPairing: true,
+        });
+      });
+      if (res.status !== "ok")
+        throw Object.assign(new Error(`Pengiriman ke printer gagal (${res.status}).`), { keepPairing: true });
     }
 
     try {
