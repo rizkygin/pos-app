@@ -64,10 +64,24 @@ const escapeHtml = (s: string) =>
 type PaperWidth = "58" | "80";
 // Same device-level preference the cashier receipt uses: one printer per device.
 const PAPER_KEY = "pos_paper_width";
-// Font A characters per line: 32 on 58mm paper, 48 on 80mm.
-const LINE_CHARS: Record<PaperWidth, number> = { "58": 32, "80": 48 };
-// Full print-head width in dots at 203dpi (only the 58mm figure is relied on).
+// Font A characters per line at 12 dots each. 58mm heads are 384 dots
+// everywhere, so 32 is exact. 80mm heads are 512 OR 576 depending on the model
+// and nothing in ESC/POS reports which: 42 fits both (512/12), where 48 runs 72
+// dots past a 512-dot head and loses the right of every line. The cost of
+// guessing low is a blank strip on a 576-dot printer; the cost of guessing high
+// is unreadable totals, so this stays at the width that always prints.
+//
+// Raw USB is where this shows: RawBT/ThermalBridge re-render the text to their
+// own printer profile and hide the mismatch, the bulk endpoint does not.
+const LINE_CHARS: Record<PaperWidth, number> = { "58": 32, "80": 42 };
+// Full print-head width in dots at 203dpi (only the 58mm figure is relied on —
+// see LINE_CHARS for why the 80mm figure can't be trusted).
 const PAPER_DOTS: Record<PaperWidth, number> = { "58": 384, "80": 576 };
+// Printable width, which is NOT the roll width: a 58mm roll prints 48mm (384
+// dots at 8/mm) and an 80mm roll prints 72mm (576). Laying the page out at the
+// roll's own width overflows the head by 6-8mm and the driver clips it off the
+// right edge — or silently shrinks the whole receipt to fit.
+const PRINT_MM: Record<PaperWidth, number> = { "58": 48, "80": 72 };
 
 /* What the invoice's money block reduces to on paper: the DP is credited even
    on a draft (it's agreed but not yet booked, so amount_paid is still 0). */
@@ -305,7 +319,7 @@ const toBase64 = (bytes: number[]) => {
 // Desktop/iOS fallback: a self-contained receipt-width page built from the same
 // data (the A4 markup wouldn't carry over to a print window), auto-printed.
 function printViaBrowser(inv: ThermalInvoice, paper: PaperWidth) {
-  const mm = `${paper}mm`;
+  const mm = `${PRINT_MM[paper]}mm`;
   const logo = logoSrcOf(inv);
   const { dp, beyondDp, remaining, credited } = creditedAmounts(inv);
   const badge = statusLabel(inv.status);
@@ -327,7 +341,9 @@ function printViaBrowser(inv: ThermalInvoice, paper: PaperWidth) {
   @page { size: ${mm} auto; margin: 0; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: ${mm}; }
-  body { font-family: 'Courier New', monospace; font-size: 11px; line-height: 1.35; color: #000; padding: 3mm 2mm; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  /* Horizontal padding comes out of the printable width, so keep it thin: the
+     head starts at the left edge of what it can print, not of the paper. */
+  body { font-family: 'Courier New', monospace; font-size: 11px; line-height: 1.35; color: #000; padding: 3mm 1mm; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .c { text-align: center; }
   .b { font-weight: bold; }
   .lg { font-size: 14px; }
@@ -463,6 +479,10 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
   const [usbAvailable, setUsbAvailable] = useState(false);
   const [usbPaired, setUsbPaired] = useState(false);
   const [usbBusy, setUsbBusy] = useState(false);
+  // Shown after a picker closes empty-handed: the printer-class filter hides
+  // every board that misdeclares itself, and the wider picker needs a click of
+  // its own to have a user gesture to open on.
+  const [offerAllDevices, setOfferAllDevices] = useState(false);
 
   useEffect(() => {
     // Android already has ThermalBridge/RawBT; a second raw path there would
@@ -509,29 +529,36 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
     openPrintApp(`thermalbridge://print?back=1&data=${b64url}`, `rawbt:base64,${b64}`);
   };
 
-  const handleUsbPrint = async () => {
+  const handleUsbPrint = async (allDevices = false) => {
     setUsbBusy(true);
     try {
       // requestDevice needs the user gesture, so pairing happens inline on the
-      // first print rather than behind a separate "connect" step.
-      let device = await getPairedPrinter();
+      // first print rather than behind a separate "connect" step. Exactly one
+      // picker per click — the gesture is spent on the first requestDevice.
+      let device = allDevices ? null : await getPairedPrinter();
       if (!device) {
-        device = await pairUsbPrinter();
-        // Cheap ESC/POS boards often declare a vendor-specific class and so
-        // never show up under the printer-class filter — retry unfiltered.
-        if (!device) device = await pairUsbPrinter(true);
+        device = await pairUsbPrinter(allDevices);
+        if (!device) {
+          // Closed without a pick. If the narrow filter was in play, the list
+          // may simply have been empty — offer the wide one.
+          setOfferAllDevices(!allDevices);
+          return;
+        }
       }
-      if (!device) return; // user cancelled the picker
       await printBytesOverUsb(device, await buildBytes());
       setUsbPaired(true);
+      setOfferAllDevices(false);
     } catch (e) {
       // Every realistic failure here is operator-actionable; the lib phrases
       // them in Indonesian already.
       const msg = e instanceof Error ? e.message : "Gagal mencetak ke printer USB.";
       // A device that's been unplugged or re-paired stays in the permission
-      // list but can't be opened; drop it so the next attempt re-prompts.
-      forgetUsbPrinter();
-      setUsbPaired(false);
+      // list but can't be opened; revoke it so the next attempt re-prompts.
+      // A busy interface is the exception: the pairing is still the right one.
+      if (!(e as { keepPairing?: boolean })?.keepPairing) {
+        await forgetUsbPrinter();
+        setUsbPaired(false);
+      }
       alert(msg);
     } finally {
       setUsbBusy(false);
@@ -570,14 +597,23 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
           icon={usbBusy ? <Loader2 className="size-4 animate-spin" /> : <Usb className="size-4" />}
           label={usbPaired ? "Cetak langsung ke USB" : "Hubungkan printer USB"}
           hint={usbPaired ? "ESC/POS, tanpa dialog" : "Pilih printer sekali, lalu langsung cetak"}
-          onClick={handleUsbPrint}
+          onClick={() => handleUsbPrint()}
+          disabled={usbBusy}
+        />
+      )}
+      {usbAvailable && offerAllDevices && (
+        <MenuRow
+          icon={<Usb className="size-4" />}
+          label="Printer tidak muncul?"
+          hint="Tampilkan semua perangkat USB, bukan hanya kelas printer"
+          onClick={() => handleUsbPrint(true)}
           disabled={usbBusy}
         />
       )}
       {usbAvailable && usbPaired && (
         <button
-          onClick={() => {
-            forgetUsbPrinter();
+          onClick={async () => {
+            await forgetUsbPrinter();
             setUsbPaired(false);
           }}
           className="px-2 text-left text-[11px] text-muted-foreground hover:text-foreground"
