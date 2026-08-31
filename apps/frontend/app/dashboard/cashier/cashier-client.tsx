@@ -207,6 +207,16 @@ export const CashierClient = ({
       /* ignore */
     }
   }, [lazyKey]);
+  // Lazy mode IS a cash sale — uang pas, nothing tendered, no change counted —
+  // so the two can never disagree. Held tabs restore their own saved payment
+  // method and lazyMode is a per-DEVICE preference, so a tab parked on QRIS can
+  // come back while lazy mode is on; that state has no meaning, and it would
+  // also hide the cash row that carries the only way to switch lazy mode off.
+  // Snapping to cash keeps the lock honest wherever the mismatch came from.
+  useEffect(() => {
+    if (lazyMode && paymentMethod !== 'cash') setPaymentMethod('cash');
+  }, [lazyMode, paymentMethod]);
+
   const toggleLazyMode = () => {
     setLazyMode((v) => {
       const next = !v;
@@ -1433,24 +1443,47 @@ export const CashierClient = ({
               shift report and every payment report bucket on, and a cashier who
               has to go looking for it leaves it on Tunai. Picking anything but
               Tunai also clears an insufficient-cash state, which is the usual
-              reason to switch mid-sale. */}
+              reason to switch mid-sale.
+
+              While Lazy Mode is on the other four are disabled rather than
+              hidden: lazy mode is a cash sale by definition, and a cashier who
+              reaches for QRIS needs to see WHY it won't take, not find the row
+              silently missing two thirds of its buttons. */}
           <div className="mb-2 grid grid-cols-5 gap-1">
-            {POS_PAYMENT_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => setPaymentMethod(opt.value)}
-                title={opt.label}
-                className={`truncate rounded-lg border-2 px-1 py-1.5 text-[11px] font-bold transition-colors ${
-                  paymentMethod === opt.value
-                    ? 'border-blue-600 bg-blue-600 text-white'
-                    : 'border-border bg-background text-muted-foreground hover:bg-muted'
-                }`}
-              >
-                {opt.chip}
-              </button>
-            ))}
+            {POS_PAYMENT_OPTIONS.map((opt) => {
+              const locked = lazyMode && opt.value !== 'cash';
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  disabled={locked}
+                  onClick={() => setPaymentMethod(opt.value)}
+                  title={
+                    locked
+                      ? 'Lazy Mode aktif — pembayaran terkunci ke Tunai'
+                      : opt.label
+                  }
+                  className={`truncate rounded-lg border-2 px-1 py-1.5 text-[11px] font-bold transition-colors ${
+                    paymentMethod === opt.value
+                      ? 'border-blue-600 bg-blue-600 text-white'
+                      : locked
+                        ? 'cursor-not-allowed border-border/50 bg-muted/40 text-muted-foreground/40'
+                        : 'border-border bg-background text-muted-foreground hover:bg-muted'
+                  }`}
+                >
+                  {opt.chip}
+                </button>
+              );
+            })}
           </div>
+
+          {/* Says why four of the five just went grey. Without it the lock
+              reads as the app being broken. */}
+          {lazyMode && (
+            <p className="mb-2 -mt-1 text-[11px] text-muted-foreground">
+              Lazy Mode aktif — pembayaran terkunci ke Tunai.
+            </p>
+          )}
 
           {/* What is owed. One bordered card so the arithmetic reads as a
               single block that adds up, instead of loose rows sharing space
@@ -1570,7 +1603,7 @@ export const CashierClient = ({
                         : 'border-border text-muted-foreground hover:bg-muted'
                     }`}
                   >
-                    Uang pas
+                    Lazy Mode
                   </button>
                 </div>
                 {lazyMode ? (
