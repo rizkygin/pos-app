@@ -287,6 +287,31 @@ export const outletsTable = pgTable('outlets', {
   // Defaults true: inert until an admin configures an area, matching the
   // "unset means permissive" rule the rest of this feature follows.
   courier_reachable: boolean('courier_reachable').default(true).notNull(),
+
+  // --- Counter tax (PB1 / PPN), configured per outlet ---
+  //
+  // Never hardcoded: PB1 (pajak restoran) is set by each kabupaten/kota and PPN
+  // for goods is different again, so the rate is the merchant's to enter. The
+  // label rides along so the receipt can print what was actually charged
+  // ("PB1 10%") instead of a generic "Pajak".
+  //
+  // tax_inclusive is the whole reason this is three columns and not one. It
+  // says which side of the menu price the tax sits on:
+  //   false — prices are net, tax is ADDED at checkout (total goes up)
+  //   true  — "harga sudah termasuk pajak": the price already contains the tax,
+  //           and checkout EXTRACTS it so the books can tell revenue from the
+  //           portion being held for the tax office. The customer pays the same
+  //           either way; what changes is what counts as income.
+  //
+  // Same model as invoicesTable, deliberately — one tax convention in this
+  // codebase, not two.
+  tax_enabled: boolean('tax_enabled').default(false).notNull(),
+  tax_rate: numeric('tax_rate', { precision: 5, scale: 2 })
+    .default('0')
+    .notNull(),
+  tax_inclusive: boolean('tax_inclusive').default(false).notNull(),
+  tax_label: varchar('tax_label', { length: 20 }).default('Pajak').notNull(),
+
   ...timestamps,
 });
 
@@ -531,6 +556,79 @@ export const productsTable = pgTable(
   ],
 );
 
+/**
+ * One cashier's stint at the drawer: opened with a float, closed with a count.
+ *
+ * The shift exists so the three things a closing report needs can be FACTS
+ * rather than guesses. Without it: "modal awal" is unrecorded, "jam buka/tutup"
+ * has to be faked from the first and last order of the day, and nothing ever
+ * compares the money in the drawer against the money the system thinks is in
+ * it — which is the only part of the report that catches anything.
+ *
+ * Sales and cash movements point AT the shift (orders.shift_id,
+ * cashFlows.shift_id) instead of being gathered by a time window. A window
+ * would have to answer "which local day?" for a shift that closes after
+ * midnight and would silently re-bucket a sale if anyone's clock drifted; a
+ * foreign key just says which stint rang it up. See lib/timezone.ts for why
+ * date maths is the thing to avoid here.
+ *
+ * opening_float is deliberately NOT a cashflow row. It is drawer float — money
+ * moved from a safe or yesterday's takings into a till — not income, and
+ * booking it as cash-in would inflate both the day's revenue and this report's
+ * own "Total Tunai Masuk" (which sums the ledger, so the float would land in it
+ * twice). It lives here and nowhere else.
+ *
+ * The closing figures (expected/counted/variance) are frozen columns rather
+ * than derived at read time, because the whole point of a count is what it said
+ * AT THE MOMENT it was counted. A later cancellation or backdated cash entry
+ * must not quietly rewrite a discrepancy someone already signed off on.
+ */
+export const cashierShiftsTable = pgTable(
+  'cashier_shifts',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    outlet_id: integer('outlet_id')
+      .notNull()
+      .references(() => outletsTable.id),
+    // Who opened it. The name is frozen alongside because the report is a
+    // record: renaming the user account later must not rewrite shifts they
+    // already closed, and an employee row can be deactivated and gone.
+    user_id: text('user_id')
+      .notNull()
+      .references(() => usersTable.id),
+    cashier_name: varchar('cashier_name', { length: 100 }).notNull(),
+    opening_float: numeric('opening_float', { precision: 14, scale: 2 })
+      .notNull()
+      .default('0'),
+    opened_at: timestamp('opened_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    // NULL means open. That is the whole status model — a separate status
+    // column would be a second source of truth for the same fact, and the
+    // partial unique index below already depends on this one.
+    closed_at: timestamp('closed_at', { withTimezone: true }),
+    counted_cash: numeric('counted_cash', { precision: 14, scale: 2 }),
+    expected_cash: numeric('expected_cash', { precision: 14, scale: 2 }),
+    // counted - expected. Stored rather than computed on read so it stays the
+    // number that was on the printed slip: negative = short, positive = over.
+    variance: numeric('variance', { precision: 14, scale: 2 }),
+    closing_note: varchar('closing_note', { length: 255 }),
+  },
+  (table) => [
+    // One open shift per outlet: a single physical drawer cannot be two
+    // stints at once, and without this a second "Buka Shift" tap (or two
+    // devices at the same counter) silently splits the day's takings across
+    // two shifts, neither of which reconciles.
+    uniqueIndex('cashier_shifts_one_open_per_outlet')
+      .on(table.outlet_id)
+      .where(sql`closed_at is null`),
+    index('cashier_shifts_outlet_opened_idx').on(
+      table.outlet_id,
+      table.opened_at,
+    ),
+  ],
+);
+
 export const ordersTable = pgTable(
   'orders',
   {
@@ -552,6 +650,37 @@ export const ordersTable = pgTable(
     note: json('note'),
     rejected_by: REJECTED_BY('rejected_by'),
     rejected_reason: varchar('rejected_reason', { length: 255 }),
+    // The cashier stint that rang this up, for counter sales taken while a
+    // shift was open. Nullable and never enforced: a POS sale must not fail
+    // because someone forgot to tap "Buka Shift", so an unattributed sale is a
+    // real state. Those simply do not appear on any closing report.
+    //
+    // App orders never carry one — nobody is standing at the drawer for them.
+    shift_id: integer('shift_id').references(() => cashierShiftsTable.id),
+
+    // --- Tax, frozen at the moment of sale ---
+    //
+    // All three are NULL when no tax applied: every order taken before this
+    // existed, and every order taken while the outlet has tax switched off.
+    // NULL is not zero — "no tax was charged" and "tax was charged at 0%" are
+    // different claims, and only one of them should print a tax line.
+    //
+    // Frozen rather than derived from the outlet's current settings for the
+    // same reason orderDetails.unit_cost is frozen: changing the rate today
+    // must not rewrite what was charged on a sale that closed last month.
+    // Re-deriving would make every historical receipt a liability.
+    //
+    // *** orderDetails.summary_price is NOT adjusted for any of this. *** It is
+    // the price the line was sold at and stays the app's revenue column — 47
+    // read sites across 16 files depend on that meaning. See lib/tax.ts for
+    // what each mode implies for revenue, and note the asymmetry: with
+    // tax_inclusive = false, summary_price is already net of tax and every
+    // reader is correct untouched; with tax_inclusive = true the price contains
+    // the tax, so revenue readers must SUBTRACT tax_amount.
+    tax_rate: numeric('tax_rate', { precision: 5, scale: 2 }),
+    tax_amount: numeric('tax_amount', { precision: 14, scale: 2 }),
+    tax_inclusive: boolean('tax_inclusive'),
+
     // Set when sequential dispatch has run out of couriers to offer this order
     // to. From that moment it falls back to the old free-for-all lobby, visible
     // to everyone who is online — a stuck order helps nobody, so exhausting the
@@ -574,6 +703,8 @@ export const ordersTable = pgTable(
     // migration.
 
     index('orders_courier_status_idx').on(table.courier_id, table.status),
+    // The closing report reads every order of one shift, several ways over.
+    index('orders_shift_id_idx').on(table.shift_id),
   ],
 );
 
@@ -710,6 +841,27 @@ export const orderDetailsTable = pgTable(
     note_product: text('note_product'),
     extra: json('extra'),
     summary_price: varchar('summary_price', { length: 10 }).notNull(),
+    // What ONE unit of this line cost, frozen when the line was written.
+    //
+    // The cost ledger (stock_movements) covers a line only if the line MOVED
+    // something. A track_stock=false product with no recipe never does — a
+    // service, a fee, an item nobody counts — so its cost has always come from
+    // products.buying_price, joined LIVE at report time. That join is the
+    // problem this column fixes: editing a purchase price today silently
+    // rewrote the profit on every sale ever made, and flipping a product's
+    // track_stock changed the cost of orders that closed months ago.
+    //
+    // NULL means "no price was on record when this line was written" — either
+    // it predates this column, or buying_price was blank/zero, which is a
+    // routine state (see lib/money-sql.ts). NULL is NOT zero: readers fall back
+    // to the live buying_price for those, exactly as before, so a line with no
+    // cost on record starts telling the truth the day a real price is entered.
+    // A frozen zero never would. Same reasoning as 0064_backfill_cost_ledger.
+    //
+    // Written on EVERY line, but only ever READ for the lines the ledger cannot
+    // see (lib/cogs.ts). Summing it across all lines would double count every
+    // line the ledger already covers.
+    unit_cost: numeric('unit_cost', { precision: 14, scale: 4 }),
     created_at: timestamp('created_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -835,8 +987,21 @@ export const cashFlows = pgTable(
     // been reversed?" from the ledger itself rather than trusting the caller
     // not to double-submit.
     order_id: text('order_id').references(() => ordersTable.id),
+    // The cashier stint this movement happened during, stamped at insert from
+    // whichever shift was open at the outlet. This is what makes "Total Tunai
+    // Masuk / Keluar" on a closing report the drawer's own arithmetic rather
+    // than a time-window guess — including the cash-out a cashier books for
+    // petty spending mid-shift.
+    //
+    // Nullable for the same reason orders.shift_id is: money still moves when
+    // no shift is open (the owner posting an invoice payment from the office),
+    // and that is not a failure.
+    shift_id: integer('shift_id').references(() => cashierShiftsTable.id),
   },
-  (table) => [index('cash_flows_order_id_idx').on(table.order_id)],
+  (table) => [
+    index('cash_flows_order_id_idx').on(table.order_id),
+    index('cash_flows_shift_id_idx').on(table.shift_id),
+  ],
 );
 
 export const promosTable = pgTable('promos', {
@@ -1163,6 +1328,28 @@ export const stockMovementsTable = pgTable(
     // change how much comes back. Movements written before migration 0062 have
     // no order_id; applySaleStockReturn keeps a re-expansion fallback for them.
     order_id: text('order_id').references((): AnyPgColumn => ordersTable.id),
+    // WHICH LINE of that order caused this movement.
+    //
+    // order_id above says the sale happened; this says which item in it. The
+    // difference matters for a composition, whose movements are written against
+    // its INGREDIENTS: without this there is no way back from "3 kg of beras
+    // left" to the Nasi Goreng line that took it, and lib/cogs.ts had to guess
+    // which lines the ledger covered by re-reading products.track_stock and
+    // recipe_items as they stand TODAY. Flip either one after the sale and the
+    // guess changes: the line gets counted twice, or dropped entirely, on an
+    // order that closed months ago.
+    //
+    // With the line recorded, "did this line leave a cost trail?" is answered by
+    // history instead of by current config. A line with no rows here never moved
+    // anything (a service, a fee) and is costed from orderDetails.unit_cost.
+    //
+    // Null for: movements from a sales INVOICE (invoice_id carries those, and
+    // invoice lines are not orderDetails), and everything written before
+    // migration 0066 — which is why lib/cogs.ts keeps the pre-0066 expression
+    // for orders that have no tagged movement.
+    order_detail_id: integer('order_detail_id').references(
+      (): AnyPgColumn => orderDetailsTable.id,
+    ),
     note: varchar('note', { length: 255 }).default(''),
     created_at: timestamp('created_at', { withTimezone: true })
       .defaultNow()
@@ -1176,6 +1363,12 @@ export const stockMovementsTable = pgTable(
     index('stock_movements_order_idx').on(table.order_id),
     // Serves the reports' per-order cost drill-down.
     index('stock_movements_order_reason_idx').on(table.order_id, table.reason),
+    // Serves the per-LINE cost lookup in lib/cogs.ts, which runs once per line
+    // of every order on the page. Partial: only tagged rows are ever looked up
+    // this way, and every row written before 0066 is null.
+    index('stock_movements_order_detail_idx')
+      .on(table.order_detail_id)
+      .where(sql`order_detail_id IS NOT NULL`),
     // Opname history: filter by outlet + reason, range/sort on created_at.
     index('stock_movements_outlet_reason_created_idx').on(
       table.outlet_id,

@@ -7,7 +7,13 @@ import { db } from "../db";
 import { outletsTable } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
-import { parseActiveOutletId, getSubscriptionGate } from "../lib/outlet-access";
+import {
+  parseActiveOutletId,
+  getSubscriptionGate,
+  hasFeature,
+  requireOutletAccess,
+} from "../lib/outlet-access";
+import { taxConfigFrom } from "../lib/tax";
 import { DEFAULT_COORDS, parseCoordPair } from "../lib/utils/coords";
 import { recomputeCourierReachable } from "../lib/service-area";
 import { and, sql } from "drizzle-orm";
@@ -177,6 +183,86 @@ export async function outletRoutes(app: FastifyInstance) {
       // mount and poll at all, rather than discovering it four requests in.
       outlet: { id, name, phone, address, lat, lon, avatar, is_open, features, tags, courier_reachable },
     });
+  });
+
+  /**
+   * Counter tax settings for the active outlet.
+   *
+   * Readable by anyone with outlet access, not just the owner: the cashier
+   * screen has to know the rate to show a tax line, and an employee standing at
+   * the till is exactly who needs it. `canUseTax` rides along so the settings
+   * UI can show the upgrade prompt instead of controls that won't save.
+   */
+  app.get("/api/outlet/tax", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, "cashier");
+    if (!access) return;
+
+    const config = taxConfigFrom(access.outlet);
+    return reply.send({
+      success: true,
+      canUseTax: hasFeature(access.gate, "tax"),
+      tax: {
+        // The stored values, not the coerced ones: a settings form has to show
+        // what is actually saved, including a rate of 0 that taxConfigFrom
+        // treats as "no tax".
+        enabled: access.outlet.tax_enabled,
+        rate: Number(access.outlet.tax_rate ?? 0),
+        inclusive: access.outlet.tax_inclusive,
+        label: access.outlet.tax_label,
+        active: config.enabled,
+      },
+    });
+  });
+
+  /**
+   * Change them. Owner only — this decides what every customer is charged and
+   * what the outlet owes, which is not a counter-staff decision — and gated on
+   * the `tax` plan feature (Max Lite and up).
+   *
+   * Changing the rate does NOT touch orders already taken: ordersTable freezes
+   * rate/amount/inclusive at sale time precisely so a correction today cannot
+   * restate what was charged last month.
+   */
+  app.patch("/api/outlet/tax", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, "owner");
+    if (!access) return;
+
+    if (!hasFeature(access.gate, "tax")) {
+      return reply.status(403).send({
+        success: false,
+        error: "Pajak kasir tersedia mulai paket Max Lite — upgrade paket untuk membukanya.",
+        code: "PLAN_FEATURE",
+      });
+    }
+
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const rate = Number(body.rate ?? 0);
+    // 100% is the ceiling because a rate at or above it makes the inclusive
+    // extraction meaningless (the tax would be the entire price or more), and
+    // no real PB1/PPN rate comes close. Rejecting beats clamping: a fat-fingered
+    // "110" should be a visible error, not a silent 100% tax on every sale.
+    if (!Number.isFinite(rate) || rate < 0 || rate >= 100) {
+      return reply
+        .status(400)
+        .send({ success: false, error: "Tarif pajak harus antara 0 dan 100." });
+    }
+
+    const label =
+      typeof body.label === "string" && body.label.trim() !== ""
+        ? body.label.trim().slice(0, 20)
+        : "Pajak";
+
+    await db
+      .update(outletsTable)
+      .set({
+        tax_enabled: body.enabled === true,
+        tax_rate: rate.toFixed(2),
+        tax_inclusive: body.inclusive === true,
+        tax_label: label,
+      })
+      .where(eq(outletsTable.id, access.outlet.id));
+
+    return reply.send({ success: true, message: "Pengaturan pajak disimpan." });
   });
 
   app.patch("/api/outlet/me", async (request, reply) => {

@@ -22,11 +22,16 @@ import { ReportFilterDialog, type ReportFilters, defaultFilters } from './report
 
 export type Dimension = 'payment' | 'cashier' | 'customer' | 'online';
 
+// `cogs` is the cost of goods sold, from the cost ledger where the sale moved
+// stock and from the price frozen on the line where it structurally could not
+// (a service, a fee). The server derives it once — see lib/cogs.ts — so profit
+// is always revenue minus THIS number, never a second opinion computed here.
 type Group = {
   key: string;
   label: string;
   orders: number;
   revenue: number;
+  cogs: number;
   profit: number;
   qty: number;
 };
@@ -41,6 +46,7 @@ type Row = {
   cashierName: string | null;
   paymentMethod: string | null;
   revenue: number;
+  cogs: number;
   profit: number;
   qty: number;
 };
@@ -67,7 +73,14 @@ function fmtDateTime(iso: string) {
 // The stored values are machine keys; these are what an owner reads.
 const PRETTY: Record<string, string> = {
   cash: 'Tunai',
-  non_cash: 'Non-Tunai',
+  qris: 'QRIS',
+  debit: 'Debit (EDC)',
+  credit: 'Kredit (EDC)',
+  transfer: 'Transfer',
+  // Pre-split rows: every non-cash sale was one bucket before the POS learned
+  // the difference. Nothing backfills them — the information to tell a QRIS
+  // sale from a card swipe was never captured — so they keep their own name.
+  non_cash: 'Non-Tunai (lama)',
   delivery: 'Antar Kurir',
   service: 'Layanan Jasa',
   materials: 'Bahan Bangunan',
@@ -178,9 +191,10 @@ export function SegmentReport({
     (a, g) => ({
       orders: a.orders + g.orders,
       revenue: a.revenue + g.revenue,
+      cogs: a.cogs + g.cogs,
       profit: a.profit + g.profit,
     }),
-    { orders: 0, revenue: 0, profit: 0 },
+    { orders: 0, revenue: 0, cogs: 0, profit: 0 },
   );
 
   return (
@@ -228,7 +242,7 @@ export function SegmentReport({
       {groups && (
         <>
           {summaryTotals && (
-            <div className="mt-5 grid grid-cols-3 gap-3">
+            <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
               <div className="rounded-2xl border border-border/60 bg-card p-3 shadow-sm">
                 <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Transaksi</p>
                 <p className="mt-0.5 text-lg font-black tabular-nums">{summaryTotals.orders}</p>
@@ -236,6 +250,10 @@ export function SegmentReport({
               <div className="rounded-2xl border border-border/60 bg-card p-3 shadow-sm">
                 <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Omzet</p>
                 <p className="mt-0.5 text-lg font-black tabular-nums">{fmtIDR(summaryTotals.revenue)}</p>
+              </div>
+              <div className="rounded-2xl border border-border/60 bg-card p-3 shadow-sm">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">HPP</p>
+                <p className="mt-0.5 text-lg font-black tabular-nums">{fmtIDR(summaryTotals.cogs)}</p>
               </div>
               <div className="rounded-2xl border border-border/60 bg-card p-3 shadow-sm">
                 <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Laba Kotor</p>
@@ -269,7 +287,8 @@ export function SegmentReport({
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-bold">{pretty(g.label)}</p>
                       <p className="text-[11px] text-muted-foreground">
-                        {g.orders} transaksi · {g.qty} item · laba {fmtIDR(g.profit)}
+                        {g.orders} transaksi · {g.qty} item · HPP {fmtIDR(g.cogs)} · laba{' '}
+                        {fmtIDR(g.profit)}
                       </p>
                     </div>
                     <span className="shrink-0 text-sm font-black tabular-nums">{fmtIDR(g.revenue)}</span>
@@ -293,13 +312,15 @@ export function SegmentReport({
               <p className="py-8 text-center text-sm text-muted-foreground">Tidak ada transaksi.</p>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[520px] text-sm">
+                <table className="w-full min-w-170 text-sm">
                   <thead>
                     <tr className="border-b text-left text-[11px] uppercase tracking-widest text-muted-foreground">
                       <th className="py-2 pr-3 font-bold">Waktu</th>
                       <th className="py-2 pr-3 font-bold">{groupHeading}</th>
                       <th className="py-2 pr-3 text-right font-bold">Item</th>
-                      <th className="py-2 text-right font-bold">Omzet</th>
+                      <th className="py-2 pr-3 text-right font-bold">Omzet</th>
+                      <th className="py-2 pr-3 text-right font-bold">HPP</th>
+                      <th className="py-2 text-right font-bold">Laba</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -310,7 +331,19 @@ export function SegmentReport({
                         </td>
                         <td className="py-2 pr-3 font-semibold">{pretty(r.label)}</td>
                         <td className="py-2 pr-3 text-right tabular-nums">{r.qty}</td>
-                        <td className="py-2 text-right font-black tabular-nums">{fmtIDR(r.revenue)}</td>
+                        <td className="py-2 pr-3 text-right font-black tabular-nums">{fmtIDR(r.revenue)}</td>
+                        <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                          {fmtIDR(r.cogs)}
+                        </td>
+                        {/* Red only when the sale actually lost money — a
+                            zero-cost line is not a loss, it is an unpriced one. */}
+                        <td
+                          className={`py-2 text-right font-black tabular-nums ${
+                            r.profit < 0 ? 'text-destructive' : ''
+                          }`}
+                        >
+                          {fmtIDR(r.profit)}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

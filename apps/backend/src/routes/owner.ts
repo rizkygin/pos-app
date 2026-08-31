@@ -25,8 +25,9 @@ import { getOutletByUserId } from "../lib/outlet-id";
 import { getOutletAccess, hasPermission, parseActiveOutletId, getSubscriptionGate, gateBlocks, type EmployeePermission } from "../lib/outlet-access";
 import { attachOrderItems } from "../lib/utils/order-items";
 import { APP_TIMEZONE, getUTCRangeFromLocalDate, getUTCRangeFromLocalMonth } from "../lib/timezone";
+import { getOpenShiftId } from "../lib/shift";
 import { money } from "../lib/money-sql";
-import { orderCogsSql } from "../lib/cogs";
+import { lineCogsSql, orderCogsSql } from "../lib/cogs";
 
 // Money columns (summary_price, buying_price) are varchar and a single blank
 // row makes the cast throw, killing the whole aggregate. See lib/money-sql.ts.
@@ -684,10 +685,12 @@ export async function ownerRoutes(app: FastifyInstance) {
         orders: sql<number>`count(distinct ${orderDetailsTable.order_id})`.mapWith(Number),
       };
 
-      // COGS comes from the cost ledger, and therefore has to be aggregated per
-      // ORDER rather than per line: a menu item's movements are written against
-      // its INGREDIENTS, so there is no line to attach them to. Hence a separate
-      // query instead of another column in kpiSelect.
+      // Aggregated per ORDER rather than per line, and so a separate query
+      // rather than another column in kpiSelect. Since 0066 a line CAN be costed
+      // on its own (see lineCogsSql, used by topProducts below), but only the
+      // order-level reader carries the pre-0066 branch — an order written before
+      // the tag has a ledger total and no way to split it — so this stays the
+      // more truthful of the two for the headline number.
       //
       // Windowed on orders.created_at rather than orderDetails.created_at (what
       // `scope` above uses). They are written in the same transaction, so the
@@ -742,13 +745,20 @@ export async function ownerRoutes(app: FastifyInstance) {
             name: productsTable.product_name,
             qty: sql<number>`coalesce(sum(${orderDetailsTable.quantity}), 0)`.mapWith(Number),
             revenue: sql<number>`coalesce(sum(${money(orderDetailsTable.summary_price)}), 0)`.mapWith(Number),
-            // Still the live buying_price join, NOT the cost ledger, and it can
-            // therefore disagree with the profit KPI above. Per-product cost
-            // cannot be read from the ledger: a menu item's movements are
-            // written against its ingredients, so cost attaches to the order,
-            // never to the product line that caused it. Treat this column as
-            // indicative ranking, not as the books.
-            profit: sql<number>`coalesce(sum(${money(orderDetailsTable.summary_price)} - ${money(productsTable.buying_price)} * ${orderDetailsTable.quantity}), 0)`.mapWith(Number),
+            // From the cost ledger, the same source as the profit KPI above.
+            // This used to be a live buying_price join with a note explaining
+            // that per-product cost was unreadable from the ledger — true until
+            // migration 0066 tagged each movement with the orderDetails row
+            // that caused it, ingredient movements of a composition included.
+            // Until then a nasi goreng cost whatever was typed into its
+            // buying_price, which for a recipe product is usually nothing, so
+            // the dishes an owner actually makes ranked as pure profit.
+            profit: sql<number>`coalesce(sum(${money(orderDetailsTable.summary_price)} - ${lineCogsSql({
+              id: orderDetailsTable.id,
+              unitCost: orderDetailsTable.unit_cost,
+              quantity: orderDetailsTable.quantity,
+              buyingPrice: productsTable.buying_price,
+            })}), 0)`.mapWith(Number),
           })
           .from(orderDetailsTable)
           .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
@@ -901,6 +911,17 @@ export async function ownerRoutes(app: FastifyInstance) {
       const now = new Date();
       const created_at = now >= startUTC && now <= endUTC ? now : startUTC;
 
+      // Money moved right now, while a shift is open, came out of (or went
+      // into) that drawer — petty cash for ice, a supplier paid from the till —
+      // so it belongs on that shift's closing report.
+      //
+      // Only for entries happening NOW. A backdated entry gets no shift: it
+      // describes a day that is over, and hanging it on today's open drawer
+      // would make that drawer come up short against a count that was already
+      // correct.
+      const isBackdated = created_at !== now;
+      const shift_id = isBackdated ? null : await getOpenShiftId(db, outlet.id);
+
       const timeFormatter = new Intl.DateTimeFormat("en-GB", { timeZone: timezone, hour: "2-digit", minute: "2-digit", hour12: false });
 
       if (type === "IN") {
@@ -913,7 +934,7 @@ export async function ownerRoutes(app: FastifyInstance) {
         if (!cat) return reply.status(400).send({ error: "Unknown category" });
 
         const [detail] = await db.insert(cashInDetailTable).values({ category_id: cat.id, money_amount: String(amount), type: "cash", created_at }).returning();
-        const [cf] = await db.insert(cashFlows).values({ outlet_id: outlet.id, cash_in_detail_id: detail.id }).returning();
+        const [cf] = await db.insert(cashFlows).values({ outlet_id: outlet.id, cash_in_detail_id: detail.id, shift_id }).returning();
 
         return { data: { id: String(cf.id), type: "IN", category, amount: Number(amount), date, time: timeFormatter.format(detail.created_at), note: "" } };
       }
@@ -928,7 +949,7 @@ export async function ownerRoutes(app: FastifyInstance) {
         if (!cat) return reply.status(400).send({ error: "Unknown category" });
 
         const [detail] = await db.insert(cashOutDetailTable).values({ category_id: cat.id, money_amount: String(amount), type: "cash", created_at }).returning();
-        const [cf] = await db.insert(cashFlows).values({ outlet_id: outlet.id, cash_out_detail_id: detail.id }).returning();
+        const [cf] = await db.insert(cashFlows).values({ outlet_id: outlet.id, cash_out_detail_id: detail.id, shift_id }).returning();
 
         return { data: { id: String(cf.id), type: "OUT", category, amount: Number(amount), date, time: timeFormatter.format(detail.created_at), note: "" } };
       }

@@ -27,6 +27,21 @@ import { money } from "../lib/money-sql";
 const MAX_RANGE_DAYS = 93; // ~3 months, the hard cap the UI also enforces
 
 /**
+ * The part of an order's tax that is already sitting inside its line prices.
+ *
+ * Counter tax lives on the order, never in orderDetails.summary_price, so under
+ * EXCLUSIVE pricing (the default) summary_price is already net of tax and this
+ * is zero — every figure below is correct without it.
+ *
+ * Under INCLUSIVE pricing ("harga sudah termasuk pajak") the line price
+ * contains the tax, so summing summary_price counts the tax office's money as
+ * sales. Subtracting this is what keeps revenue — and therefore profit and
+ * margin — honest for those outlets. See lib/tax.ts for the full asymmetry.
+ */
+const TAX_IN_PRICE = sql`case when coalesce(o.tax_inclusive, false)
+                              then coalesce(o.tax_amount, 0) else 0 end`;
+
+/**
  * Turn the two ways the reports pool says "no" into something an owner can act
  * on, instead of a 500 that reads like a bug.
  *
@@ -276,7 +291,8 @@ export async function reportRoutes(app: FastifyInstance) {
     try {
       const result = await reportDb.execute(sql`
         with base as (
-          select o.id, ${key} as grp_key, ${label} as grp_label
+          select o.id, ${key} as grp_key, ${label} as grp_label,
+                 ${TAX_IN_PRICE} as tax_in_price
           from ${dimensionSql(dimension).from}
           where ${where}
         ),
@@ -284,7 +300,7 @@ export async function reportRoutes(app: FastifyInstance) {
         select b.grp_key                          as key,
                min(b.grp_label)                   as label,
                count(*)::int                      as orders,
-               coalesce(sum(a.revenue), 0)::float8 as revenue,
+               (coalesce(sum(a.revenue), 0) - coalesce(sum(b.tax_in_price), 0))::float8 as revenue,
                coalesce(sum(a.cogs), 0)::float8    as cogs,
                coalesce(sum(a.qty), 0)::int        as qty
         from base b
@@ -308,10 +324,11 @@ export async function reportRoutes(app: FastifyInstance) {
         (acc, g) => ({
           orders: acc.orders + g.orders,
           revenue: acc.revenue + g.revenue,
+          cogs: acc.cogs + g.cogs,
           profit: acc.profit + g.profit,
           qty: acc.qty + g.qty,
         }),
-        { orders: 0, revenue: 0, profit: 0, qty: 0 },
+        { orders: 0, revenue: 0, cogs: 0, profit: 0, qty: 0 },
       );
 
       return { success: true, dimension, groups, totals };
@@ -362,7 +379,8 @@ export async function reportRoutes(app: FastifyInstance) {
                  ${key} as grp_key, ${label} as grp_label,
                  o.note ->> 'customerName' as customer_name,
                  o.note ->> 'cashierName'  as cashier_name,
-                 o.note ->> 'paymentMethod' as payment_method
+                 o.note ->> 'paymentMethod' as payment_method,
+                 ${TAX_IN_PRICE} as tax_in_price
           from ${dimensionSql(dimension).from}
           where ${where}
         ),
@@ -383,7 +401,7 @@ export async function reportRoutes(app: FastifyInstance) {
                to_json(p.created_at) #>> '{}' as created_at,
                p.status, p.fulfillment, p.grp_label as label,
                p.customer_name, p.cashier_name, p.payment_method,
-               coalesce(a.revenue, 0)::float8 as revenue,
+               (coalesce(a.revenue, 0) - coalesce(p.tax_in_price, 0))::float8 as revenue,
                coalesce(a.cogs, 0)::float8    as cogs,
                coalesce(a.qty, 0)::int        as qty,
                -- Counting the matched ORDERS is a walk of the window index;
@@ -414,6 +432,11 @@ export async function reportRoutes(app: FastifyInstance) {
           cashierName: r.cashier_name ?? null,
           paymentMethod: r.payment_method ?? null,
           revenue: Number(r.revenue),
+          // Both sides of the margin, not just the difference: an owner
+          // checking a suspicious row needs to see WHICH half moved. Same
+          // orderCogsSql the summary uses, so a row and its bucket can never
+          // disagree.
+          cogs: Number(r.cogs),
           profit: Number(r.revenue) - Number(r.cogs),
           qty: Number(r.qty),
         })),

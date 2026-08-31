@@ -27,6 +27,12 @@ import {
 import { Button } from '@/components/ui/button';
 import { formatCurrency } from '@/lib/utils/format';
 import { API_URL } from '@/lib/api-url';
+import {
+  POS_PAYMENT_OPTIONS,
+  type PosPaymentMethod,
+} from '@/lib/pos-payment';
+import { ShiftBar } from './shift-bar';
+import { computeTax, taxLineLabel, type TaxConfig } from '@/lib/tax';
 import { resolveProductImage, isBackendImage } from '@/lib/image-src';
 
 type Product = {
@@ -74,7 +80,7 @@ type HeldTab = {
   orderNote: string;
   discountType: 'percentage' | 'amount';
   discountInput: string;
-  paymentMethod: 'cash' | 'non_cash';
+  paymentMethod: PosPaymentMethod;
   amountPaidInput: string;
 };
 
@@ -98,6 +104,21 @@ type CashierClientProps = {
   outletPhone: string;
   outletLogo: string;
   cashierName: string;
+  /**
+   * Plan entitlements, resolved server-side on the page so the counter never
+   * flashes a control the merchant can't use. Both are re-checked where they
+   * matter: opening a shift is enforced by the backend, while the pager is
+   * purely device-local (it never reaches the server), so this IS its only
+   * boundary — which is the honest extent of what a UI-only feature can have.
+   */
+  canUseShift: boolean;
+  canUsePager: boolean;
+  /**
+   * The outlet's counter tax, already resolved against the plan gate on the
+   * server (disabled below Max Lite). Used for DISPLAY only — the server
+   * recomputes the stored figure from its own copy of these settings.
+   */
+  taxConfig: TaxConfig;
   initialProducts: Product[];
 };
 
@@ -124,6 +145,9 @@ export const CashierClient = ({
   outletPhone,
   outletLogo,
   cashierName,
+  canUseShift,
+  canUsePager,
+  taxConfig,
   initialProducts,
 }: CashierClientProps) => {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
@@ -162,9 +186,10 @@ export const CashierClient = ({
   >(null);
   const [noteDraft, setNoteDraft] = useState('');
   const [amountPaidInput, setAmountPaidInput] = useState('0');
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'non_cash'>(
-    'cash',
-  );
+  const [paymentMethod, setPaymentMethod] = useState<PosPaymentMethod>('cash');
+  // Bumped after every checkout so the shift strip's running drawer total picks
+  // up the sale that was just rung up.
+  const [shiftRefresh, setShiftRefresh] = useState(0);
   // Blocks duplicate checkouts: ref guards synchronously against re-entry (rapid
   // clicks / Cmd+Enter key-repeat), state drives the disabled button UI.
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -562,26 +587,39 @@ export const CashierClient = ({
         ? `Discount (${discountValue}%)`
         : 'Discount'
       : 'Discount';
+  // Net of discount, BEFORE tax. This is what gets posted as `total`: the
+  // server charges tax on it from the outlet's own settings rather than
+  // trusting a number the client worked out.
   const finalTotal = cartTotal - discountAmount;
 
+  // Tax sits outside the line, so it is added (or extracted) once, here, on the
+  // discounted amount — never folded into any item price.
+  const tax = computeTax(finalTotal, taxConfig);
+  // What the customer actually hands over. Under inclusive pricing this equals
+  // finalTotal; under exclusive it is finalTotal plus the tax.
+  const grandTotal = tax.total;
+
   // Lazy mode pays the exact amount due, so change is always 0 and the payment
-  // can never be insufficient.
-  const amountPaid = lazyMode ? finalTotal : parseFloat(amountPaidInput) || 0;
-  const changeDue = Math.max(0, amountPaid - finalTotal);
+  // can never be insufficient. Everything about tendering and change is against
+  // grandTotal — the customer pays the tax too, and taking cash against the
+  // pre-tax figure would hand back the tax as change.
+  const amountPaid = lazyMode ? grandTotal : parseFloat(amountPaidInput) || 0;
+  const changeDue = Math.max(0, amountPaid - grandTotal);
   const isInsufficient =
     !lazyMode &&
     paymentMethod === 'cash' &&
     amountPaidInput.trim() !== '' &&
-    amountPaid < finalTotal;
+    amountPaid < grandTotal;
   const checkoutDisabled = cart.length === 0 || isInsufficient;
 
   // Two live orders on one buzzer is exactly the mix-up the number is meant to
   // prevent, so surface the clash instead of silently allowing it.
   const pagerClash = useMemo(() => {
+    if (!canUsePager) return false;
     const n = pagerNumber.trim();
     if (!n) return false;
     return tabs.some((t) => t.id !== activeTabId && t.pagerNumber.trim() === n);
-  }, [pagerNumber, tabs, activeTabId]);
+  }, [canUsePager, pagerNumber, tabs, activeTabId]);
 
   // Shared slip payload. Before checkout there's no server order id yet, so the
   // active tab's id stands in — stable across reprints of the same tab, which
@@ -591,7 +629,9 @@ export const CashierClient = ({
     (): ReceiptData => ({
       orderId: activeTabId || crypto.randomUUID(),
       customerName: customerName.trim(),
-      pagerNumber: pagerNumber.trim(),
+      // A tab held from before a downgrade still carries its number in
+      // localStorage; the plan says it isn't printed any more.
+      pagerNumber: canUsePager ? pagerNumber.trim() : '',
       orderNote: orderNote.trim(),
       items: cart.map((i) => ({
         product_name: i.product.product_name,
@@ -603,10 +643,13 @@ export const CashierClient = ({
       subtotal: cartTotal,
       discountAmount,
       discountLabel,
-      total: finalTotal,
+      taxLabel: tax.applies ? taxLineLabel(taxConfig) : undefined,
+      taxAmount: tax.applies ? tax.amount : undefined,
+      taxInclusive: taxConfig.inclusive,
+      total: grandTotal,
       paymentMethod,
       amountPaid:
-        paymentMethod === 'cash' && amountPaid > 0 ? amountPaid : finalTotal,
+        paymentMethod === 'cash' && amountPaid > 0 ? amountPaid : grandTotal,
       changeDue,
       date: new Date(),
       outletName,
@@ -624,8 +667,11 @@ export const CashierClient = ({
       orderNote,
       discountAmount,
       discountLabel,
-      finalTotal,
+      grandTotal,
+      tax,
+      taxConfig,
       paymentMethod,
+      canUsePager,
       amountPaid,
       changeDue,
       outletName,
@@ -672,15 +718,19 @@ export const CashierClient = ({
     const snapshotTotal = cartTotal;
     const snapshotDiscountAmount = discountAmount;
     const snapshotDiscountLabel = discountLabel;
+    // Posted as `total`: the server wants the pre-tax, post-discount figure and
+    // charges tax on it itself. Sending the grand total would tax the tax.
     const snapshotFinalTotal = finalTotal;
+    const snapshotGrandTotal = grandTotal;
+    const snapshotTax = tax;
     const snapshotCustomerName = customerName.trim();
-    const snapshotPagerNumber = pagerNumber.trim();
+    const snapshotPagerNumber = canUsePager ? pagerNumber.trim() : '';
     const snapshotPaymentMethod = paymentMethod;
     const snapshotAmountPaid =
       snapshotPaymentMethod === 'cash' && amountPaid > 0
         ? amountPaid
-        : snapshotFinalTotal;
-    const snapshotChangeDue = Math.max(0, snapshotAmountPaid - snapshotFinalTotal);
+        : snapshotGrandTotal;
+    const snapshotChangeDue = Math.max(0, snapshotAmountPaid - snapshotGrandTotal);
     try {
       const response = await fetch(`${API_URL}/api/add-order-detail`, {
         method: 'POST',
@@ -710,6 +760,9 @@ export const CashierClient = ({
         );
       }
       setCartOpen(false);
+      // The sale just changed what should be in the drawer, so re-read the
+      // shift strip. Cheap: one small indexed query, only after a real sale.
+      setShiftRefresh((n) => n + 1);
       // Order is paid: drop this tab and jump to the next / a fresh one. This
       // resets cart, customer, discount, and payment for the new active tab.
       completeActiveTab();
@@ -729,7 +782,10 @@ export const CashierClient = ({
           subtotal: snapshotTotal,
           discountAmount: snapshotDiscountAmount,
           discountLabel: snapshotDiscountLabel,
-          total: snapshotFinalTotal,
+          taxLabel: snapshotTax.applies ? taxLineLabel(taxConfig) : undefined,
+          taxAmount: snapshotTax.applies ? snapshotTax.amount : undefined,
+          taxInclusive: taxConfig.inclusive,
+          total: snapshotGrandTotal,
           paymentMethod: snapshotPaymentMethod,
           amountPaid: snapshotAmountPaid,
           changeDue: snapshotChangeDue,
@@ -758,6 +814,10 @@ export const CashierClient = ({
     finalTotal,
     isInsufficient,
     paymentMethod,
+    canUsePager,
+    grandTotal,
+    tax,
+    taxConfig,
     outletId,
     outletName,
     outletAddress,
@@ -786,6 +846,12 @@ export const CashierClient = ({
       <div className="flex-1 flex flex-col min-w-0 bg-background/50 backdrop-blur-sm border-r">
         {/* Header & Search */}
         <div className="p-3 pb-0">
+          <ShiftBar
+            cashierName={cashierName}
+            refreshSignal={shiftRefresh}
+            canUseShift={canUseShift}
+          />
+
           {/* Mobile: search + barcode */}
           <div className="flex items-center gap-2 mb-1 md:hidden">
             <div className="relative flex-1">
@@ -1010,7 +1076,9 @@ export const CashierClient = ({
             const activeTab = tabs.find((t) => t.id === activeTabId);
             const activeLabel =
               activeTab?.customerName.trim() || activeTab?.label || 'Pesanan';
-            const activePager = activeTab?.pagerNumber.trim();
+            const activePager = canUsePager
+              ? activeTab?.pagerNumber.trim()
+              : '';
             return (
               <button
                 onClick={() => setTabsMenuOpen((v) => !v)}
@@ -1063,16 +1131,20 @@ export const CashierClient = ({
                       }`}
                     >
                       {/* Pager number leads: when the kitchen calls out a
-                          number, this list is what gets scanned. */}
-                      <span
-                        className={`flex h-6 w-8 shrink-0 items-center justify-center rounded-md text-xs font-black tabular-nums ${
-                          t.pagerNumber.trim()
-                            ? 'bg-blue-600 text-white'
-                            : 'bg-muted text-muted-foreground/50'
-                        }`}
-                      >
-                        {t.pagerNumber.trim() || '--'}
-                      </span>
+                          number, this list is what gets scanned. Without the
+                          feature the column is dropped rather than left as a
+                          row of empty placeholders. */}
+                      {canUsePager && (
+                        <span
+                          className={`flex h-6 w-8 shrink-0 items-center justify-center rounded-md text-xs font-black tabular-nums ${
+                            t.pagerNumber.trim()
+                              ? 'bg-blue-600 text-white'
+                              : 'bg-muted text-muted-foreground/50'
+                          }`}
+                        >
+                          {t.pagerNumber.trim() || '--'}
+                        </span>
+                      )}
                       <span className="flex-1 truncate">{label}</span>
                       {count > 0 && (
                         <span className="shrink-0 rounded-full bg-muted px-1.5 text-[10px] font-semibold">
@@ -1112,7 +1184,10 @@ export const CashierClient = ({
             <div className="flex min-w-0 flex-1 items-center gap-2">
               {/* The pager box takes the slot the decorative cart icon used to
                   occupy, so the number is always on screen without costing a
-                  row in an already-tight sidebar. */}
+                  row in an already-tight sidebar. Below Max Lite it isn't
+                  rendered at all — a disabled box that explains itself would
+                  cost more room than the feature does. */}
+              {canUsePager && (
               <label
                 className={`flex shrink-0 flex-col items-center rounded-xl border-2 px-1.5 py-1 transition-colors ${
                   pagerClash
@@ -1138,6 +1213,7 @@ export const CashierClient = ({
                   className="w-8 bg-transparent text-center text-base font-black tabular-nums outline-none placeholder:font-bold placeholder:text-muted-foreground/50"
                 />
               </label>
+              )}
               <div className="min-w-0 flex-1">
                 <input
                   type="text"
@@ -1380,11 +1456,27 @@ export const CashierClient = ({
                 {formatCurrency(discountAmount)}
               </span>
             </div>
+            {tax.applies && (
+              <div className="flex justify-between items-center text-sm mt-1">
+                <span className="text-muted-foreground">
+                  {taxLineLabel(taxConfig)}
+                  {/* Inclusive tax doesn't change what's owed, so say so —
+                      otherwise the row reads like a charge that was left out
+                      of the total. */}
+                  {taxConfig.inclusive && (
+                    <span className="ml-1 text-[11px]">(termasuk)</span>
+                  )}
+                </span>
+                <span className="font-semibold">
+                  {formatCurrency(tax.amount)}
+                </span>
+              </div>
+            )}
             <div className="h-px w-full bg-border my-1.5" />
             <div className="flex justify-between items-end">
               <span className="text-base font-bold">Total</span>
               <span className="text-2xl font-black text-blue-600 tracking-tight">
-                {formatCurrency(Number(finalTotal))}
+                {formatCurrency(Number(grandTotal))}
               </span>
             </div>
           </div>
@@ -1441,26 +1533,36 @@ export const CashierClient = ({
                 <span
                   className={`text-sm font-bold ${isInsufficient ? 'text-rose-500' : 'text-emerald-600'}`}
                 >
-                  {formatCurrency(isInsufficient ? finalTotal - amountPaid : changeDue)}
+                  {formatCurrency(isInsufficient ? grandTotal - amountPaid : changeDue)}
                 </span>
               </div>
             </div>
           )}
 
-          {paymentMethod === 'non_cash' && (
-            <div className="mb-3 flex items-center justify-between rounded-lg bg-blue-50 px-3 py-2">
-              <span className="text-xs font-bold text-blue-600">
-                Non-cash payment selected
-              </span>
+          {/* How the customer paid. Always visible rather than hidden behind a
+              toggle: it is the field the shift report and every payment report
+              bucket on, and a cashier who has to go looking for it is a cashier
+              who leaves it on Tunai. Cash leads because most counter sales are.
+
+              Picking anything but Tunai also clears an insufficient-cash state
+              (isInsufficient only applies to cash), which is the usual reason
+              to switch mid-sale. */}
+          <div className="mb-3 flex flex-wrap gap-1.5">
+            {POS_PAYMENT_OPTIONS.map((opt) => (
               <button
+                key={opt.value}
                 type="button"
-                onClick={() => setPaymentMethod('cash')}
-                className="text-xs font-bold text-blue-600 underline underline-offset-2 hover:text-blue-700"
+                onClick={() => setPaymentMethod(opt.value)}
+                className={`rounded-lg border-2 px-2.5 py-1.5 text-xs font-bold transition-colors ${
+                  paymentMethod === opt.value
+                    ? 'border-blue-600 bg-blue-600 text-white'
+                    : 'border-border bg-background text-muted-foreground hover:bg-muted'
+                }`}
               >
-                Undo
+                {opt.label}
               </button>
-            </div>
-          )}
+            ))}
+          </div>
 
           {/* Pay-first flow: take the money and print both slips while the tab
               stays open, so the pager number and notes remain on screen until
@@ -1476,29 +1578,21 @@ export const CashierClient = ({
               <Printer className="mr-1.5 h-4 w-4" />
               Struk
             </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={printKitchenTicket}
-              disabled={cart.length === 0}
-              className="h-11 flex-1 rounded-2xl border-2 text-sm font-bold"
-            >
-              <ChefHat className="mr-1.5 h-4 w-4" />
-              Dapur
-            </Button>
-          </div>
-
-          <div className="flex gap-2">
-            {isInsufficient && (
+            {canUsePager && (
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => setPaymentMethod('non_cash')}
-                className="h-12 shrink-0 rounded-2xl border-2 px-4 text-sm font-bold"
+                onClick={printKitchenTicket}
+                disabled={cart.length === 0}
+                className="h-11 flex-1 rounded-2xl border-2 text-sm font-bold"
               >
-                Non-Cash
+                <ChefHat className="mr-1.5 h-4 w-4" />
+                Dapur
               </Button>
             )}
+          </div>
+
+          <div className="flex gap-2">
             <Button
               onClick={handleCheckout}
               disabled={checkoutDisabled || isSubmitting}
@@ -1614,7 +1708,7 @@ export const CashierClient = ({
             </span>
           </div>
           <span className="font-black">
-            {formatCurrency(finalTotal)}
+            {formatCurrency(grandTotal)}
           </span>
         </button>
       </div>

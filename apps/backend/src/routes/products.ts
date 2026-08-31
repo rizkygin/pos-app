@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import path from "node:path";
 import fs from "node:fs/promises";
@@ -20,7 +20,7 @@ import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 import { getOutletAccess, requireOutletAccess, parseActiveOutletId } from "../lib/outlet-access";
 import { recalcOutletFeatures } from "../lib/outlet-features";
-import { RecipeGraphError, applyProduction, findRecipeCycle } from "../lib/stock";
+import { RecipeGraphError, applyProduction, findRecipeCycle, previewProduction } from "../lib/stock";
 
 const UPLOADS_ROOT = path.join(process.cwd(), "uploads");
 const PRODUCTS_DIR = path.join(UPLOADS_ROOT, "products");
@@ -657,6 +657,63 @@ export async function productRoutes(app: FastifyInstance) {
   // Make an in-house intermediate: its ingredients go out, the batch comes in.
   // qty is in the product's OWN stock unit (2.5 kg of sambal), not in batches —
   // products.yield_qty is only the form's default for that number.
+  // What a batch WOULD cost, before committing to it. Read-only.
+  //
+  // Runs inside a transaction purely so it borrows the same Tx type the write
+  // path uses; nothing is written and it is rolled back on the way out.
+  app.get("/api/products/:id/production-preview", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, "stock");
+    if (!access) return;
+    const productId = (request.params as { id: string }).id;
+    const query = request.query as { qty?: string; mode?: string };
+    const qty = Number(query.qty);
+    if (!Number.isFinite(qty) || qty <= 0) {
+      return reply.status(400).send({ success: false, message: "Jumlah produksi harus lebih dari 0" });
+    }
+    // "raw" walks past produced intermediates down to the materials nothing is
+    // made from — a planning view, not what a sale deducts. See expandRecipe.
+    const mode = query.mode === "raw" ? "raw" : "ledger";
+
+    const [product] = await db
+      .select({
+        name: productsTable.product_name,
+        unit: productsTable.unit,
+        track_stock: productsTable.track_stock,
+        outlet_id: productsTable.outlet_id,
+      })
+      .from(productsTable)
+      .where(eq(productsTable.id, productId))
+      .limit(1);
+    if (!product || product.outlet_id !== access.outlet.id) {
+      return reply.status(404).send({ success: false, message: "Product not found" });
+    }
+
+    try {
+      const preview = await db.transaction(async (tx) => {
+        const out = await previewProduction(tx, { outletId: access.outlet.id, productId, qty, mode });
+        return out;
+      });
+      return reply.send({
+        success: true,
+        mode,
+        product: { name: product.name, unit: product.unit, track_stock: product.track_stock },
+        qty,
+        items: preview.items,
+        total_cost: preview.totalCost,
+        // The number the owner is actually deciding on: what one unit of this
+        // batch will be worth. applyProduction divides by the qty actually made,
+        // not by yield_qty, so the preview must too.
+        unit_cost: qty > 0 ? Number((preview.totalCost / qty).toFixed(4)) : 0,
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.startsWith("RECIPE_CYCLE") || msg.startsWith("RECIPE_TOO_DEEP")) {
+        return reply.status(409).send({ success: false, message: "Resep produk ini berputar — perbaiki dulu." });
+      }
+      throw e;
+    }
+  });
+
   app.post("/api/products/:id/production", async (request, reply) => {
     const access = await requireOutletAccess(request, reply, "stock");
     if (!access) return;
@@ -701,6 +758,93 @@ export async function productRoutes(app: FastifyInstance) {
       }
       throw e;
     }
+  });
+
+  // Past batches: the POSITIVE 'production' movements, which are the batch
+  // itself coming in. The negative rows of the same run are its ingredients
+  // going out — same reason, opposite sign — and listing both would show every
+  // batch three or four times over.
+  //
+  // unit_cost on that row is what the batch was actually worth per unit at the
+  // moment it was made, which is the number this page exists to show: it is the
+  // only place an owner can see that sambal got more expensive without anyone
+  // changing a price.
+  app.get("/api/production/history", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, "stock");
+    if (!access) return;
+    const cap = Math.min(Number((request.query as { limit?: string }).limit) || 50, 200);
+
+    const rows = await db
+      .select({
+        id: stockMovementsTable.id,
+        product_id: stockMovementsTable.product_id,
+        product_name: productsTable.product_name,
+        unit: productsTable.unit,
+        qty: stockMovementsTable.qty_change,
+        unit_cost: stockMovementsTable.unit_cost,
+        total_cost: stockMovementsTable.cost_change,
+        note: stockMovementsTable.note,
+        created_at: stockMovementsTable.created_at,
+      })
+      .from(stockMovementsTable)
+      .innerJoin(productsTable, eq(productsTable.id, stockMovementsTable.product_id))
+      .where(
+        and(
+          eq(stockMovementsTable.outlet_id, access.outlet.id),
+          eq(stockMovementsTable.reason, "production"),
+          gt(stockMovementsTable.qty_change, "0"),
+        ),
+      )
+      .orderBy(desc(stockMovementsTable.created_at), desc(stockMovementsTable.id))
+      .limit(cap);
+
+    return reply.send({ success: true, batches: rows });
+  });
+
+  // Write back ONLY the selling price. Deliberately not /api/products/update:
+  // that route resolves courier_deliverable and the range-price fields from the
+  // body it is given, so a deliberately sparse "just the price" call there would
+  // reinterpret fields the caller never meant to touch. A one-column update
+  // cannot.
+  //
+  // Range-priced products (a service quoted between two numbers) are refused
+  // rather than silently flattened to a single price — the calculator has no
+  // opinion about which end of the range it just computed.
+  app.patch("/api/products/:id/price", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, "products");
+    if (!access) return;
+    const productId = (request.params as { id: string }).id;
+    const price = Number((request.body as { price?: number | string })?.price);
+
+    if (!Number.isFinite(price) || price < 0) {
+      return reply.status(400).send({ success: false, message: "Harga tidak valid" });
+    }
+
+    const [existing] = await db
+      .select({
+        outlet_id: productsTable.outlet_id,
+        lowest_price: productsTable.lowest_price,
+        highest_price: productsTable.highest_price,
+      })
+      .from(productsTable)
+      .where(eq(productsTable.id, productId))
+      .limit(1);
+    if (!existing || existing.outlet_id !== access.outlet.id) {
+      return reply.status(404).send({ success: false, message: "Product not found" });
+    }
+    if (existing.lowest_price || existing.highest_price) {
+      return reply.status(409).send({
+        success: false,
+        message: "Produk ini pakai harga rentang — atur harganya lewat form produk.",
+      });
+    }
+
+    await db
+      .update(productsTable)
+      .set({ price: String(Math.round(price)) })
+      .where(eq(productsTable.id, productId));
+
+    return reply.send({ success: true, price: String(Math.round(price)) });
   });
 
   // ── Menu groups: owner-defined sections for the public /menu page ────────

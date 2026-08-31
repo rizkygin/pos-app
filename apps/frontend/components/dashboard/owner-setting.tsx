@@ -15,6 +15,7 @@ import { parseCoord, isValidCoord } from "@/lib/coords";
 import { haversineKm } from "@/lib/haversine";
 import { getCurrentPosition, geolocationMessage, GEOLOCATION_OPTIONS } from "@/lib/geolocation";
 import { PushNotificationCard } from "@/components/dashboard/push-notification-card";
+import { TaxSettingsCard } from "@/components/dashboard/tax-settings-card";
 
 const FEATURE_META = ORDER_FEATURES.filter((f) => f.isAvailable);
 
@@ -240,6 +241,9 @@ export function OwnerSetting() {
 
                 {/* ── Push Notifications ───────────────────────────────── */}
                 <PushNotificationCard />
+
+                {/* ── Counter tax (PB1 / PPN) ──────────────────────────── */}
+                <TaxSettingsCard />
 
                 {/* ── Avatar ────────────────────────────────────────────── */}
                 <div className="flex items-center gap-5 p-5 rounded-2xl border border-border/60 bg-card shadow-sm">

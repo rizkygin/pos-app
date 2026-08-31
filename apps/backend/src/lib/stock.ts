@@ -15,6 +15,13 @@ type SaleLine = {
   // The POS order that caused it; null for invoices. Recorded so a cancellation
   // can replay these exact rows instead of re-deriving them.
   orderId?: string;
+  // The orderDetails row this sale line IS. Stamped on every movement the line
+  // produces — including the ingredient movements of a composition, which carry
+  // a different product_id and would otherwise be unattributable. lib/cogs.ts
+  // costs a line from its movements when it has any and from the line's frozen
+  // unit_cost when it has none; that is only sound if EVERY movement a line
+  // causes is tagged here.
+  orderDetailId?: number;
   // Ledger note, e.g. "POS <orderId>". Recipe rows get the menu-item context
   // appended so the opname history explains why an ingredient dropped.
   note?: string;
@@ -109,6 +116,23 @@ type Leaf = {
 // Quantities multiply along the path in float and are rounded ONCE, by the
 // caller, at write time. Rounding at every level compounds badly at the
 // 0.005-per-portion scale these recipes are actually written in.
+//
+// `mode` decides where the walk stops, and the two modes answer different
+// questions:
+//
+//   "ledger" (default) — stop at track_stock. What a sale ACTUALLY deducts, and
+//     therefore what it actually costs: an Espresso that is produced in batches
+//     is taken at its own average, not re-expanded into beans. Every write path
+//     uses this; changing it would change what sales and cancellations move.
+//
+//   "raw" — keep descending while the ingredient has a recipe at all, stopping
+//     only at things nothing is made from. Answers "what raw materials does one
+//     of these consume", which is a planning question, not a bookkeeping one.
+//     Read-only callers only (the HPP calculator).
+//
+// They agree exactly when every intermediate's avg_cost equals what its recipe
+// costs today, and diverge when a batch was made at old prices — which is the
+// honest difference between "what it cost" and "what it would cost".
 async function expandRecipe(
   tx: Tx,
   productId: string,
@@ -118,6 +142,7 @@ async function expandRecipe(
   // Display names of the composites walked through, nearest-first.
   via: string[] = [],
   into: Map<string, Leaf> = new Map(),
+  mode: "ledger" | "raw" = "ledger",
 ): Promise<Leaf[]> {
   if (path.includes(productId)) {
     throw new Error(`RECIPE_CYCLE: ${[...path, productId].join(" -> ")}`);
@@ -134,6 +159,11 @@ async function expandRecipe(
       stock: ingredient.stock,
       name: ingredient.product_name,
       track_stock: ingredient.track_stock,
+      // Only consulted in "raw" mode, where having a recipe — not holding
+      // stock — is what makes something worth descending into.
+      has_recipe: sql<boolean>`exists (
+        select 1 from recipe_items r2 where r2.product_id = ${recipeItemsTable.ingredient_id}
+      )`,
     })
     .from(recipeItemsTable)
     .innerJoin(ingredient, eq(ingredient.id, recipeItemsTable.ingredient_id))
@@ -143,9 +173,11 @@ async function expandRecipe(
     const consumed = Number(r.per_unit) * qty;
     if (!Number.isFinite(consumed) || consumed <= 0) continue;
 
-    if (!r.track_stock) {
+    const descend = mode === "raw" ? r.has_recipe : !r.track_stock;
+    if (descend) {
       // Pass-through composite: it holds no stock of its own, so nothing moves
-      // here — keep walking down to the things that do.
+      // here — keep walking down to the things that do. (In "raw" mode the same
+      // step is taken for anything made from something else, tracked or not.)
       await expandRecipe(
         tx,
         r.ingredient_id,
@@ -153,6 +185,7 @@ async function expandRecipe(
         [...path, productId],
         [...via, r.name],
         into,
+        mode,
       );
       continue;
     }
@@ -191,7 +224,7 @@ function leafNote(note: string | undefined, rootName: string, qty: number, via: 
 // Overselling is allowed; returns "name: stok X, terjual Y" warnings so
 // invoice posting can surface them without failing the sale.
 export async function applySaleStockOut(tx: Tx, line: SaleLine): Promise<string[]> {
-  const { outletId, productId, qty, invoiceId, orderId, note } = line;
+  const { outletId, productId, qty, invoiceId, orderId, orderDetailId, note } = line;
   const warnings: string[] = [];
 
   const [p] = await tx
@@ -215,6 +248,7 @@ export async function applySaleStockOut(tx: Tx, line: SaleLine): Promise<string[
       reason: "sales",
       invoiceId,
       orderId,
+      orderDetailId,
       note: note ?? "",
     });
     return warnings;
@@ -238,6 +272,9 @@ export async function applySaleStockOut(tx: Tx, line: SaleLine): Promise<string[
       reason: "sales",
       invoiceId,
       orderId,
+      // The leaf is beras; the LINE is Nasi Goreng. Tagging the line is what
+      // makes this movement's cost attributable to the thing that was sold.
+      orderDetailId,
       note: leafNote(note, p.name, qty, leaf.via),
     });
   }
@@ -275,6 +312,7 @@ export async function applyOrderStockReturn(
       product_id: stockMovementsTable.product_id,
       qty_change: stockMovementsTable.qty_change,
       unit_cost: stockMovementsTable.unit_cost,
+      order_detail_id: stockMovementsTable.order_detail_id,
       note: stockMovementsTable.note,
     })
     .from(stockMovementsTable)
@@ -297,6 +335,12 @@ export async function applyOrderStockReturn(
       // reason this path replays quantities instead of re-deriving them. Null on
       // pre-0063 rows, where postMovement falls back to the average.
       unitCost: m.unit_cost != null ? Number(m.unit_cost) : null,
+      // Carried from the row being reversed, not re-derived: the void has to
+      // land on the SAME line as the sale it undoes, or that line's ledger
+      // rows stop netting to zero and lib/cogs.ts reports a cost for goods
+      // that came back. Null on pre-0066 rows, which is correct — those orders
+      // are read by the pre-0066 expression anyway.
+      orderDetailId: m.order_detail_id,
       // Keep the sale's own trail ("Resep: Nasi Goreng ×2 (via Sambal)") so the
       // opname history still explains which dish put this back.
       note: `${note ? `${note} · ` : ""}${m.note ?? ""}`.slice(0, 255),
@@ -316,7 +360,7 @@ export async function applyOrderStockReturn(
 // Deliberately returns no warnings: overselling is a concern when stock leaves,
 // not when it returns.
 export async function applySaleStockReturn(tx: Tx, line: SaleLine): Promise<void> {
-  const { outletId, productId, qty, invoiceId, orderId, note } = line;
+  const { outletId, productId, qty, invoiceId, orderId, orderDetailId, note } = line;
 
   const [p] = await tx
     .select({
@@ -336,6 +380,7 @@ export async function applySaleStockReturn(tx: Tx, line: SaleLine): Promise<void
       reason: "void",
       invoiceId,
       orderId,
+      orderDetailId,
       note: note ?? "",
     });
     return;
@@ -354,9 +399,60 @@ export async function applySaleStockReturn(tx: Tx, line: SaleLine): Promise<void
       reason: "void",
       invoiceId,
       orderId,
+      orderDetailId,
       note: leafNote(note, p.name, qty, leaf.via),
     });
   }
+}
+
+// What a production run WOULD consume, without writing anything.
+//
+// Same expandRecipe the real run uses, so the preview cannot describe a
+// different batch than the one applyProduction is about to book — the failure
+// mode of a hand-written second expansion is that it drifts from the first and
+// quietly lies about cost.
+//
+// Prices each leaf at its CURRENT average, which is exactly what the real run
+// will pay (postMovement values an ordinary outflow at the running average). The
+// two can only disagree if stock moves in between, which is the same race any
+// preview has and is why nothing here is authoritative until it is booked.
+export async function previewProduction(
+  tx: Tx,
+  line: { outletId: number; productId: string; qty: number; mode?: "ledger" | "raw" },
+): Promise<{
+  items: { product_id: string; name: string; qty: number; stock: number; unit_cost: number; cost: number; via: string[]; short: boolean }[];
+  totalCost: number;
+}> {
+  const { productId, qty } = line;
+
+  const leaves = await expandRecipe(tx, productId, qty, [], [], new Map(), line.mode ?? "ledger");
+
+  const items = [];
+  let totalCost = 0;
+  for (const leaf of leaves) {
+    // toFixed(3) here for the same reason the write path does it: the preview
+    // must round where the real run rounds, or it shows a cost the batch will
+    // not actually have.
+    const consumed = Number(leaf.qty.toFixed(3));
+    if (consumed <= 0) continue;
+    const unitCost = await currentUnitCost(tx, leaf.product_id);
+    const cost = Number((consumed * unitCost).toFixed(2));
+    totalCost += cost;
+    items.push({
+      product_id: leaf.product_id,
+      name: leaf.name,
+      qty: consumed,
+      stock: Number(leaf.stock),
+      unit_cost: unitCost,
+      cost,
+      via: leaf.via,
+      // Shown, never blocking — the same stance applyProduction takes. The food
+      // gets cooked whether or not the books agree.
+      short: Number(leaf.stock) < consumed,
+    });
+  }
+
+  return { items, totalCost: Number(totalCost.toFixed(2)) };
 }
 
 // ── Production batches ──────────────────────────────────────────────────────

@@ -15,6 +15,9 @@ import {
   Landmark,
   Store,
   Monitor,
+  ClipboardCheck,
+  Bell,
+  Percent,
   History,
   Smartphone,
   Receipt,
@@ -48,6 +51,9 @@ type Plan = {
     cashflow?: boolean;
     report?: boolean;
     reportInvoice?: boolean;
+    cashierShift?: boolean;
+    pager?: boolean;
+    tax?: boolean;
   };
 };
 
@@ -633,6 +639,15 @@ export function SubscriptionClient() {
                     </FeatureRow>
                     <FeatureRow ok={!!f.stock} icon={Boxes}>
                       Manajemen stok
+                    </FeatureRow>
+                    <FeatureRow ok={!!f.cashierShift} icon={ClipboardCheck}>
+                      Shift kasir &amp; laporan penutupan
+                    </FeatureRow>
+                    <FeatureRow ok={!!f.pager} icon={Bell}>
+                      Nomor pager &amp; tiket dapur
+                    </FeatureRow>
+                    <FeatureRow ok={!!f.tax} icon={Percent}>
+                      Pajak kasir (PB1 / PPN)
                     </FeatureRow>
                     <FeatureRow ok={!!f.desktopCashier} icon={Monitor}>
                       Aplikasi kasir desktop

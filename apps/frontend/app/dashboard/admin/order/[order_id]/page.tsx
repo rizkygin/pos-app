@@ -1,4 +1,5 @@
 import { getRole } from '@/lib/utils/get-role';
+import { posPaymentLabel } from '@/lib/pos-payment';
 import { serverFetch } from '@/lib/server-fetch';
 import { LocalDateTime } from '@/components/local-datetime';
 import Link from 'next/link';
@@ -37,7 +38,7 @@ function fmtIDR(n: number) {
 type OfflineNote = {
   customerName?: string | null;
   discountAmount?: number;
-  paymentMethod?: 'cash' | 'non_cash';
+  paymentMethod?: string;
   amountPaid?: number;
   changeDue?: number;
 };
@@ -257,9 +258,9 @@ const Page = async ({ params }: { params: Promise<{ order_id: string }> }) => {
                   <span className="text-muted-foreground font-semibold flex items-center gap-1.5">
                     <Wallet className="h-3.5 w-3.5" /> Metode Pembayaran
                   </span>
-                  <span className="font-bold">{offlineNote.paymentMethod === 'non_cash' ? 'Non-Cash' : 'Cash'}</span>
+                  <span className="font-bold">{posPaymentLabel(offlineNote.paymentMethod ?? 'cash')}</span>
                 </div>
-                {offlineNote.paymentMethod !== 'non_cash' && (
+                {(offlineNote.paymentMethod ?? 'cash') === 'cash' && (
                   <>
                     <div className="flex justify-between text-sm">
                       <span className="text-muted-foreground font-semibold">Uang Diterima</span>

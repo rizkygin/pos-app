@@ -22,6 +22,7 @@ import { CATEGORY_IN } from "../lib/cashflow-categories";
 import { roadDistance, billableKm } from "../lib/utils/road-distance";
 import { sendPushToUser } from "../lib/push";
 import { dispatchNextOffer, supersedeOffers } from "../lib/dispatch";
+import { lineUnitCostSql } from "../lib/cogs";
 
 type NoteJson = {
   location: {
@@ -331,6 +332,11 @@ export async function orderRoutes(app: FastifyInstance) {
               quantity: item.quantity,
               note_product: item.note_product,
               summary_price: item.summary_price,
+              // Freeze what this line cost. An app order never moves stock, so
+              // the cost ledger covers none of its lines and this snapshot is
+              // the whole cost story for the order. Taken at order time, which
+              // is when the price was quoted. See lib/cogs.ts.
+              unit_cost: lineUnitCostSql(item.product_id),
             })),
           );
         }

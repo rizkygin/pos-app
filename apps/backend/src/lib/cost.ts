@@ -26,6 +26,12 @@ export type PostMovementArgs = {
   unitCost?: number | null;
   invoiceId?: number | null;
   orderId?: string | null;
+  // WHICH order line caused this. For a composition the movement is against an
+  // INGREDIENT, so the product on the row is not the product that was sold —
+  // this is the only link back to the line. lib/cogs.ts reads it to tell the
+  // lines the ledger covers from the lines it structurally cannot, without
+  // re-deriving that from product config that may have changed since.
+  orderDetailId?: number | null;
   note?: string;
 };
 
@@ -48,7 +54,7 @@ export async function postMovement(
   tx: Tx,
   args: PostMovementArgs,
 ): Promise<{ unitCost: number; costChange: number }> {
-  const { outletId, productId, qtyChange, reason, invoiceId, orderId, note } = args;
+  const { outletId, productId, qtyChange, reason, invoiceId, orderId, orderDetailId, note } = args;
 
   // FOR UPDATE because avg_cost is a read-modify-write, unlike `stock`, which is
   // a self-referencing SQL increment and safe without a lock. Two concurrent
@@ -110,6 +116,7 @@ export async function postMovement(
     reason,
     invoice_id: invoiceId ?? null,
     order_id: orderId ?? null,
+    order_detail_id: orderDetailId ?? null,
     note: note ?? "",
     unit_cost: effUnit.toFixed(4),
     cost_change: costChange.toFixed(2),
