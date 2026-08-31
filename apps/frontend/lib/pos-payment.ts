@@ -18,17 +18,23 @@ export const POS_PAYMENT_METHODS = [
 
 export type PosPaymentMethod = (typeof POS_PAYMENT_METHODS)[number];
 
-/** Cashier-facing name, and the short one that fits a 32-char receipt line. */
+/**
+ * Three names per method, because they are read in three different widths:
+ *   label — the full cashier-facing name, used wherever there is room
+ *   chip  — fits a fifth of the 350px cart panel without truncating
+ *   short — fits a 32-char thermal receipt line
+ */
 export const POS_PAYMENT_OPTIONS: {
   value: PosPaymentMethod;
   label: string;
+  chip: string;
   short: string;
 }[] = [
-  { value: 'cash', label: 'Tunai', short: 'TUNAI' },
-  { value: 'qris', label: 'QRIS', short: 'QRIS' },
-  { value: 'debit', label: 'Debit (EDC)', short: 'DEBIT' },
-  { value: 'credit', label: 'Kredit (EDC)', short: 'KREDIT' },
-  { value: 'transfer', label: 'Transfer', short: 'TRANSFER' },
+  { value: 'cash', label: 'Tunai', chip: 'Tunai', short: 'TUNAI' },
+  { value: 'qris', label: 'QRIS', chip: 'QRIS', short: 'QRIS' },
+  { value: 'debit', label: 'Debit (EDC)', chip: 'Debit', short: 'DEBIT' },
+  { value: 'credit', label: 'Kredit (EDC)', chip: 'Kredit', short: 'KREDIT' },
+  { value: 'transfer', label: 'Transfer', chip: 'Transfer', short: 'TRANSFER' },
 ];
 
 const LABELS: Record<string, string> = {

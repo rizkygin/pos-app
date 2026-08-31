@@ -1179,7 +1179,7 @@ export const CashierClient = ({
         </div>
 
         {/* Cart Header */}
-        <div className="p-4 border-b bg-background/80 backdrop-blur-md sticky top-0 z-20">
+        <div className="sticky top-0 z-20 border-b bg-background/80 px-4 py-3 backdrop-blur-md">
           <div className="flex items-start justify-between gap-2">
             <div className="flex min-w-0 flex-1 items-center gap-2">
               {/* The pager box takes the slot the decorative cart icon used to
@@ -1227,27 +1227,33 @@ export const CashierClient = ({
                 </p>
               </div>
             </div>
-            <div className="flex shrink-0 flex-col items-stretch gap-1">
-              {cart.length > 0 && (
-                <button
-                  onClick={clearCart}
-                  className="text-xs font-bold text-rose-500 hover:text-rose-600 hover:bg-rose-50 px-3 py-1.5 rounded-lg transition-colors"
-                >
-                  Clear
-                </button>
-              )}
+            {/* Side by side, not stacked. Two labelled buttons in a column
+                made the header two rows tall on a panel where every row costs
+                a cart item — and Clear is destructive, so it reads better as a
+                small icon than as a text button sitting under the note. */}
+            <div className="flex shrink-0 items-center gap-1">
               <button
                 onClick={openOrderNote}
-                className={`flex items-center justify-center gap-1 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
+                className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${
                   orderNote.trim()
                     ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
                     : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                 }`}
                 title="Catatan pesanan (dapur)"
+                aria-label="Catatan pesanan"
               >
-                <StickyNote className="h-3.5 w-3.5" />
-                Catatan
+                <StickyNote className="h-4 w-4" />
               </button>
+              {cart.length > 0 && (
+                <button
+                  onClick={clearCart}
+                  className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-rose-50 hover:text-rose-600"
+                  title="Kosongkan keranjang"
+                  aria-label="Kosongkan keranjang"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              )}
             </div>
           </div>
           {pagerClash && (
@@ -1405,24 +1411,73 @@ export const CashierClient = ({
           )}
         </div>
 
-        {/* Checkout Section */}
-        <div className="p-4 bg-background border-t shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.1)]">
-          <div className="space-y-1.5 mb-3">
-            <div className="flex justify-between text-muted-foreground text-sm font-medium">
+        {/* Checkout Section
+            ------------------------------------------------------------------
+            Ordered by what the cashier decides, in the order they decide it:
+            how the customer is paying, what they owe, what they handed over,
+            then the buttons. It used to be five separately-bordered blocks
+            stacked down the panel — a summary, a full-width Lazy Mode card, a
+            cash card, a wrapping row of payment chips, and two button rows —
+            which is what made it read as clutter rather than as a sequence. */}
+        <div className="border-t bg-background p-3 shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.1)]">
+          {/* How the customer paid. First, because it decides whether the cash
+              block below exists at all — putting it last meant the panel
+              reshuffled under the cashier's finger mid-sale.
+
+              A fixed 5-up grid rather than wrapping chips: the old flex-wrap
+              row broke to two lines at this panel width, and where it broke
+              depended on the label lengths, so the whole footer shifted
+              vertically for no reason the cashier could see.
+
+              Still always visible rather than behind a toggle: it is what the
+              shift report and every payment report bucket on, and a cashier who
+              has to go looking for it leaves it on Tunai. Picking anything but
+              Tunai also clears an insufficient-cash state, which is the usual
+              reason to switch mid-sale. */}
+          <div className="mb-2 grid grid-cols-5 gap-1">
+            {POS_PAYMENT_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setPaymentMethod(opt.value)}
+                title={opt.label}
+                className={`truncate rounded-lg border-2 px-1 py-1.5 text-[11px] font-bold transition-colors ${
+                  paymentMethod === opt.value
+                    ? 'border-blue-600 bg-blue-600 text-white'
+                    : 'border-border bg-background text-muted-foreground hover:bg-muted'
+                }`}
+              >
+                {opt.chip}
+              </button>
+            ))}
+          </div>
+
+          {/* What is owed. One bordered card so the arithmetic reads as a
+              single block that adds up, instead of loose rows sharing space
+              with the controls that change them. */}
+          <div className="mb-2 rounded-xl border bg-muted/30 px-3 py-2">
+            <div className="flex justify-between text-sm text-muted-foreground">
               <span>Subtotal</span>
-              <span>{formatCurrency(Number(cartTotal))}</span>
+              <span className="tabular-nums">
+                {formatCurrency(Number(cartTotal))}
+              </span>
             </div>
-            <div className="flex items-center justify-between gap-2 text-muted-foreground text-sm font-medium">
+
+            {/* The discount controls stay inline, but inside ONE bordered
+                cluster. Previously the %/Rp toggle and the number field floated
+                loose between the label and its value, reading as three
+                unrelated controls that happened to share a line. */}
+            <div className="mt-1.5 flex items-center justify-between gap-2 text-sm text-muted-foreground">
               <div className="flex items-center gap-1.5">
-                <span>Discount</span>
-                <div className="flex items-center rounded-lg border overflow-hidden">
+                <span>Diskon</span>
+                <div className="flex items-center overflow-hidden rounded-md border bg-background">
                   <button
                     type="button"
                     onClick={() => setDiscountType('percentage')}
-                    className={`px-2 py-0.5 text-[11px] font-bold transition-colors ${
+                    className={`px-1.5 py-1 text-[11px] font-bold transition-colors ${
                       discountType === 'percentage'
                         ? 'bg-blue-600 text-white'
-                        : 'bg-background text-muted-foreground hover:bg-muted'
+                        : 'text-muted-foreground hover:bg-muted'
                     }`}
                   >
                     %
@@ -1430,152 +1485,147 @@ export const CashierClient = ({
                   <button
                     type="button"
                     onClick={() => setDiscountType('amount')}
-                    className={`px-2 py-0.5 text-[11px] font-bold transition-colors ${
+                    className={`px-1.5 py-1 text-[11px] font-bold transition-colors ${
                       discountType === 'amount'
                         ? 'bg-blue-600 text-white'
-                        : 'bg-background text-muted-foreground hover:bg-muted'
+                        : 'text-muted-foreground hover:bg-muted'
                     }`}
                   >
                     Rp
                   </button>
+                  <input
+                    type="number"
+                    min={0}
+                    max={discountType === 'percentage' ? 100 : undefined}
+                    value={discountInput}
+                    onChange={(e) => setDiscountInput(e.target.value)}
+                    placeholder="0"
+                    aria-label="Nilai diskon"
+                    className="h-6 w-14 border-l bg-transparent px-1.5 text-xs font-bold outline-none focus:bg-muted"
+                  />
                 </div>
-                <input
-                  type="number"
-                  min={0}
-                  max={discountType === 'percentage' ? 100 : undefined}
-                  value={discountInput}
-                  onChange={(e) => setDiscountInput(e.target.value)}
-                  placeholder="0"
-                  className="w-16 h-7 px-2 rounded-lg border bg-background text-xs font-bold outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
               </div>
               <span
-                className={discountAmount > 0 ? 'text-rose-500 font-semibold' : ''}
+                className={`tabular-nums ${discountAmount > 0 ? 'font-semibold text-rose-500' : ''}`}
               >
                 {discountAmount > 0 ? '-' : ''}
                 {formatCurrency(discountAmount)}
               </span>
             </div>
+
             {tax.applies && (
-              <div className="flex justify-between items-center text-sm mt-1">
-                <span className="text-muted-foreground">
+              <div className="mt-1.5 flex items-center justify-between text-sm text-muted-foreground">
+                <span>
                   {taxLineLabel(taxConfig)}
                   {/* Inclusive tax doesn't change what's owed, so say so —
-                      otherwise the row reads like a charge that was left out
-                      of the total. */}
+                      otherwise the row reads like a charge left out of Total. */}
                   {taxConfig.inclusive && (
                     <span className="ml-1 text-[11px]">(termasuk)</span>
                   )}
                 </span>
-                <span className="font-semibold">
+                <span className="font-semibold tabular-nums">
                   {formatCurrency(tax.amount)}
                 </span>
               </div>
             )}
-            <div className="h-px w-full bg-border my-1.5" />
-            <div className="flex justify-between items-end">
+
+            <div className="my-2 h-px bg-border" />
+            <div className="flex items-end justify-between">
               <span className="text-base font-bold">Total</span>
-              <span className="text-2xl font-black text-blue-600 tracking-tight">
+              <span className="text-2xl font-black tabular-nums tracking-tight text-blue-600">
                 {formatCurrency(Number(grandTotal))}
               </span>
             </div>
           </div>
 
-          {/* Lazy mode toggle — device-local preference. When on, cash received
-              is auto-set to the exact amount due and the entry box is hidden. */}
-          <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border bg-muted/30 px-3 py-2">
-            <div className="flex flex-col">
-              <span className="text-sm font-semibold">Lazy Mode</span>
-              <span className="text-[11px] text-muted-foreground">
-                Uang pas otomatis, tanpa hitung kembalian
-              </span>
-            </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={lazyMode}
-              aria-label="Lazy mode"
-              onClick={toggleLazyMode}
-              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
-                lazyMode ? 'bg-blue-600' : 'bg-muted-foreground/30'
-              }`}
-            >
-              <span
-                className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
-                  lazyMode ? 'translate-x-5' : ''
-                }`}
-              />
-            </button>
-          </div>
-
-          {/* Cash tendered/change only makes sense for a cash sale the cashier
-              actually counts: lazy mode assumes uang pas, and a non-cash sale
-              has nothing to tender. */}
-          {!lazyMode && paymentMethod === 'cash' && (
-            <div className="mb-3 space-y-2 rounded-xl border bg-muted/30 p-3">
+          {/* Cash tendered. Only for a cash sale — there is nothing to tender
+              on a QRIS or card payment, and a "Kembali Rp 0" under one reads
+              like a receipt for a transaction that didn't happen that way. */}
+          {paymentMethod === 'cash' && (
+            <div className="mb-2 rounded-xl border bg-muted/30 px-3 py-2">
               <div className="flex items-center justify-between gap-2">
-                <label className="text-sm font-semibold text-muted-foreground">
-                  Cash Received
-                </label>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={amountPaidInput && Number(amountPaidInput) > 0 ? formatCurrency(Number(amountPaidInput)) : ''}
-                  onChange={(e) => setAmountPaidInput(e.target.value.replace(/\D/g, ''))}
-                  placeholder="Rp 0"
-                  className="w-36 h-9 px-3 rounded-lg border bg-background text-right text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold text-muted-foreground">
+                    Bayar
+                  </span>
+                  {/* Lazy mode used to own a full-width card with a two-line
+                      explanation, for a device preference that is set once and
+                      then never touched again. It only ever means "uang pas"
+                      and it only applies to cash, so it belongs here, next to
+                      the field it overrides.
+
+                      Deliberately still rendered while it is ON: the old layout
+                      hid this whole block when lazy mode was active, so the
+                      only way back was the separate card. Without that card it
+                      has to stay reachable from here. */}
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={lazyMode}
+                    onClick={toggleLazyMode}
+                    title="Uang pas otomatis, tanpa hitung kembalian"
+                    className={`rounded-md border px-2 py-0.5 text-[11px] font-bold transition-colors ${
+                      lazyMode
+                        ? 'border-blue-600 bg-blue-600 text-white'
+                        : 'border-border text-muted-foreground hover:bg-muted'
+                    }`}
+                  >
+                    Uang pas
+                  </button>
+                </div>
+                {lazyMode ? (
+                  <span className="text-sm font-bold tabular-nums">
+                    {formatCurrency(grandTotal)}
+                  </span>
+                ) : (
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    aria-label="Uang diterima"
+                    value={
+                      amountPaidInput && Number(amountPaidInput) > 0
+                        ? formatCurrency(Number(amountPaidInput))
+                        : ''
+                    }
+                    onChange={(e) =>
+                      setAmountPaidInput(e.target.value.replace(/\D/g, ''))
+                    }
+                    placeholder="Rp 0"
+                    className="h-9 w-36 rounded-lg border bg-background px-3 text-right text-sm font-bold tabular-nums outline-none focus:border-transparent focus:ring-2 focus:ring-blue-500"
+                  />
+                )}
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-semibold text-muted-foreground">
-                  {isInsufficient ? 'Shortfall' : 'Change'}
-                </span>
-                <span
-                  className={`text-sm font-bold ${isInsufficient ? 'text-rose-500' : 'text-emerald-600'}`}
-                >
-                  {formatCurrency(isInsufficient ? grandTotal - amountPaid : changeDue)}
-                </span>
-              </div>
+              {!lazyMode && (
+                <div className="mt-1.5 flex items-center justify-between">
+                  <span className="text-sm font-semibold text-muted-foreground">
+                    {isInsufficient ? 'Kurang' : 'Kembali'}
+                  </span>
+                  <span
+                    className={`text-sm font-bold tabular-nums ${isInsufficient ? 'text-rose-500' : 'text-emerald-600'}`}
+                  >
+                    {formatCurrency(
+                      isInsufficient ? grandTotal - amountPaid : changeDue,
+                    )}
+                  </span>
+                </div>
+              )}
             </div>
           )}
 
-          {/* How the customer paid. Always visible rather than hidden behind a
-              toggle: it is the field the shift report and every payment report
-              bucket on, and a cashier who has to go looking for it is a cashier
-              who leaves it on Tunai. Cash leads because most counter sales are.
-
-              Picking anything but Tunai also clears an insufficient-cash state
-              (isInsufficient only applies to cash), which is the usual reason
-              to switch mid-sale. */}
-          <div className="mb-3 flex flex-wrap gap-1.5">
-            {POS_PAYMENT_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => setPaymentMethod(opt.value)}
-                className={`rounded-lg border-2 px-2.5 py-1.5 text-xs font-bold transition-colors ${
-                  paymentMethod === opt.value
-                    ? 'border-blue-600 bg-blue-600 text-white'
-                    : 'border-border bg-background text-muted-foreground hover:bg-muted'
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-
           {/* Pay-first flow: take the money and print both slips while the tab
               stays open, so the pager number and notes remain on screen until
-              the food is handed over. Checkout below is what ends the order. */}
+              the food is handed over. Checkout below is what ends the order.
+              Shorter than the primary button and visually secondary, because
+              they run BEFORE it rather than instead of it. */}
           <div className="mb-2 flex gap-2">
             <Button
               type="button"
               variant="outline"
               onClick={printCustomerReceipt}
               disabled={checkoutDisabled}
-              className="h-11 flex-1 rounded-2xl border-2 text-sm font-bold"
+              className="h-10 flex-1 rounded-xl border-2 text-xs font-bold"
             >
-              <Printer className="mr-1.5 h-4 w-4" />
+              <Printer className="mr-1.5 h-3.5 w-3.5" />
               Struk
             </Button>
             {canUsePager && (
@@ -1584,9 +1634,9 @@ export const CashierClient = ({
                 variant="outline"
                 onClick={printKitchenTicket}
                 disabled={cart.length === 0}
-                className="h-11 flex-1 rounded-2xl border-2 text-sm font-bold"
+                className="h-10 flex-1 rounded-xl border-2 text-xs font-bold"
               >
-                <ChefHat className="mr-1.5 h-4 w-4" />
+                <ChefHat className="mr-1.5 h-3.5 w-3.5" />
                 Dapur
               </Button>
             )}
