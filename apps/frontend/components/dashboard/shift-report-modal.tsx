@@ -454,16 +454,26 @@ export function ShiftReportModal({ report, onClose, heading }: Props) {
     value,
     strong,
     tone,
+    indent,
   }: {
     label: string;
     value: string;
     strong?: boolean;
     tone?: "good" | "bad";
+    /**
+     * Sub-line of the row above it. Indented with padding, NOT with spaces or
+     * escapes baked into the label: a JSX attribute in quotes is literal text —
+     * label="\u00a0Pajak" renders those six characters, it does not become a
+     * non-breaking space. That is a real bug this component shipped with.
+     */
+    indent?: boolean;
   }) => (
     <div
       className={`flex justify-between gap-3 ${strong ? "font-bold text-sm" : "text-xs mb-1"}`}
     >
-      <span className={`min-w-0 truncate ${strong ? "" : "text-gray-500"}`}>
+      <span
+        className={`min-w-0 truncate ${indent ? "pl-3" : ""} ${strong ? "" : "text-gray-500"}`}
+      >
         {label}
       </span>
       <span
@@ -530,9 +540,10 @@ export function ShiftReportModal({ report, onClose, heading }: Props) {
             <Row label="SALDO SISTEM" value={fmt(drawer.expectedCash)} strong />
             {drawer.taxInDrawer > 0 && (
               <>
-                <Row label="\u00a0\u00a0Pajak (disetor)" value={fmt(drawer.taxInDrawer)} />
+                <Row indent label="Pajak (disetor)" value={fmt(drawer.taxInDrawer)} />
                 <Row
-                  label="\u00a0\u00a0Uang toko"
+                  indent
+                  label="Uang toko"
                   value={fmt(drawer.expectedCash - drawer.taxInDrawer)}
                 />
               </>
