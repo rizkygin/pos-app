@@ -191,6 +191,15 @@ export function ShiftBar({
             <Wallet className="h-3.5 w-3.5" />
             Laci {fmt(expected)}
           </span>
+          {/* Flagged while the shift is still running, not just at closing:
+              a cashier who only learns at 22:00 that a tenth of the till isn't
+              theirs has already been reconciling against the wrong number all
+              day. */}
+          {shift.drawer.taxInDrawer > 0 && (
+            <span className="text-emerald-800/70 dark:text-emerald-300/70">
+              (pajak {fmt(shift.drawer.taxInDrawer)})
+            </span>
+          )}
           <span className="text-emerald-800/70 dark:text-emerald-300/70">
             {shift.revenue.orderCount} transaksi
           </span>
@@ -296,6 +305,25 @@ export function ShiftBar({
             <div className="border-t pt-1">
               <Line label="Seharusnya di laci" value={fmt(expected)} strong />
             </div>
+            {/* What the count is actually made of.
+                Under exclusive pricing the customer hands over the tax as well,
+                so it is physically in the drawer — the count still has to match
+                "Seharusnya di laci" exactly, but part of that money is not the
+                shop's. Without this split the cashier reconciles to zero and
+                still can't tell how much to set aside, which reads as the
+                drawer being permanently wrong. */}
+            {shift.drawer.taxInDrawer > 0 && (
+              <div className="mt-1 space-y-1 border-t pt-1 text-muted-foreground">
+                <Line
+                  label="• Pajak (disetor)"
+                  value={fmt(shift.drawer.taxInDrawer)}
+                />
+                <Line
+                  label="• Uang toko"
+                  value={fmt(expected - shift.drawer.taxInDrawer)}
+                />
+              </div>
+            )}
           </div>
 
           <label className="mb-1 block text-xs font-semibold">

@@ -62,6 +62,22 @@ export type ShiftReport = {
     cashOut: number;
     /** openingFloat + cashIn - cashOut. Frozen once the shift is closed. */
     expectedCash: number;
+    /**
+     * How much of the drawer is tax the shop is holding for the tax office.
+     *
+     * CASH sales only. revenue.tax is the wrong number here and using it would
+     * overstate this every time: tax on a QRIS or card sale was collected, but
+     * it never entered the drawer, so it is not part of what gets counted.
+     *
+     * Zero under inclusive pricing too — there the tax is inside the price the
+     * customer was already paying, so nothing extra arrived in the till.
+     *
+     * Cross-shift caveat: a cash sale voided in a LATER shift takes its tax
+     * back out of that shift's drawer (cashOut), but the sale itself belongs to
+     * the earlier shift, so it is not deducted here. Rare, and the alternative
+     * is attributing a refund to a shift that is already closed and signed.
+     */
+    taxInDrawer: number;
     countedCash: number | null;
     variance: number | null;
     closingNote: string | null;
@@ -181,6 +197,10 @@ export async function buildShiftReport(
   const discount = paymentRows.reduce((a, r) => a + Number(r.discount), 0);
   const tax = paymentRows.reduce((a, r) => a + Number(r.tax), 0);
   const taxOnTop = paymentRows.reduce((a, r) => a + Number(r.tax_on_top), 0);
+  // Only the cash bucket's tax actually landed in the till.
+  const taxInDrawer = paymentRows
+    .filter((r) => String(r.method) === "cash")
+    .reduce((a, r) => a + Number(r.tax_on_top), 0);
   const orderCount = paymentRows.reduce((a, r) => a + Number(r.order_count), 0);
   const itemCount = paymentRows.reduce((a, r) => a + Number(r.items), 0);
 
@@ -271,6 +291,7 @@ export async function buildShiftReport(
       cashIn,
       cashOut,
       expectedCash,
+      taxInDrawer,
       countedCash: shift.counted_cash === null ? null : Number(shift.counted_cash),
       variance: shift.variance === null ? null : Number(shift.variance),
       closingNote: shift.closing_note ?? null,

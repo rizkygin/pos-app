@@ -37,6 +37,8 @@ export type ShiftReport = {
     cashIn: number;
     cashOut: number;
     expectedCash: number;
+    /** The part of the drawer that is tax owed. CASH sales only. */
+    taxInDrawer: number;
     countedCash: number | null;
     variance: number | null;
     closingNote: string | null;
@@ -156,6 +158,14 @@ function buildShiftEscposBase64(r: ShiftReport, paper: PaperWidth): string {
   bold(true);
   row("SALDO SISTEM", fmt(r.drawer.expectedCash));
   bold(false);
+  // Break the till down when part of it is the tax office's. The count below
+  // still reconciles against SALDO SISTEM — this only says how much of that
+  // money is not the shop's, which is the figure whoever banks the takings
+  // needs and had to work out by hand.
+  if (r.drawer.taxInDrawer > 0) {
+    row("  Pajak (disetor)", fmt(r.drawer.taxInDrawer));
+    row("  Uang toko", fmt(r.drawer.expectedCash - r.drawer.taxInDrawer));
+  }
   if (r.drawer.countedCash !== null) {
     row("UANG DI LACI", fmt(r.drawer.countedCash));
     divider();
@@ -368,6 +378,12 @@ function buildShiftHtml(r: ShiftReport, paper: PaperWidth): string {
   ${row("Tunai Keluar (-)", fmt(r.drawer.cashOut))}
   <div class="dv"></div>
   ${row("SALDO SISTEM", fmt(r.drawer.expectedCash), "b")}
+  ${
+    r.drawer.taxInDrawer > 0
+      ? row("\u00a0\u00a0Pajak (disetor)", fmt(r.drawer.taxInDrawer)) +
+        row("\u00a0\u00a0Uang toko", fmt(r.drawer.expectedCash - r.drawer.taxInDrawer))
+      : ""
+  }
   ${drawerCount}
   ${section("[ 2. RINCIAN PENDAPATAN ]")}
   ${row("Penjualan Kotor", fmt(r.revenue.gross))}
@@ -512,6 +528,15 @@ export function ShiftReportModal({ report, onClose, heading }: Props) {
             <Row label="Tunai Keluar (-)" value={fmt(drawer.cashOut)} />
             <div className="border-t border-dashed border-gray-300 my-2" />
             <Row label="SALDO SISTEM" value={fmt(drawer.expectedCash)} strong />
+            {drawer.taxInDrawer > 0 && (
+              <>
+                <Row label="\u00a0\u00a0Pajak (disetor)" value={fmt(drawer.taxInDrawer)} />
+                <Row
+                  label="\u00a0\u00a0Uang toko"
+                  value={fmt(drawer.expectedCash - drawer.taxInDrawer)}
+                />
+              </>
+            )}
             {drawer.countedCash !== null && (
               <>
                 <div className="mt-1" />
