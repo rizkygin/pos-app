@@ -428,6 +428,62 @@
       "when": 1787935807469,
       "tag": "0060_invoice_payment_method",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1788028700000,
+      "tag": "0061_production_reason",
+      "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1788028800000,
+      "tag": "0062_production_batches",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1788028900000,
+      "tag": "0063_cost_ledger",
+      "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1788033000000,
+      "tag": "0064_backfill_cost_ledger",
+      "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1788167124783,
+      "tag": "0065_order_line_unit_cost",
+      "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1788171162840,
+      "tag": "0066_movement_order_detail",
+      "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1788215352186,
+      "tag": "0067_cashier_shifts",
+      "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1788218947474,
+      "tag": "0068_counter_tax",
+      "breakpoints": true
     }
   ]
 }

@@ -108,6 +108,9 @@ const TRIAL_FEATURES: Record<string, unknown> = {
   maxOutlets: 3,
   maxEmployees: 5,
   desktopCashier: true,
+  cashierShift: true,
+  pager: true,
+  tax: true,
   customerCanOrder: true,
   salesInvoice: true,
   purchaseInvoice: true,
@@ -198,6 +201,23 @@ const PERM_FEATURE: Partial<Record<EmployeePermission, string>> = {
   cashflow: "cashflow",
   reports: "report",
 };
+
+/**
+ * Does the plan include one specific feature flag?
+ *
+ * PERM_FEATURE above maps a whole PERMISSION GROUP to a flag, which is the
+ * right shape when a plan boundary lines up with a page ("Faktur", "Stok").
+ * Some boundaries don't: opening a cashier shift is one action inside the
+ * cashier page, and the rest of that page is in every tier. Gating it through
+ * PERM_FEATURE would lock the whole till for a Basic merchant.
+ *
+ * An expired subscription is NOT a feature question — writes are already
+ * blocked by gateBlocks, and reads stay open so data is never held hostage — so
+ * this only answers "is it in the plan", never "is the plan alive".
+ */
+export function hasFeature(gate: SubscriptionGate, flag: string): boolean {
+  return gate.features[flag] === true;
+}
 
 // Gate verdict for one request: null = allowed, otherwise the error message.
 // Reads stay open when expired (read-only mode); plan-feature boundaries apply

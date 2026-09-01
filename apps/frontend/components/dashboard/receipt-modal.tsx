@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Printer, X, CheckCircle } from "lucide-react";
 import { resolveOutletImage } from "@/lib/image-src";
+import { posPaymentLabel } from "@/lib/pos-payment";
 
 type ReceiptItem = {
     product_name: string;
@@ -23,6 +24,18 @@ export type ReceiptData = {
     subtotal: number;
     discountAmount: number;
     discountLabel: string;
+    /**
+     * Counter tax (PB1 / PPN). Omitted entirely when the outlet charges none —
+     * a "Pajak Rp 0" line on a receipt invites the question of why it's there.
+     *
+     * `total` is what the customer pays, tax included. Under INCLUSIVE pricing
+     * the tax is already inside the item prices, so the line is printed as a
+     * disclosure ("termasuk") and adds nothing to the total; under exclusive it
+     * was added on top. taxInclusive is what tells the reader which.
+     */
+    taxLabel?: string;
+    taxAmount?: number;
+    taxInclusive?: boolean;
     total: number;
     /**
      * Delivery orders only. The cashier (counter sale) omits it and no ongkir
@@ -35,7 +48,7 @@ export type ReceiptData = {
      * When absent the whole cash/change block is skipped rather than printing a
      * misleading "Kembali Rp 0".
      */
-    paymentMethod?: 'cash' | 'non_cash';
+    paymentMethod?: string;
     amountPaid?: number;
     changeDue?: number;
     date: Date;
@@ -239,6 +252,15 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
     row("Subtotal", fmt(data.subtotal));
     if (data.discountAmount > 0) row(data.discountLabel, `-${fmt(data.discountAmount)}`);
     if (data.deliveryFee) row("Ongkos kirim", fmt(data.deliveryFee));
+    if (data.taxAmount !== undefined && data.taxLabel) {
+        // Inclusive tax is a disclosure, not a charge: it is already inside the
+        // subtotal above, so it is marked rather than printed as another line
+        // the customer would expect to see added into TOTAL.
+        row(
+            data.taxInclusive ? `${data.taxLabel} (termasuk)` : data.taxLabel,
+            fmt(data.taxAmount),
+        );
+    }
     bold(true);
     size(0x01); // double height for the total
     row("TOTAL", fmt(data.total));
@@ -247,11 +269,14 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
     divider();
 
     if (data.paymentMethod) {
-        if (data.paymentMethod === "non_cash") {
-            row("Pembayaran", "Non-Tunai");
-        } else {
+        // Only a cash sale has money tendered and change given. Everything else
+        // names the method instead — a "Kembali Rp 0" under a QRIS payment
+        // reads as a receipt for a transaction that didn't happen that way.
+        if (data.paymentMethod === "cash") {
             row("Tunai", fmt(data.amountPaid ?? 0));
             row("Kembali", fmt(data.changeDue ?? 0));
+        } else {
+            row("Pembayaran", posPaymentLabel(data.paymentMethod));
         }
         divider();
     }
@@ -432,10 +457,10 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
         // including its divider, rather than printing a misleading zero.
         const paymentHtml = !data.paymentMethod
             ? ""
-            : (data.paymentMethod === "non_cash"
-                  ? `<div class="row b"><span>Pembayaran</span><span>Non-Tunai</span></div>`
-                  : `<div class="row"><span>Tunai</span><span>${fmt(data.amountPaid ?? 0)}</span></div>` +
-                    `<div class="row b"><span>Kembali</span><span>${fmt(data.changeDue ?? 0)}</span></div>`) +
+            : (data.paymentMethod === "cash"
+                  ? `<div class="row"><span>Tunai</span><span>${fmt(data.amountPaid ?? 0)}</span></div>` +
+                    `<div class="row b"><span>Kembali</span><span>${fmt(data.changeDue ?? 0)}</span></div>`
+                  : `<div class="row b"><span>Pembayaran</span><span>${esc(posPaymentLabel(data.paymentMethod))}</span></div>`) +
               `<div class="dv"></div>`;
 
         const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Struk #${shortId}</title>
@@ -476,6 +501,7 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
   <div class="row sm"><span>Subtotal</span><span>${fmt(data.subtotal)}</span></div>
   ${data.discountAmount > 0 ? `<div class="row sm"><span>${esc(data.discountLabel)}</span><span>-${fmt(data.discountAmount)}</span></div>` : ""}
   ${data.deliveryFee ? `<div class="row sm"><span>Ongkos kirim</span><span>${fmt(data.deliveryFee)}</span></div>` : ""}
+  ${data.taxAmount !== undefined && data.taxLabel ? `<div class="row sm"><span>${esc(data.taxLabel)}${data.taxInclusive ? " (termasuk)" : ""}</span><span>${fmt(data.taxAmount)}</span></div>` : ""}
   <div class="row b lg"><span>TOTAL</span><span>${fmt(data.total)}</span></div>
   <div class="dv"></div>
   ${paymentHtml}
@@ -770,6 +796,15 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
                                 <span>{fmt(data.deliveryFee)}</span>
                             </div>
                         ) : null}
+                        {data.taxAmount !== undefined && data.taxLabel && (
+                            <div className="flex justify-between text-xs mb-2">
+                                <span className="text-gray-500">
+                                    {data.taxLabel}
+                                    {data.taxInclusive ? ' (termasuk)' : ''}
+                                </span>
+                                <span>{fmt(data.taxAmount)}</span>
+                            </div>
+                        )}
                         <div className="flex justify-between font-bold text-sm">
                             <span>TOTAL</span>
                             <span className="text-blue-600">{fmt(data.total)}</span>
@@ -780,10 +815,12 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
                         {/* Payment — omitted for a courier pickup slip (see ReceiptData). */}
                         {data.paymentMethod && (
                             <>
-                                {data.paymentMethod === 'non_cash' ? (
+                                {data.paymentMethod !== 'cash' ? (
                                     <div className="flex justify-between font-bold text-sm">
                                         <span>Payment</span>
-                                        <span className="text-blue-600">Non-Cash</span>
+                                        <span className="text-blue-600">
+                                            {posPaymentLabel(data.paymentMethod)}
+                                        </span>
                                     </div>
                                 ) : (
                                     <>

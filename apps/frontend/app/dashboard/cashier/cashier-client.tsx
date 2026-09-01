@@ -27,6 +27,12 @@ import {
 import { Button } from '@/components/ui/button';
 import { formatCurrency } from '@/lib/utils/format';
 import { API_URL } from '@/lib/api-url';
+import {
+  POS_PAYMENT_OPTIONS,
+  type PosPaymentMethod,
+} from '@/lib/pos-payment';
+import { ShiftBar } from './shift-bar';
+import { computeTax, taxLineLabel, type TaxConfig } from '@/lib/tax';
 import { resolveProductImage, isBackendImage } from '@/lib/image-src';
 
 type Product = {
@@ -74,7 +80,7 @@ type HeldTab = {
   orderNote: string;
   discountType: 'percentage' | 'amount';
   discountInput: string;
-  paymentMethod: 'cash' | 'non_cash';
+  paymentMethod: PosPaymentMethod;
   amountPaidInput: string;
 };
 
@@ -98,6 +104,21 @@ type CashierClientProps = {
   outletPhone: string;
   outletLogo: string;
   cashierName: string;
+  /**
+   * Plan entitlements, resolved server-side on the page so the counter never
+   * flashes a control the merchant can't use. Both are re-checked where they
+   * matter: opening a shift is enforced by the backend, while the pager is
+   * purely device-local (it never reaches the server), so this IS its only
+   * boundary — which is the honest extent of what a UI-only feature can have.
+   */
+  canUseShift: boolean;
+  canUsePager: boolean;
+  /**
+   * The outlet's counter tax, already resolved against the plan gate on the
+   * server (disabled below Max Lite). Used for DISPLAY only — the server
+   * recomputes the stored figure from its own copy of these settings.
+   */
+  taxConfig: TaxConfig;
   initialProducts: Product[];
 };
 
@@ -124,6 +145,9 @@ export const CashierClient = ({
   outletPhone,
   outletLogo,
   cashierName,
+  canUseShift,
+  canUsePager,
+  taxConfig,
   initialProducts,
 }: CashierClientProps) => {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
@@ -162,9 +186,10 @@ export const CashierClient = ({
   >(null);
   const [noteDraft, setNoteDraft] = useState('');
   const [amountPaidInput, setAmountPaidInput] = useState('0');
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'non_cash'>(
-    'cash',
-  );
+  const [paymentMethod, setPaymentMethod] = useState<PosPaymentMethod>('cash');
+  // Bumped after every checkout so the shift strip's running drawer total picks
+  // up the sale that was just rung up.
+  const [shiftRefresh, setShiftRefresh] = useState(0);
   // Blocks duplicate checkouts: ref guards synchronously against re-entry (rapid
   // clicks / Cmd+Enter key-repeat), state drives the disabled button UI.
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -182,6 +207,16 @@ export const CashierClient = ({
       /* ignore */
     }
   }, [lazyKey]);
+  // Lazy mode IS a cash sale — uang pas, nothing tendered, no change counted —
+  // so the two can never disagree. Held tabs restore their own saved payment
+  // method and lazyMode is a per-DEVICE preference, so a tab parked on QRIS can
+  // come back while lazy mode is on; that state has no meaning, and it would
+  // also hide the cash row that carries the only way to switch lazy mode off.
+  // Snapping to cash keeps the lock honest wherever the mismatch came from.
+  useEffect(() => {
+    if (lazyMode && paymentMethod !== 'cash') setPaymentMethod('cash');
+  }, [lazyMode, paymentMethod]);
+
   const toggleLazyMode = () => {
     setLazyMode((v) => {
       const next = !v;
@@ -562,26 +597,39 @@ export const CashierClient = ({
         ? `Discount (${discountValue}%)`
         : 'Discount'
       : 'Discount';
+  // Net of discount, BEFORE tax. This is what gets posted as `total`: the
+  // server charges tax on it from the outlet's own settings rather than
+  // trusting a number the client worked out.
   const finalTotal = cartTotal - discountAmount;
 
+  // Tax sits outside the line, so it is added (or extracted) once, here, on the
+  // discounted amount — never folded into any item price.
+  const tax = computeTax(finalTotal, taxConfig);
+  // What the customer actually hands over. Under inclusive pricing this equals
+  // finalTotal; under exclusive it is finalTotal plus the tax.
+  const grandTotal = tax.total;
+
   // Lazy mode pays the exact amount due, so change is always 0 and the payment
-  // can never be insufficient.
-  const amountPaid = lazyMode ? finalTotal : parseFloat(amountPaidInput) || 0;
-  const changeDue = Math.max(0, amountPaid - finalTotal);
+  // can never be insufficient. Everything about tendering and change is against
+  // grandTotal — the customer pays the tax too, and taking cash against the
+  // pre-tax figure would hand back the tax as change.
+  const amountPaid = lazyMode ? grandTotal : parseFloat(amountPaidInput) || 0;
+  const changeDue = Math.max(0, amountPaid - grandTotal);
   const isInsufficient =
     !lazyMode &&
     paymentMethod === 'cash' &&
     amountPaidInput.trim() !== '' &&
-    amountPaid < finalTotal;
+    amountPaid < grandTotal;
   const checkoutDisabled = cart.length === 0 || isInsufficient;
 
   // Two live orders on one buzzer is exactly the mix-up the number is meant to
   // prevent, so surface the clash instead of silently allowing it.
   const pagerClash = useMemo(() => {
+    if (!canUsePager) return false;
     const n = pagerNumber.trim();
     if (!n) return false;
     return tabs.some((t) => t.id !== activeTabId && t.pagerNumber.trim() === n);
-  }, [pagerNumber, tabs, activeTabId]);
+  }, [canUsePager, pagerNumber, tabs, activeTabId]);
 
   // Shared slip payload. Before checkout there's no server order id yet, so the
   // active tab's id stands in — stable across reprints of the same tab, which
@@ -591,7 +639,9 @@ export const CashierClient = ({
     (): ReceiptData => ({
       orderId: activeTabId || crypto.randomUUID(),
       customerName: customerName.trim(),
-      pagerNumber: pagerNumber.trim(),
+      // A tab held from before a downgrade still carries its number in
+      // localStorage; the plan says it isn't printed any more.
+      pagerNumber: canUsePager ? pagerNumber.trim() : '',
       orderNote: orderNote.trim(),
       items: cart.map((i) => ({
         product_name: i.product.product_name,
@@ -603,10 +653,13 @@ export const CashierClient = ({
       subtotal: cartTotal,
       discountAmount,
       discountLabel,
-      total: finalTotal,
+      taxLabel: tax.applies ? taxLineLabel(taxConfig) : undefined,
+      taxAmount: tax.applies ? tax.amount : undefined,
+      taxInclusive: taxConfig.inclusive,
+      total: grandTotal,
       paymentMethod,
       amountPaid:
-        paymentMethod === 'cash' && amountPaid > 0 ? amountPaid : finalTotal,
+        paymentMethod === 'cash' && amountPaid > 0 ? amountPaid : grandTotal,
       changeDue,
       date: new Date(),
       outletName,
@@ -624,8 +677,11 @@ export const CashierClient = ({
       orderNote,
       discountAmount,
       discountLabel,
-      finalTotal,
+      grandTotal,
+      tax,
+      taxConfig,
       paymentMethod,
+      canUsePager,
       amountPaid,
       changeDue,
       outletName,
@@ -672,15 +728,19 @@ export const CashierClient = ({
     const snapshotTotal = cartTotal;
     const snapshotDiscountAmount = discountAmount;
     const snapshotDiscountLabel = discountLabel;
+    // Posted as `total`: the server wants the pre-tax, post-discount figure and
+    // charges tax on it itself. Sending the grand total would tax the tax.
     const snapshotFinalTotal = finalTotal;
+    const snapshotGrandTotal = grandTotal;
+    const snapshotTax = tax;
     const snapshotCustomerName = customerName.trim();
-    const snapshotPagerNumber = pagerNumber.trim();
+    const snapshotPagerNumber = canUsePager ? pagerNumber.trim() : '';
     const snapshotPaymentMethod = paymentMethod;
     const snapshotAmountPaid =
       snapshotPaymentMethod === 'cash' && amountPaid > 0
         ? amountPaid
-        : snapshotFinalTotal;
-    const snapshotChangeDue = Math.max(0, snapshotAmountPaid - snapshotFinalTotal);
+        : snapshotGrandTotal;
+    const snapshotChangeDue = Math.max(0, snapshotAmountPaid - snapshotGrandTotal);
     try {
       const response = await fetch(`${API_URL}/api/add-order-detail`, {
         method: 'POST',
@@ -710,6 +770,9 @@ export const CashierClient = ({
         );
       }
       setCartOpen(false);
+      // The sale just changed what should be in the drawer, so re-read the
+      // shift strip. Cheap: one small indexed query, only after a real sale.
+      setShiftRefresh((n) => n + 1);
       // Order is paid: drop this tab and jump to the next / a fresh one. This
       // resets cart, customer, discount, and payment for the new active tab.
       completeActiveTab();
@@ -729,7 +792,10 @@ export const CashierClient = ({
           subtotal: snapshotTotal,
           discountAmount: snapshotDiscountAmount,
           discountLabel: snapshotDiscountLabel,
-          total: snapshotFinalTotal,
+          taxLabel: snapshotTax.applies ? taxLineLabel(taxConfig) : undefined,
+          taxAmount: snapshotTax.applies ? snapshotTax.amount : undefined,
+          taxInclusive: taxConfig.inclusive,
+          total: snapshotGrandTotal,
           paymentMethod: snapshotPaymentMethod,
           amountPaid: snapshotAmountPaid,
           changeDue: snapshotChangeDue,
@@ -758,6 +824,10 @@ export const CashierClient = ({
     finalTotal,
     isInsufficient,
     paymentMethod,
+    canUsePager,
+    grandTotal,
+    tax,
+    taxConfig,
     outletId,
     outletName,
     outletAddress,
@@ -786,6 +856,12 @@ export const CashierClient = ({
       <div className="flex-1 flex flex-col min-w-0 bg-background/50 backdrop-blur-sm border-r">
         {/* Header & Search */}
         <div className="p-3 pb-0">
+          <ShiftBar
+            cashierName={cashierName}
+            refreshSignal={shiftRefresh}
+            canUseShift={canUseShift}
+          />
+
           {/* Mobile: search + barcode */}
           <div className="flex items-center gap-2 mb-1 md:hidden">
             <div className="relative flex-1">
@@ -1010,7 +1086,9 @@ export const CashierClient = ({
             const activeTab = tabs.find((t) => t.id === activeTabId);
             const activeLabel =
               activeTab?.customerName.trim() || activeTab?.label || 'Pesanan';
-            const activePager = activeTab?.pagerNumber.trim();
+            const activePager = canUsePager
+              ? activeTab?.pagerNumber.trim()
+              : '';
             return (
               <button
                 onClick={() => setTabsMenuOpen((v) => !v)}
@@ -1063,16 +1141,20 @@ export const CashierClient = ({
                       }`}
                     >
                       {/* Pager number leads: when the kitchen calls out a
-                          number, this list is what gets scanned. */}
-                      <span
-                        className={`flex h-6 w-8 shrink-0 items-center justify-center rounded-md text-xs font-black tabular-nums ${
-                          t.pagerNumber.trim()
-                            ? 'bg-blue-600 text-white'
-                            : 'bg-muted text-muted-foreground/50'
-                        }`}
-                      >
-                        {t.pagerNumber.trim() || '--'}
-                      </span>
+                          number, this list is what gets scanned. Without the
+                          feature the column is dropped rather than left as a
+                          row of empty placeholders. */}
+                      {canUsePager && (
+                        <span
+                          className={`flex h-6 w-8 shrink-0 items-center justify-center rounded-md text-xs font-black tabular-nums ${
+                            t.pagerNumber.trim()
+                              ? 'bg-blue-600 text-white'
+                              : 'bg-muted text-muted-foreground/50'
+                          }`}
+                        >
+                          {t.pagerNumber.trim() || '--'}
+                        </span>
+                      )}
                       <span className="flex-1 truncate">{label}</span>
                       {count > 0 && (
                         <span className="shrink-0 rounded-full bg-muted px-1.5 text-[10px] font-semibold">
@@ -1107,12 +1189,15 @@ export const CashierClient = ({
         </div>
 
         {/* Cart Header */}
-        <div className="p-4 border-b bg-background/80 backdrop-blur-md sticky top-0 z-20">
+        <div className="sticky top-0 z-20 border-b bg-background/80 px-4 py-3 backdrop-blur-md">
           <div className="flex items-start justify-between gap-2">
             <div className="flex min-w-0 flex-1 items-center gap-2">
               {/* The pager box takes the slot the decorative cart icon used to
                   occupy, so the number is always on screen without costing a
-                  row in an already-tight sidebar. */}
+                  row in an already-tight sidebar. Below Max Lite it isn't
+                  rendered at all — a disabled box that explains itself would
+                  cost more room than the feature does. */}
+              {canUsePager && (
               <label
                 className={`flex shrink-0 flex-col items-center rounded-xl border-2 px-1.5 py-1 transition-colors ${
                   pagerClash
@@ -1138,6 +1223,7 @@ export const CashierClient = ({
                   className="w-8 bg-transparent text-center text-base font-black tabular-nums outline-none placeholder:font-bold placeholder:text-muted-foreground/50"
                 />
               </label>
+              )}
               <div className="min-w-0 flex-1">
                 <input
                   type="text"
@@ -1151,27 +1237,33 @@ export const CashierClient = ({
                 </p>
               </div>
             </div>
-            <div className="flex shrink-0 flex-col items-stretch gap-1">
-              {cart.length > 0 && (
-                <button
-                  onClick={clearCart}
-                  className="text-xs font-bold text-rose-500 hover:text-rose-600 hover:bg-rose-50 px-3 py-1.5 rounded-lg transition-colors"
-                >
-                  Clear
-                </button>
-              )}
+            {/* Side by side, not stacked. Two labelled buttons in a column
+                made the header two rows tall on a panel where every row costs
+                a cart item — and Clear is destructive, so it reads better as a
+                small icon than as a text button sitting under the note. */}
+            <div className="flex shrink-0 items-center gap-1">
               <button
                 onClick={openOrderNote}
-                className={`flex items-center justify-center gap-1 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
+                className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${
                   orderNote.trim()
                     ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
                     : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                 }`}
                 title="Catatan pesanan (dapur)"
+                aria-label="Catatan pesanan"
               >
-                <StickyNote className="h-3.5 w-3.5" />
-                Catatan
+                <StickyNote className="h-4 w-4" />
               </button>
+              {cart.length > 0 && (
+                <button
+                  onClick={clearCart}
+                  className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-rose-50 hover:text-rose-600"
+                  title="Kosongkan keranjang"
+                  aria-label="Kosongkan keranjang"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              )}
             </div>
           </div>
           {pagerClash && (
@@ -1329,24 +1421,96 @@ export const CashierClient = ({
           )}
         </div>
 
-        {/* Checkout Section */}
-        <div className="p-4 bg-background border-t shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.1)]">
-          <div className="space-y-1.5 mb-3">
-            <div className="flex justify-between text-muted-foreground text-sm font-medium">
+        {/* Checkout Section
+            ------------------------------------------------------------------
+            Ordered by what the cashier decides, in the order they decide it:
+            how the customer is paying, what they owe, what they handed over,
+            then the buttons. It used to be five separately-bordered blocks
+            stacked down the panel — a summary, a full-width Lazy Mode card, a
+            cash card, a wrapping row of payment chips, and two button rows —
+            which is what made it read as clutter rather than as a sequence. */}
+        <div className="border-t bg-background p-3 shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.1)]">
+          {/* How the customer paid. First, because it decides whether the cash
+              block below exists at all — putting it last meant the panel
+              reshuffled under the cashier's finger mid-sale.
+
+              A fixed 5-up grid rather than wrapping chips: the old flex-wrap
+              row broke to two lines at this panel width, and where it broke
+              depended on the label lengths, so the whole footer shifted
+              vertically for no reason the cashier could see.
+
+              Still always visible rather than behind a toggle: it is what the
+              shift report and every payment report bucket on, and a cashier who
+              has to go looking for it leaves it on Tunai. Picking anything but
+              Tunai also clears an insufficient-cash state, which is the usual
+              reason to switch mid-sale.
+
+              While Lazy Mode is on the other four are disabled rather than
+              hidden: lazy mode is a cash sale by definition, and a cashier who
+              reaches for QRIS needs to see WHY it won't take, not find the row
+              silently missing two thirds of its buttons. */}
+          <div className="mb-2 grid grid-cols-5 gap-1">
+            {POS_PAYMENT_OPTIONS.map((opt) => {
+              const locked = lazyMode && opt.value !== 'cash';
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  disabled={locked}
+                  onClick={() => setPaymentMethod(opt.value)}
+                  title={
+                    locked
+                      ? 'Lazy Mode aktif — pembayaran terkunci ke Tunai'
+                      : opt.label
+                  }
+                  className={`truncate rounded-lg border-2 px-1 py-1.5 text-[11px] font-bold transition-colors ${
+                    paymentMethod === opt.value
+                      ? 'border-blue-600 bg-blue-600 text-white'
+                      : locked
+                        ? 'cursor-not-allowed border-border/50 bg-muted/40 text-muted-foreground/40'
+                        : 'border-border bg-background text-muted-foreground hover:bg-muted'
+                  }`}
+                >
+                  {opt.chip}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Says why four of the five just went grey. Without it the lock
+              reads as the app being broken. */}
+          {lazyMode && (
+            <p className="mb-2 -mt-1 text-[11px] text-muted-foreground">
+              Lazy Mode aktif — pembayaran terkunci ke Tunai.
+            </p>
+          )}
+
+          {/* What is owed. One bordered card so the arithmetic reads as a
+              single block that adds up, instead of loose rows sharing space
+              with the controls that change them. */}
+          <div className="mb-2 rounded-xl border bg-muted/30 px-3 py-2">
+            <div className="flex justify-between text-sm text-muted-foreground">
               <span>Subtotal</span>
-              <span>{formatCurrency(Number(cartTotal))}</span>
+              <span className="tabular-nums">
+                {formatCurrency(Number(cartTotal))}
+              </span>
             </div>
-            <div className="flex items-center justify-between gap-2 text-muted-foreground text-sm font-medium">
+
+            {/* The discount controls stay inline, but inside ONE bordered
+                cluster. Previously the %/Rp toggle and the number field floated
+                loose between the label and its value, reading as three
+                unrelated controls that happened to share a line. */}
+            <div className="mt-1.5 flex items-center justify-between gap-2 text-sm text-muted-foreground">
               <div className="flex items-center gap-1.5">
-                <span>Discount</span>
-                <div className="flex items-center rounded-lg border overflow-hidden">
+                <span>Diskon</span>
+                <div className="flex items-center overflow-hidden rounded-md border bg-background">
                   <button
                     type="button"
                     onClick={() => setDiscountType('percentage')}
-                    className={`px-2 py-0.5 text-[11px] font-bold transition-colors ${
+                    className={`px-1.5 py-1 text-[11px] font-bold transition-colors ${
                       discountType === 'percentage'
                         ? 'bg-blue-600 text-white'
-                        : 'bg-background text-muted-foreground hover:bg-muted'
+                        : 'text-muted-foreground hover:bg-muted'
                     }`}
                   >
                     %
@@ -1354,151 +1518,164 @@ export const CashierClient = ({
                   <button
                     type="button"
                     onClick={() => setDiscountType('amount')}
-                    className={`px-2 py-0.5 text-[11px] font-bold transition-colors ${
+                    className={`px-1.5 py-1 text-[11px] font-bold transition-colors ${
                       discountType === 'amount'
                         ? 'bg-blue-600 text-white'
-                        : 'bg-background text-muted-foreground hover:bg-muted'
+                        : 'text-muted-foreground hover:bg-muted'
                     }`}
                   >
                     Rp
                   </button>
+                  <input
+                    type="number"
+                    min={0}
+                    max={discountType === 'percentage' ? 100 : undefined}
+                    value={discountInput}
+                    onChange={(e) => setDiscountInput(e.target.value)}
+                    placeholder="0"
+                    aria-label="Nilai diskon"
+                    className="h-6 w-14 border-l bg-transparent px-1.5 text-xs font-bold outline-none focus:bg-muted"
+                  />
                 </div>
-                <input
-                  type="number"
-                  min={0}
-                  max={discountType === 'percentage' ? 100 : undefined}
-                  value={discountInput}
-                  onChange={(e) => setDiscountInput(e.target.value)}
-                  placeholder="0"
-                  className="w-16 h-7 px-2 rounded-lg border bg-background text-xs font-bold outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
               </div>
               <span
-                className={discountAmount > 0 ? 'text-rose-500 font-semibold' : ''}
+                className={`tabular-nums ${discountAmount > 0 ? 'font-semibold text-rose-500' : ''}`}
               >
                 {discountAmount > 0 ? '-' : ''}
                 {formatCurrency(discountAmount)}
               </span>
             </div>
-            <div className="h-px w-full bg-border my-1.5" />
-            <div className="flex justify-between items-end">
+
+            {tax.applies && (
+              <div className="mt-1.5 flex items-center justify-between text-sm text-muted-foreground">
+                <span>
+                  {taxLineLabel(taxConfig)}
+                  {/* Inclusive tax doesn't change what's owed, so say so —
+                      otherwise the row reads like a charge left out of Total. */}
+                  {taxConfig.inclusive && (
+                    <span className="ml-1 text-[11px]">(termasuk)</span>
+                  )}
+                </span>
+                <span className="font-semibold tabular-nums">
+                  {formatCurrency(tax.amount)}
+                </span>
+              </div>
+            )}
+
+            <div className="my-2 h-px bg-border" />
+            <div className="flex items-end justify-between">
               <span className="text-base font-bold">Total</span>
-              <span className="text-2xl font-black text-blue-600 tracking-tight">
-                {formatCurrency(Number(finalTotal))}
+              <span className="text-2xl font-black tabular-nums tracking-tight text-blue-600">
+                {formatCurrency(Number(grandTotal))}
               </span>
             </div>
           </div>
 
-          {/* Lazy mode toggle — device-local preference. When on, cash received
-              is auto-set to the exact amount due and the entry box is hidden. */}
-          <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border bg-muted/30 px-3 py-2">
-            <div className="flex flex-col">
-              <span className="text-sm font-semibold">Lazy Mode</span>
-              <span className="text-[11px] text-muted-foreground">
-                Uang pas otomatis, tanpa hitung kembalian
-              </span>
-            </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={lazyMode}
-              aria-label="Lazy mode"
-              onClick={toggleLazyMode}
-              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
-                lazyMode ? 'bg-blue-600' : 'bg-muted-foreground/30'
-              }`}
-            >
-              <span
-                className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
-                  lazyMode ? 'translate-x-5' : ''
-                }`}
-              />
-            </button>
-          </div>
-
-          {/* Cash tendered/change only makes sense for a cash sale the cashier
-              actually counts: lazy mode assumes uang pas, and a non-cash sale
-              has nothing to tender. */}
-          {!lazyMode && paymentMethod === 'cash' && (
-            <div className="mb-3 space-y-2 rounded-xl border bg-muted/30 p-3">
+          {/* Cash tendered. Only for a cash sale — there is nothing to tender
+              on a QRIS or card payment, and a "Kembali Rp 0" under one reads
+              like a receipt for a transaction that didn't happen that way. */}
+          {paymentMethod === 'cash' && (
+            <div className="mb-2 rounded-xl border bg-muted/30 px-3 py-2">
               <div className="flex items-center justify-between gap-2">
-                <label className="text-sm font-semibold text-muted-foreground">
-                  Cash Received
-                </label>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={amountPaidInput && Number(amountPaidInput) > 0 ? formatCurrency(Number(amountPaidInput)) : ''}
-                  onChange={(e) => setAmountPaidInput(e.target.value.replace(/\D/g, ''))}
-                  placeholder="Rp 0"
-                  className="w-36 h-9 px-3 rounded-lg border bg-background text-right text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-semibold text-muted-foreground">
-                  {isInsufficient ? 'Shortfall' : 'Change'}
-                </span>
-                <span
-                  className={`text-sm font-bold ${isInsufficient ? 'text-rose-500' : 'text-emerald-600'}`}
-                >
-                  {formatCurrency(isInsufficient ? finalTotal - amountPaid : changeDue)}
-                </span>
-              </div>
-            </div>
-          )}
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold text-muted-foreground">
+                    Bayar
+                  </span>
+                  {/* Lazy mode used to own a full-width card with a two-line
+                      explanation, for a device preference that is set once and
+                      then never touched again. It only ever means "uang pas"
+                      and it only applies to cash, so it belongs here, next to
+                      the field it overrides.
 
-          {paymentMethod === 'non_cash' && (
-            <div className="mb-3 flex items-center justify-between rounded-lg bg-blue-50 px-3 py-2">
-              <span className="text-xs font-bold text-blue-600">
-                Non-cash payment selected
-              </span>
-              <button
-                type="button"
-                onClick={() => setPaymentMethod('cash')}
-                className="text-xs font-bold text-blue-600 underline underline-offset-2 hover:text-blue-700"
-              >
-                Undo
-              </button>
+                      Deliberately still rendered while it is ON: the old layout
+                      hid this whole block when lazy mode was active, so the
+                      only way back was the separate card. Without that card it
+                      has to stay reachable from here. */}
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={lazyMode}
+                    onClick={toggleLazyMode}
+                    title="Uang pas otomatis, tanpa hitung kembalian"
+                    className={`rounded-md border px-2 py-0.5 text-[11px] font-bold transition-colors ${
+                      lazyMode
+                        ? 'border-blue-600 bg-blue-600 text-white'
+                        : 'border-border text-muted-foreground hover:bg-muted'
+                    }`}
+                  >
+                    Lazy Mode
+                  </button>
+                </div>
+                {lazyMode ? (
+                  <span className="text-sm font-bold tabular-nums">
+                    {formatCurrency(grandTotal)}
+                  </span>
+                ) : (
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    aria-label="Uang diterima"
+                    value={
+                      amountPaidInput && Number(amountPaidInput) > 0
+                        ? formatCurrency(Number(amountPaidInput))
+                        : ''
+                    }
+                    onChange={(e) =>
+                      setAmountPaidInput(e.target.value.replace(/\D/g, ''))
+                    }
+                    placeholder="Rp 0"
+                    className="h-9 w-36 rounded-lg border bg-background px-3 text-right text-sm font-bold tabular-nums outline-none focus:border-transparent focus:ring-2 focus:ring-blue-500"
+                  />
+                )}
+              </div>
+              {!lazyMode && (
+                <div className="mt-1.5 flex items-center justify-between">
+                  <span className="text-sm font-semibold text-muted-foreground">
+                    {isInsufficient ? 'Kurang' : 'Kembali'}
+                  </span>
+                  <span
+                    className={`text-sm font-bold tabular-nums ${isInsufficient ? 'text-rose-500' : 'text-emerald-600'}`}
+                  >
+                    {formatCurrency(
+                      isInsufficient ? grandTotal - amountPaid : changeDue,
+                    )}
+                  </span>
+                </div>
+              )}
             </div>
           )}
 
           {/* Pay-first flow: take the money and print both slips while the tab
               stays open, so the pager number and notes remain on screen until
-              the food is handed over. Checkout below is what ends the order. */}
+              the food is handed over. Checkout below is what ends the order.
+              Shorter than the primary button and visually secondary, because
+              they run BEFORE it rather than instead of it. */}
           <div className="mb-2 flex gap-2">
             <Button
               type="button"
               variant="outline"
               onClick={printCustomerReceipt}
               disabled={checkoutDisabled}
-              className="h-11 flex-1 rounded-2xl border-2 text-sm font-bold"
+              className="h-10 flex-1 rounded-xl border-2 text-xs font-bold"
             >
-              <Printer className="mr-1.5 h-4 w-4" />
+              <Printer className="mr-1.5 h-3.5 w-3.5" />
               Struk
             </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={printKitchenTicket}
-              disabled={cart.length === 0}
-              className="h-11 flex-1 rounded-2xl border-2 text-sm font-bold"
-            >
-              <ChefHat className="mr-1.5 h-4 w-4" />
-              Dapur
-            </Button>
-          </div>
-
-          <div className="flex gap-2">
-            {isInsufficient && (
+            {canUsePager && (
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => setPaymentMethod('non_cash')}
-                className="h-12 shrink-0 rounded-2xl border-2 px-4 text-sm font-bold"
+                onClick={printKitchenTicket}
+                disabled={cart.length === 0}
+                className="h-10 flex-1 rounded-xl border-2 text-xs font-bold"
               >
-                Non-Cash
+                <ChefHat className="mr-1.5 h-3.5 w-3.5" />
+                Dapur
               </Button>
             )}
+          </div>
+
+          <div className="flex gap-2">
             <Button
               onClick={handleCheckout}
               disabled={checkoutDisabled || isSubmitting}
@@ -1614,7 +1791,7 @@ export const CashierClient = ({
             </span>
           </div>
           <span className="font-black">
-            {formatCurrency(finalTotal)}
+            {formatCurrency(grandTotal)}
           </span>
         </button>
       </div>

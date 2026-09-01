@@ -94,6 +94,13 @@ const PAPER_DOTS: Record<PaperWidth, number> = { "58": 384, "80": 576 };
 // roll's own width overflows the head by 6-8mm and the driver clips it off the
 // right edge — or silently shrinks the whole receipt to fit.
 const PRINT_MM: Record<PaperWidth, number> = { "58": 48, "80": 72 };
+// ...and like the column count, this is a per-device setting in practice. The
+// driver's own hardware left margin shifts the page right by a few millimetres,
+// so the width that actually reaches paper is narrower than the head's spec —
+// and no browser API reports it. The ruler print measures it; this remembers it.
+const MM_KEY = (p: PaperWidth) => `pos_print_mm_${p}`;
+const MIN_MM = 30;
+const MAX_MM = 80;
 
 /* What the invoice's money block reduces to on paper: the DP is credited even
    on a draft (it's agreed but not yet booked, so amount_paid is still 0). */
@@ -375,8 +382,8 @@ const toBase64 = (bytes: number[]) => {
 
 // Desktop/iOS fallback: a self-contained receipt-width page built from the same
 // data (the A4 markup wouldn't carry over to a print window), auto-printed.
-function printViaBrowser(inv: ThermalInvoice, paper: PaperWidth) {
-  const mm = `${PRINT_MM[paper]}mm`;
+function printViaBrowser(inv: ThermalInvoice, paper: PaperWidth, widthMm: number) {
+  const mm = `${widthMm}mm`;
   const logo = logoSrcOf(inv);
   const { dp, beyondDp, remaining, credited } = creditedAmounts(inv);
   const badge = statusLabel(inv.status);
@@ -459,6 +466,49 @@ function printViaBrowser(inv: ThermalInvoice, paper: PaperWidth) {
   w.document.close();
 }
 
+/* The browser route's ruler: a 100mm millimetre scale, printed through the same
+   dialog the receipt goes through, so it is measured under the same driver,
+   paper size and scaling. Read off the last number that reached the paper and
+   that is the width the receipt may use. */
+function printRulerViaBrowser(paper: PaperWidth, widthMm: number) {
+  const MAX = 100;
+  const ticks = Array.from({ length: MAX + 1 }, (_, i) => {
+    const h = i % 10 === 0 ? 8 : i % 5 === 0 ? 5 : 3;
+    return `<div class="t" style="left:${i}mm;height:${h}mm"></div>`;
+  }).join("");
+  const labels = Array.from({ length: MAX / 10 + 1 }, (_, i) => {
+    const mm = i * 10;
+    return `<div class="l" style="left:${mm}mm">${mm}</div>`;
+  }).join("");
+
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Tes lebar cetak</title>
+<style>
+  @page { size: ${MAX}mm auto; margin: 0; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: ${MAX}mm; }
+  body { font-family: 'Courier New', monospace; font-size: 10px; color: #000; padding: 3mm 0 0 0; }
+  .h { font-weight: bold; padding-bottom: 2mm; }
+  .s { padding: 0 0 2mm 0; }
+  .r { position: relative; height: 14mm; width: ${MAX}mm; border-top: 0.3mm solid #000; }
+  .t { position: absolute; top: 0; width: 0; border-left: 0.25mm solid #000; }
+  .l { position: absolute; top: 9mm; font-size: 8px; transform: translateX(-50%); }
+</style></head><body>
+  <div class="h">TES LEBAR CETAK</div>
+  <div class="s">Setelan sekarang: ${paper}mm, ${widthMm}mm</div>
+  <div class="r">${ticks}${labels}</div>
+  <div class="s">Angka terakhir yang tercetak = lebar<br>cetak printer ini (mm).</div>
+  <script>window.onload=function(){window.focus();window.print();window.onafterprint=function(){window.close();};setTimeout(function(){try{window.close();}catch(e){}},2000);};</script>
+</body></html>`;
+
+  const w = window.open("", "_blank", "width=360,height=640");
+  if (!w) {
+    alert("Popup diblokir. Izinkan popup untuk situs ini agar tes bisa dicetak.");
+    return;
+  }
+  w.document.write(html);
+  w.document.close();
+}
+
 // Prefer ThermalBridge, fall back to RawBT. Navigating to a scheme nobody
 // handles is a silent no-op in Android Chrome, so "installed" is detected by
 // the page losing focus before the timer fires: ThermalBridge's print popup
@@ -529,11 +579,29 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
   };
   const [lineChars, setLineChars] = useState<number>(() => readChars(paper));
 
+  const readMm = (w: PaperWidth) => {
+    if (typeof window === "undefined") return PRINT_MM[w];
+    const stored = Number(window.localStorage.getItem(MM_KEY(w)));
+    return stored >= MIN_MM && stored <= MAX_MM ? stored : PRINT_MM[w];
+  };
+  const [widthMm, setWidthMm] = useState<number>(() => readMm(paper));
+
   const pickPaper = (w: PaperWidth) => {
     setPaper(w);
     setLineChars(readChars(w)); // each width remembers its own printer
+    setWidthMm(readMm(w));
     try {
       window.localStorage.setItem(PAPER_KEY, w);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const nudgeMm = (delta: number) => {
+    const next = Math.min(MAX_MM, Math.max(MIN_MM, widthMm + delta));
+    setWidthMm(next);
+    try {
+      window.localStorage.setItem(MM_KEY(paper), String(next));
     } catch {
       /* ignore */
     }
@@ -596,7 +664,7 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
 
   const handlePrint = async () => {
     if (!isAndroid) {
-      printViaBrowser(inv, paper);
+      printViaBrowser(inv, paper, widthMm);
       return;
     }
     const b64 = toBase64(await buildBytes());
@@ -645,7 +713,22 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
   };
 
   const handleUsbPrint = (allDevices = false) => runUsb(buildBytes, allDevices);
-  const handleUsbRuler = () => runUsb(() => buildRulerEscposBytes(paper, lineChars));
+  /* Measure the route this device actually prints by — a ruler from the wrong
+     transport measures the wrong thing, which is the whole reason this took as
+     long as it did. USB only when it is genuinely paired and working. */
+  const handleRulerTest = async () => {
+    if (!isAndroid && !usbPaired) {
+      printRulerViaBrowser(paper, widthMm);
+      return;
+    }
+    if (usbPaired) {
+      await runUsb(() => buildRulerEscposBytes(paper, lineChars));
+      return;
+    }
+    const b64 = toBase64(buildRulerEscposBytes(paper, lineChars));
+    const b64url = b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    openPrintApp(`thermalbridge://print?back=1&data=${b64url}`, `rawbt:base64,${b64}`);
+  };
 
   return (
     <>
@@ -667,30 +750,57 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
         </div>
       </div>
 
-      {/* Only the raw ESC/POS routes use this; the browser dialog lays out in
-          millimetres and needs no column count. */}
-      <div className="flex items-center justify-between gap-2 px-1">
-        <span className="text-xs text-muted-foreground">Kolom cetak</span>
-        <div className="flex items-center gap-1 rounded-lg border p-0.5">
-          <button
-            onClick={() => nudgeChars(-1)}
-            disabled={lineChars <= MIN_CHARS}
-            aria-label="Kurangi kolom"
-            className="rounded-md px-2 py-1 text-xs font-bold text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
-          >
-            −
-          </button>
-          <span className="w-6 text-center text-xs font-bold tabular-nums">{lineChars}</span>
-          <button
-            onClick={() => nudgeChars(1)}
-            disabled={lineChars >= MAX_CHARS}
-            aria-label="Tambah kolom"
-            className="rounded-md px-2 py-1 text-xs font-bold text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
-          >
-            +
-          </button>
+      {/* Two routes, two units, and a device can have both: the print dialog lays
+          out in millimetres, raw ESC/POS counts characters. Each is shown only
+          where it can do anything. */}
+      {!isAndroid && (
+        <div className="flex items-center justify-between gap-2 px-1">
+          <span className="text-xs text-muted-foreground">Lebar cetak</span>
+          <div className="flex items-center gap-1 rounded-lg border p-0.5">
+            <button
+              onClick={() => nudgeMm(-1)}
+              disabled={widthMm <= MIN_MM}
+              aria-label="Kurangi Lebar cetak"
+              className="rounded-md px-2 py-1 text-xs font-bold text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+            >
+              −
+            </button>
+            <span className="w-8 text-center text-xs font-bold tabular-nums">{widthMm}mm</span>
+            <button
+              onClick={() => nudgeMm(1)}
+              disabled={widthMm >= MAX_MM}
+              aria-label="Tambah Lebar cetak"
+              className="rounded-md px-2 py-1 text-xs font-bold text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+            >
+              +
+            </button>
+          </div>
         </div>
-      </div>
+      )}
+      {(isAndroid || usbAvailable) && (
+        <div className="flex items-center justify-between gap-2 px-1">
+          <span className="text-xs text-muted-foreground">Kolom cetak</span>
+          <div className="flex items-center gap-1 rounded-lg border p-0.5">
+            <button
+              onClick={() => nudgeChars(-1)}
+              disabled={lineChars <= MIN_CHARS}
+              aria-label="Kurangi Kolom cetak"
+              className="rounded-md px-2 py-1 text-xs font-bold text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+            >
+              −
+            </button>
+            <span className="w-8 text-center text-xs font-bold tabular-nums">{lineChars}</span>
+            <button
+              onClick={() => nudgeChars(1)}
+              disabled={lineChars >= MAX_CHARS}
+              aria-label="Tambah Kolom cetak"
+              className="rounded-md px-2 py-1 text-xs font-bold text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+            >
+              +
+            </button>
+          </div>
+        </div>
+      )}
 
       <MenuRow
         icon={<Receipt className="size-4" />}
@@ -717,15 +827,13 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
           disabled={usbBusy}
         />
       )}
-      {usbAvailable && (
-        <MenuRow
+      <MenuRow
           icon={<Ruler className="size-4" />}
           label="Tes lebar kertas"
-          hint="Cetak penggaris kolom lewat USB — untuk menyetel lebar cetak"
-          onClick={handleUsbRuler}
+          hint="Cetak penggaris — untuk menyetel lebar cetak"
+          onClick={handleRulerTest}
           disabled={usbBusy}
-        />
-      )}
+      />
       {usbAvailable && usbPaired && (
         <button
           onClick={async () => {

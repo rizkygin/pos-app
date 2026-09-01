@@ -2,6 +2,7 @@ import { getSession } from "@/lib/auth";
 import { serverFetch } from "@/lib/server-fetch";
 import Forbidden from "@/lib/forbidden";
 import { CashierClient } from "./cashier-client";
+import { taxConfigFrom } from "@/lib/tax";
 
 export default async function CashierPage() {
     const session = await getSession();
@@ -15,8 +16,22 @@ export default async function CashierPage() {
     // items, so drop anything flagged not-for-sale. This also keeps
     // inventory-only items from spawning their own category tabs in the POS
     // (the client derives its tabs from this list).
-    const res = await serverFetch("/api/products/mine");
+    // Products and plan entitlements together. Both are needed before the
+    // counter can render honestly, and fetching the features here rather than
+    // from the client avoids the counter briefly offering a control the
+    // merchant's plan doesn't include.
+    const [res, featuresRes] = await Promise.all([
+        serverFetch("/api/products/mine"),
+        serverFetch("/api/me/features"),
+    ]);
     const { outlet, products } = res.ok ? await res.json() : { outlet: null, products: [] };
+
+    // Closed by default. If the features call failed we do NOT know the plan,
+    // and quietly unlocking a paid feature on a network blip is the wrong way
+    // to be wrong — opening a shift would be refused by the backend anyway.
+    const features: Record<string, unknown> = featuresRes.ok
+        ? ((await featuresRes.json())?.features ?? {})
+        : {};
     const sellableProducts = products.filter(
         (p: { is_for_sale?: boolean }) => p.is_for_sale !== false,
     );
@@ -41,6 +56,12 @@ export default async function CashierPage() {
                 outletPhone={outlet.phone}
                 outletLogo={outlet.avatar ?? ""}
                 cashierName={session.user.name ?? "Cashier"}
+                canUseShift={features.cashierShift === true}
+                canUsePager={features.pager === true}
+                // Resolved against the gate here, so the counter can't show a
+                // tax line the plan doesn't include. The server applies the
+                // same gate when it stores the order.
+                taxConfig={taxConfigFrom(outlet, features.tax === true)}
                 initialProducts={sellableProducts}
             />
         </main>

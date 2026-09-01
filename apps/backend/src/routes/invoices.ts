@@ -39,6 +39,7 @@ import {
   getUTCRangeFromLocalMonth,
   yearIn,
 } from "../lib/timezone";
+import { postMovement } from "../lib/cost";
 
 // Cashflow categories used when an invoice is paid (seeded in CATEGORY_OUT/IN).
 const PURCHASE_CASH_CATEGORY = "Pembelian stok barang dagang";
@@ -575,17 +576,19 @@ export async function invoiceRoutes(app: FastifyInstance) {
             .where(eq(productsTable.id, it.product_id))
             .limit(1);
           if (!p?.track_stock) continue;
-          await tx.insert(stockMovementsTable).values({
-            outlet_id: outlet.id,
-            product_id: it.product_id,
-            qty_change: it.quantity, // positive = stock in
+          // Landed cost per unit: line_total already has the line discount
+          // applied, so it is what the goods actually cost, not the list price.
+          // This is the number the whole cost ledger is built out of.
+          const qtyIn = Number(it.quantity) || 0;
+          const landed = qtyIn > 0 ? Number(it.line_total) / qtyIn : Number(it.unit_price);
+          await postMovement(tx, {
+            outletId: outlet.id,
+            productId: it.product_id,
+            qtyChange: qtyIn, // positive = stock in
             reason: "purchase",
-            invoice_id: id,
+            unitCost: Number.isFinite(landed) ? landed : Number(it.unit_price) || 0,
+            invoiceId: id,
           });
-          await tx
-            .update(productsTable)
-            .set({ stock: sql`${productsTable.stock} + ${it.quantity}::numeric` })
-            .where(eq(productsTable.id, it.product_id));
         }
 
         let [updated] = await tx
@@ -678,17 +681,17 @@ export async function invoiceRoutes(app: FastifyInstance) {
           .from(stockMovementsTable)
           .where(and(eq(stockMovementsTable.invoice_id, id), eq(stockMovementsTable.reason, "purchase")));
         for (const m of moves) {
-          await tx.insert(stockMovementsTable).values({
-            outlet_id: outlet.id,
-            product_id: m.product_id,
-            qty_change: String(-Number(m.qty_change)),
+          await postMovement(tx, {
+            outletId: outlet.id,
+            productId: m.product_id,
+            qtyChange: -Number(m.qty_change),
             reason: "void",
-            invoice_id: id,
+            // Take back out exactly what this purchase put in. Valuing the
+            // reversal at today's average would leave the difference behind as
+            // phantom value on a purchase that never happened.
+            unitCost: m.unit_cost != null ? Number(m.unit_cost) : null,
+            invoiceId: id,
           });
-          await tx
-            .update(productsTable)
-            .set({ stock: sql`${productsTable.stock} - ${m.qty_change}::numeric` })
-            .where(eq(productsTable.id, m.product_id));
         }
 
         // Remove ALL payments this invoice generated (DP + installments live in
@@ -1116,17 +1119,16 @@ export async function invoiceRoutes(app: FastifyInstance) {
           .from(stockMovementsTable)
           .where(and(eq(stockMovementsTable.invoice_id, id), eq(stockMovementsTable.reason, "sales")));
         for (const m of moves) {
-          await tx.insert(stockMovementsTable).values({
-            outlet_id: outlet.id,
-            product_id: m.product_id,
-            qty_change: String(-Number(m.qty_change)), // reverse the OUT (back IN)
+          await postMovement(tx, {
+            outletId: outlet.id,
+            productId: m.product_id,
+            qtyChange: -Number(m.qty_change), // reverse the OUT (back IN)
             reason: "void",
-            invoice_id: id,
+            // Restore the cost this sale consumed, so the void cancels the COGS
+            // it booked instead of booking a second, differently-priced one.
+            unitCost: m.unit_cost != null ? Number(m.unit_cost) : null,
+            invoiceId: id,
           });
-          await tx
-            .update(productsTable)
-            .set({ stock: sql`${productsTable.stock} - ${m.qty_change}::numeric` })
-            .where(eq(productsTable.id, m.product_id));
         }
 
         // Remove ALL payments this invoice generated (DP + installments live in
@@ -1526,17 +1528,18 @@ export async function invoiceRoutes(app: FastifyInstance) {
           if (!p || !p.track_stock) continue;
           const delta = +(counted - Number(p.stock)).toFixed(2);
           if (delta === 0) continue;
-          await tx.insert(stockMovementsTable).values({
-            outlet_id: outlet.id,
-            product_id: it.product_id,
-            qty_change: String(delta),
+          // Valued at the running average in both directions: shrinkage is
+          // stock worth what the rest of the shelf is worth, and a surplus found
+          // during a count is stock that was always there, not a purchase. Note
+          // this posts the DELTA rather than setting the count absolutely — same
+          // resulting quantity, but it goes through the one ledger writer.
+          await postMovement(tx, {
+            outletId: outlet.id,
+            productId: it.product_id,
+            qtyChange: delta,
             reason: "adjustment",
             note,
           });
-          await tx
-            .update(productsTable)
-            .set({ stock: String(counted) })
-            .where(eq(productsTable.id, it.product_id));
           count++;
         }
         return count;

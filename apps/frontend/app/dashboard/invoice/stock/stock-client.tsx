@@ -26,7 +26,13 @@ type Product = {
   unit: string;
   stock: string;
   buying_price: string;
+  // Running weighted-average unit cost from the cost ledger. This is what the
+  // stock is actually worth; buying_price is only what was last typed into the
+  // product form, and is meaningless for anything produced in-house.
+  avg_cost: string;
   track_stock: boolean;
+  has_recipe: boolean;
+  yield_qty: string;
 };
 
 type HistoryRow = {
@@ -41,7 +47,7 @@ type HistoryRow = {
 type FlowRow = {
   id: number;
   qty_change: string;
-  reason: "purchase" | "sales" | "adjustment" | "void";
+  reason: "purchase" | "sales" | "adjustment" | "void" | "production";
   note: string | null;
   created_at: string;
   invoice_number: string | null;
@@ -52,6 +58,10 @@ const FLOW_REASON: Record<FlowRow["reason"], { label: string; cls: string }> = {
   sales: { label: "Penjualan", cls: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300" },
   adjustment: { label: "Opname", cls: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300" },
   void: { label: "Pembatalan", cls: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300" },
+  // A production batch shows on BOTH sides of itself: negative rows on the
+  // ingredients, one positive row on the batch. Same label either way — the
+  // sign already says which end of it you are looking at.
+  production: { label: "Produksi", cls: "bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300" },
 };
 
 export function StockClient() {
@@ -66,6 +76,15 @@ export function StockClient() {
   const [counts, setCounts] = useState<Record<string, string>>({});
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
+
+  // production state: which product is being made, and how much of it
+  const [produceRow, setProduceRow] = useState<StockRow | null>(null);
+  const [produceQty, setProduceQty] = useState("");
+  const [producing, setProducing] = useState(false);
+  const [produceError, setProduceError] = useState("");
+  // Shortfall notices from the server ("Cabai: stok 0.2, terpakai 0.5"). Shown,
+  // never blocking: the batch was physically cooked either way.
+  const [produceWarnings, setProduceWarnings] = useState<string[]>([]);
 
   // per-item flow state
   const [flowProduct, setFlowProduct] = useState<StockRow | null>(null);
@@ -91,7 +110,10 @@ export function StockClient() {
           .filter((p) => p.track_stock)
           .map((p) => {
             const stock = Number(p.stock || 0);
-            const buying_price = Number(p.buying_price || 0);
+            // Fall back to buying_price only when the ledger has nothing to say
+            // (a product that has never moved since migration 0063).
+            const ledgerCost = Number(p.avg_cost || 0);
+            const buying_price = ledgerCost > 0 ? ledgerCost : Number(p.buying_price || 0);
             return {
               id: p.id,
               product_name: p.product_name,
@@ -99,6 +121,8 @@ export function StockClient() {
               stock,
               buying_price,
               value: stock * buying_price,
+              has_recipe: !!p.has_recipe,
+              yield_qty: Number(p.yield_qty || 1),
             };
           }),
       );
@@ -213,6 +237,43 @@ export function StockClient() {
       setView("list");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const openProduce = (row: StockRow) => {
+    setProduceRow(row);
+    // Default to one batch — the number the owner thinks in ("sekali masak").
+    setProduceQty(String(row.yield_qty || 1));
+    setProduceError("");
+    setProduceWarnings([]);
+  };
+
+  const submitProduce = async () => {
+    if (!produceRow) return;
+    setProducing(true);
+    setProduceError("");
+    try {
+      const res = await fetch(`${API_URL}/api/products/${produceRow.id}/production`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ qty: Number(produceQty), note: "" }),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.message || "Gagal mencatat produksi");
+      await loadStock();
+      // Warnings keep the dialog open so the owner actually reads which
+      // ingredient went short; a clean run just closes.
+      if (json.warnings?.length) {
+        setProduceWarnings(json.warnings);
+        setProduceRow((r) => (r ? { ...r } : r));
+      } else {
+        setProduceRow(null);
+      }
+    } catch (e) {
+      setProduceError(e instanceof Error ? e.message : "Gagal mencatat produksi");
+    } finally {
+      setProducing(false);
     }
   };
 
@@ -547,7 +608,7 @@ export function StockClient() {
         </div>
       ) : (
         <DataTable
-          columns={stockColumns(openFlow)}
+          columns={stockColumns(openFlow, openProduce)}
           data={pageData}
           page={page}
           limit={limit}
@@ -555,6 +616,86 @@ export function StockClient() {
           setPage={setPage}
           setLimit={setLimit}
         />
+      )}
+
+      {/* Production dialog. Hand-rolled overlay: this page has no dialog
+          primitive, and pulling one in for a single numeric prompt would be a
+          bigger change than the feature. Theme tokens throughout — nothing here
+          is a surface that must stay white. */}
+      {produceRow && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => !producing && setProduceRow(null)}
+        >
+          <div
+            className="w-full max-w-sm space-y-3 rounded-2xl border bg-background p-5 shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div>
+              <h2 className="text-lg font-semibold tracking-tight">
+                Produksi {produceRow.product_name}
+              </h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Bahan-bahannya berkurang, stok {produceRow.product_name} bertambah
+                sebanyak yang pian isi.
+              </p>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-sm font-medium">
+                Jumlah jadi ({produceRow.unit})
+              </label>
+              <Input
+                type="number"
+                min="0"
+                step="any"
+                autoFocus
+                value={produceQty}
+                onChange={(e) => setProduceQty(e.target.value)}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Stok sekarang: {produceRow.stock} {produceRow.unit}
+              </p>
+            </div>
+
+            {produceWarnings.length > 0 && (
+              <div className="space-y-1 rounded-xl bg-amber-50 p-3 dark:bg-amber-950/40">
+                <p className="text-xs font-semibold text-amber-800 dark:text-amber-300">
+                  Produksi tercatat, tapi stok bahan ini kurang:
+                </p>
+                <ul className="space-y-0.5 text-xs text-amber-800 dark:text-amber-300">
+                  {produceWarnings.map((w) => (
+                    <li key={w}>• {w}</li>
+                  ))}
+                </ul>
+                <p className="text-[11px] text-amber-700 dark:text-amber-400">
+                  Cek lagi lewat Opname kalau catatan stoknya memang belum pas.
+                </p>
+              </div>
+            )}
+
+            {produceError && (
+              <p className="text-xs font-medium text-destructive">{produceError}</p>
+            )}
+
+            <div className="flex justify-end gap-2 pt-1">
+              <Button
+                variant="ghost"
+                onClick={() => setProduceRow(null)}
+                disabled={producing}
+              >
+                {produceWarnings.length > 0 ? "Tutup" : "Batal"}
+              </Button>
+              <Button
+                onClick={submitProduce}
+                disabled={producing || !(Number(produceQty) > 0)}
+              >
+                {producing && <Loader2 className="mr-1 size-4 animate-spin" />}
+                Catat Produksi
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

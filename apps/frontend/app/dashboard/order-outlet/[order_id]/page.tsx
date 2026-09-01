@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { posPaymentLabel } from "@/lib/pos-payment";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { format } from "date-fns";
@@ -73,7 +74,7 @@ type Customer = {
 type OfflineNote = {
     customerName?: string | null;
     discountAmount?: number;
-    paymentMethod?: "cash" | "non_cash";
+    paymentMethod?: string;
     amountPaid?: number;
     changeDue?: number;
 };
@@ -347,9 +348,9 @@ export default function OrderDetailPage() {
                                     <span className="text-muted-foreground font-semibold flex items-center gap-1.5">
                                         <Wallet className="h-3.5 w-3.5" /> Metode Pembayaran
                                     </span>
-                                    <span className="font-bold">{offlineNote.paymentMethod === "non_cash" ? "Non-Cash" : "Cash"}</span>
+                                    <span className="font-bold">{posPaymentLabel(offlineNote.paymentMethod ?? "cash")}</span>
                                 </div>
-                                {offlineNote.paymentMethod !== "non_cash" && (
+                                {(offlineNote.paymentMethod ?? "cash") === "cash" && (
                                     <>
                                         <div className="flex justify-between text-sm">
                                             <span className="text-muted-foreground font-semibold flex items-center gap-1.5">

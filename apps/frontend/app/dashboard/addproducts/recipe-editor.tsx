@@ -10,6 +10,10 @@ type IngredientOption = {
   product_name: string;
   unit: string;
   stock: string;
+  // false = this option is itself a composition with no stock of its own. It is
+  // a valid ingredient (that is what a sub-composition IS), but showing it a
+  // stock number would be a lie, so the label drops it.
+  track_stock: boolean;
 };
 
 type RecipeRow = {
@@ -35,14 +39,23 @@ type RecipeRow = {
 export function RecipeEditor({
   productId,
   ingredients,
+  trackStock,
 }: {
   productId: string;
   ingredients: IngredientOption[];
+  // Whether the product being edited holds stock of its own. Changes only the
+  // copy: a tracked product with a composition is made in batches on the Stok
+  // page, an untracked one is expanded live at each sale.
+  trackStock: boolean;
 }) {
   const [rows, setRows] = useState<RecipeRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  // Only meaningful for a tracked product: how much ONE batch yields, used as
+  // the default in the Produksi dialog. The composition itself is always
+  // per-one-unit, so this never changes what a sale deducts.
+  const [yieldQty, setYieldQty] = useState('1');
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -54,6 +67,7 @@ export function RecipeEditor({
         });
         const json = await res.json();
         if (!cancelled && json.success) {
+          if (json.yield_qty != null) setYieldQty(String(Number(json.yield_qty)));
           setRows(
             (json.items as { ingredient_id: string; qty: string }[]).map((it) => ({
               ingredient_id: it.ingredient_id,
@@ -88,7 +102,10 @@ export function RecipeEditor({
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ items }),
+        body: JSON.stringify({
+          items,
+          ...(trackStock && Number(yieldQty) > 0 ? { yield_qty: Number(yieldQty) } : {}),
+        }),
       });
       const json = await res.json();
       if (!json.success) throw new Error(json.message || 'Gagal menyimpan komposisi');
@@ -109,8 +126,9 @@ export function RecipeEditor({
         <span className="font-normal text-muted-foreground">(opsional)</span>
       </label>
       <p className="text-xs text-muted-foreground">
-        Produk ini diambil dari stok produk lain. Setiap 1 terjual, stok di bawah
-        otomatis berkurang sesuai jumlahnya.
+        {trackStock
+          ? 'Produk ini dibuat sendiri dari bahan di bawah. Stoknya bertambah lewat tombol Produksi di halaman Stok, dan saat terjual yang berkurang stok produk ini — bukan bahannya lagi.'
+          : 'Produk ini diambil dari stok produk lain. Setiap 1 terjual, stok di bawah otomatis berkurang sesuai jumlahnya.'}
       </p>
       {/* Two concrete examples, one food one not: without the second, owners
           read this as a kitchen-only feature and never use it for bundles. */}
@@ -122,6 +140,15 @@ export function RecipeEditor({
         <li>
           • <span className="font-medium">Paket / eceran</span> — “Batako 10 pcs”
           memotong 10 dari stok Batako.
+        </li>
+        {/* The nesting rule, stated as the two cases an owner actually has.
+            Which one applies is decided by "lacak stok" on the ingredient, so
+            it is worth spelling out here rather than in a tooltip. */}
+        <li>
+          • <span className="font-medium">Bahan bertingkat</span> — bahan boleh
+          punya komposisi sendiri. Kalau bahan itu dilacak stoknya (mis. Sambal
+          yang dimasak per batch), yang berkurang stok Sambal-nya; kalau tidak
+          (mis. Bumbu Dasar), potongan diteruskan ke bahan mentahnya.
         </li>
       </ul>
       <p className="text-xs text-muted-foreground">
@@ -148,7 +175,10 @@ export function RecipeEditor({
                     value={p.id}
                     disabled={rows.some((r, idx) => idx !== i && r.ingredient_id === p.id)}
                   >
-                    {p.product_name} (stok {Number(p.stock)} {p.unit})
+                    {p.product_name}
+                    {p.track_stock
+                      ? ` (stok ${Number(p.stock)} ${p.unit})`
+                      : ' (komposisi)'}
                   </option>
                 ))}
               </select>
@@ -174,6 +204,25 @@ export function RecipeEditor({
               </button>
             </div>
           ))}
+
+          {trackStock && (
+            <div className="flex items-center gap-2 pt-1">
+              <label className="text-xs text-muted-foreground">
+                Sekali produksi jadi
+              </label>
+              <input
+                type="number"
+                min="0"
+                step="any"
+                value={yieldQty}
+                onChange={(e) => setYieldQty(e.target.value)}
+                className="h-9 w-24 rounded-xl border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+              <span className="text-xs text-muted-foreground">
+                dipakai sebagai isian awal tombol Produksi
+              </span>
+            </div>
+          )}
 
           <div className="flex items-center justify-between gap-2 pt-1">
             <Button

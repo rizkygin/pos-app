@@ -4,7 +4,11 @@ import { db } from "../db";
 import { adminsTable, customersTable, couriersTable, outletsTable, employeesTable, usersTable } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
-import { getSubscriptionGate } from "../lib/outlet-access";
+import {
+  getOutletAccess,
+  getSubscriptionGate,
+  parseActiveOutletId,
+} from "../lib/outlet-access";
 import { normalizeIndonesianPhone, formatIndonesianPhone } from "../lib/utils/phone";
 
 type Role = "admin" | "customer" | "courier" | "owner";
@@ -109,6 +113,38 @@ export async function meRoutes(app: FastifyInstance) {
    * would have to be told the cooldown length and trusted to apply it, and the
    * answer depends on server time anyway.
    */
+  /**
+   * What the caller's outlet plan includes.
+   *
+   * /api/me carries the gate too, but only down the "owner" probe — an employee
+   * is not an owner, so a cashier on a Max Lite outlet would read no features
+   * at all and every plan-gated control would render locked for them.
+   *
+   * This resolves through outlet ACCESS instead (owner or active employee) and
+   * reads the gate off the outlet's owner, which is where the subscription
+   * actually lives. No permission is required: knowing which features your
+   * employer pays for is not privileged, and every feature it names is enforced
+   * again on the route that performs the action.
+   */
+  app.get("/api/me/features", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false });
+
+    const access = await getOutletAccess(session.user.id, parseActiveOutletId(request));
+    // Not attached to an outlet at all — a customer or courier hitting this.
+    // An empty feature set is the honest answer, and callers already have to
+    // handle it (that is exactly what a lapsed plan returns).
+    if (!access) return { success: true, features: {}, alive: false, status: null };
+
+    const gate = await getSubscriptionGate(access.outlet.user_id);
+    return {
+      success: true,
+      features: gate.features,
+      alive: gate.alive,
+      status: gate.status,
+    };
+  });
+
   app.get("/api/me/phone", async (request, reply) => {
     const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
     if (!session?.user) return reply.status(401).send({ success: false });

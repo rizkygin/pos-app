@@ -48,6 +48,7 @@ import {
   FileBarChart,
   ShoppingBag,
   Boxes,
+  ChefHat,
   Truck,
   Home,
   ShieldCheck,
@@ -233,6 +234,12 @@ const invoiceNavSubItems = [
   { name: 'Faktur Pembelian', url: '/dashboard/invoice/purchase', icon: ShoppingBag },
   { name: 'Laporan Faktur', url: '/dashboard/invoice/reports', icon: FileBarChart },
   { name: 'Stok', url: '/dashboard/invoice/stock', icon: Boxes },
+  // Sits next to Stok because it IS a stock operation (ingredients out, batch
+  // in) and shares the same permission. Deliberately its own entry rather than
+  // a button inside Stok: the row action there only appears on a product that
+  // already tracks stock AND already has a composition, so nobody who had not
+  // already built one could discover that producing was possible at all.
+  { name: 'Produksi', url: '/dashboard/invoice/production', icon: ChefHat },
   { name: 'Supplier', url: '/dashboard/invoice/supplier', icon: Truck },
 ];
 
@@ -477,6 +484,7 @@ export function AppSidebar({
     'Faktur Pembelian': 'purchaseInvoice',
     'Laporan Faktur': 'reports',
     Stok: 'stock',
+    Produksi: 'stock',
     Supplier: 'purchaseInvoice',
   };
   const employeeInvoiceItems = invoiceNavSubItems.filter((i) =>

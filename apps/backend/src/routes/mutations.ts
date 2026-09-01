@@ -17,9 +17,13 @@ import {
 } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
-import { requireOutletAccess } from "../lib/outlet-access";
-import { applySaleStockOut, applySaleStockReturn } from "../lib/stock";
+import { hasFeature, requireOutletAccess } from "../lib/outlet-access";
+import { applyOrderStockReturn, applySaleStockOut, applySaleStockReturn } from "../lib/stock";
+import { lineUnitCostSql } from "../lib/cogs";
 import { CATEGORY_POS_SALE, CATEGORY_POS_CANCELLATION } from "../lib/cashflow-categories";
+import { parsePosPaymentMethod, posCashflowTypeFor } from "../lib/pos-payment";
+import { getOpenShiftId } from "../lib/shift";
+import { computeTax, taxConfigFrom } from "../lib/tax";
 import { normalizeIndonesianPhone } from "../lib/utils/phone";
 import { DEFAULT_COORDS, parseCoordPair } from "../lib/utils/coords";
 import { isWithinServiceArea } from "../lib/service-area";
@@ -34,7 +38,22 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 // orderId is optional because /api/add-pos-to-cashflowin calls this with no
 // order in hand. When it is passed the cashflow row carries it, which is what
 // makes the sale reversible — see cancelPosOrder.
-async function addPosToCashflowin(tx: Tx, outletId: number, total: number, orderId?: string) {
+//
+// `method` decides which side of the ledger this lands on. It used to be
+// hardcoded 'cash', which meant a QRIS sale counted as notes in the drawer:
+// harmless while nothing ever counted the drawer, and wrong the moment a shift
+// close does. See lib/pos-payment.ts.
+//
+// `shiftId` is which cashier stint was open when it was rung up, so a closing
+// report can sum the drawer by foreign key instead of by time window.
+async function addPosToCashflowin(
+  tx: Tx,
+  outletId: number,
+  total: number,
+  orderId?: string,
+  method: string = "cash",
+  shiftId: number | null = null,
+) {
   let [category] = await tx
     .select({ id: cashInCategoryTable.id })
     .from(cashInCategoryTable)
@@ -53,7 +72,7 @@ async function addPosToCashflowin(tx: Tx, outletId: number, total: number, order
     .values({
       category_id: category.id,
       money_amount: String(total),
-      type: "cash",
+      type: posCashflowTypeFor(method),
     })
     .returning();
 
@@ -61,6 +80,7 @@ async function addPosToCashflowin(tx: Tx, outletId: number, total: number, order
     outlet_id: outletId,
     cash_in_detail_id: detail.id,
     order_id: orderId ?? null,
+    shift_id: shiftId,
   });
 }
 
@@ -130,10 +150,42 @@ export async function mutationRoutes(app: FastifyInstance) {
         .where(eq(usersTable.email, EMAIL_COURIER))
         .limit(1);
 
+      // Whatever the cashier picked, coerced to a value the reports know. An
+      // unrecognised string would otherwise become its own permanent bucket in
+      // the payment report, invisible until someone wonders why the columns
+      // don't add up.
+      const paymentMethod = parsePosPaymentMethod(body.paymentMethod);
+
+      // Tax is computed HERE, from the outlet's own settings, and never taken
+      // from the request. The cashier screen works the same sum out for display,
+      // but a client is free to send anything and the amount handed to the tax
+      // office is not a number to accept on trust.
+      //
+      // body.total is already net of the discount, which is the correct base:
+      // tax is charged on what the customer pays, not on a price they were
+      // given a discount off.
+      const taxable = hasFeature(access.gate, "tax");
+      const tax = computeTax(
+        Number(body.total) || 0,
+        taxable
+          ? taxConfigFrom(access.outlet)
+          : { enabled: false, rate: 0, inclusive: false, label: "Pajak" },
+      );
+
       let new_order_id: string | undefined;
 
       try {
         await db.transaction(async (tx) => {
+          // Which stint at the drawer this sale belongs to, read inside the
+          // transaction so a shift closing at this exact moment can't leave the
+          // sale attributed to a shift whose totals are already frozen.
+          //
+          // null is a normal answer: selling with no shift open is allowed (a
+          // forgotten "Buka Shift" must never cost a sale). Those orders appear
+          // on no closing report, which is the honest outcome — there is no
+          // drawer to reconcile them against.
+          const shiftId = await getOpenShiftId(tx, body.outletId);
+
           if (body.cart && body.cart.length > 0) {
             new_order_id = clientOrderId ?? crypto.randomUUID();
             await tx.insert(ordersTable).values({
@@ -147,11 +199,18 @@ export async function mutationRoutes(app: FastifyInstance) {
               source: "pos",
               status: "delivered",
               outlet_id: body.outletId,
+              shift_id: shiftId,
+              // Frozen: a rate change tomorrow must not rewrite this sale.
+              // All three stay NULL when no tax applied, so a reader can tell
+              // "not taxed" from "taxed at zero".
+              tax_rate: tax.rate === null ? null : String(tax.rate),
+              tax_amount: tax.amount === null ? null : String(tax.amount),
+              tax_inclusive: tax.inclusive,
               note: {
                 customerName: body.customerName || null,
                 cashierName,
                 discountAmount: body.discountAmount ?? 0,
-                paymentMethod: body.paymentMethod ?? "cash",
+                paymentMethod,
                 amountPaid: body.amountPaid ?? 0,
                 changeDue: body.changeDue ?? 0,
               },
@@ -164,14 +223,25 @@ export async function mutationRoutes(app: FastifyInstance) {
                   ? parseFloat(item.product.price_mark_down) * qty
                   : parseFloat(item.product.price) * qty;
 
-              await tx.insert(orderDetailsTable).values({
-                order_id: new_order_id,
-                product_id: item.product.id,
-                quantity: item.quantity,
-                note_product: item.note_product || "-",
-                summary_price: summary_price.toString(),
-                status: "checkout",
-              });
+              // `returning` because the movements written just below have to
+              // carry this row's id — see orderDetailId there.
+              const [detail] = await tx
+                .insert(orderDetailsTable)
+                .values({
+                  order_id: new_order_id,
+                  product_id: item.product.id,
+                  quantity: item.quantity,
+                  note_product: item.note_product || "-",
+                  summary_price: summary_price.toString(),
+                  status: "checkout",
+                  // Freeze what this line cost, for the lines the cost ledger
+                  // cannot see (a service or fee moves no stock, so it writes no
+                  // movement). Stamped on every line all the same — deciding here
+                  // which ones the ledger will cover would re-read the very
+                  // product config that can change afterwards. See lib/cogs.ts.
+                  unit_cost: lineUnitCostSql(item.product.id),
+                })
+                .returning({ id: orderDetailsTable.id });
 
               // POS is an immediate sale: move stock (own stock for track_stock
               // products, ingredients for recipe products) with an audit trail.
@@ -181,12 +251,30 @@ export async function mutationRoutes(app: FastifyInstance) {
                 outletId: body.outletId,
                 productId: item.product.id,
                 qty,
+                // Stamped so cancelling this order can replay these exact
+                // movements instead of re-expanding the recipe later.
+                orderId: new_order_id,
+                // And the LINE, so the cost of what moved can be attributed
+                // back to the item that was sold — a composition's movements
+                // are against its ingredients and carry no other link to it.
+                orderDetailId: detail.id,
                 note: `POS ${new_order_id}`,
               });
             }
           }
 
-          await addPosToCashflowin(tx, body.outletId, body.total, new_order_id);
+          // tax.total, not body.total: under exclusive pricing the customer
+          // hands over the tax as well, and that money is physically in the
+          // drawer. Booking the pre-tax figure would leave every shift close
+          // short by exactly the tax collected.
+          await addPosToCashflowin(
+            tx,
+            body.outletId,
+            tax.total,
+            new_order_id,
+            paymentMethod,
+            shiftId,
+          );
         });
       } catch (err: any) {
         // Race: two near-simultaneous retries both slipped past the pre-check
@@ -233,6 +321,8 @@ export async function mutationRoutes(app: FastifyInstance) {
             source: ordersTable.source,
             deletedAt: ordersTable.deletedAt,
             note: ordersTable.note,
+            taxAmount: ordersTable.tax_amount,
+            taxInclusive: ordersTable.tax_inclusive,
           })
           .from(ordersTable)
           .where(eq(ordersTable.id, orderId))
@@ -281,8 +371,29 @@ export async function mutationRoutes(app: FastifyInstance) {
             .from(orderDetailsTable)
             .where(eq(orderDetailsTable.order_id, orderId));
           const discount = Number((order.note as any)?.discountAmount ?? 0);
-          amount = Math.max(0, Number(sum?.total ?? 0) - discount);
+          // Tax has to come back too, or a refund on a taxed sale is short by
+          // the tax. Only under EXCLUSIVE pricing though: an inclusive tax was
+          // already inside the line prices this sum is built from, so adding it
+          // again would refund it twice.
+          const taxBack =
+            order.taxInclusive === false ? Number(order.taxAmount ?? 0) : 0;
+          amount = Math.max(0, Number(sum?.total ?? 0) - discount + taxBack);
         }
+
+        // Which drawer pays the refund back out: the one that is open NOW, not
+        // the shift that took the sale. A sale rung up yesterday and voided
+        // today takes money out of today's till, and yesterday's report was
+        // already printed and signed — silently editing it is exactly what a
+        // frozen closing count exists to prevent.
+        const reversalShiftId = await getOpenShiftId(tx, access.outlet.id);
+
+        // Reverse it the same way it came in. The original booking is only
+        // 'cash' if the customer actually paid cash; reversing a QRIS sale as a
+        // cash-out would drain a drawer that never received the money, and the
+        // next shift close would come up short by exactly that amount.
+        const reversalType = posCashflowTypeFor(
+          parsePosPaymentMethod((order.note as any)?.paymentMethod),
+        );
 
         // Reverse the money. Zero is skipped rather than booked: a 0-rupiah
         // cash-out row is noise in the cashflow report, and a free order is a
@@ -302,33 +413,50 @@ export async function mutationRoutes(app: FastifyInstance) {
 
           const [detail] = await tx
             .insert(cashOutDetailTable)
-            .values({ category_id: category.id, money_amount: String(amount), type: "cash" })
+            .values({
+              category_id: category.id,
+              money_amount: String(amount),
+              type: reversalType,
+            })
             .returning({ id: cashOutDetailTable.id });
 
           await tx.insert(cashFlows).values({
             outlet_id: access.outlet.id,
             cash_out_detail_id: detail.id,
             order_id: orderId,
+            shift_id: reversalShiftId,
           });
         }
 
-        // Hand the stock back, line by line.
-        const lines = await tx
-          .select({
-            productId: orderDetailsTable.product_id,
-            quantity: orderDetailsTable.quantity,
-          })
-          .from(orderDetailsTable)
-          .where(eq(orderDetailsTable.order_id, orderId));
+        // Hand the stock back. Preferred path replays the order's own ledger,
+        // which returns exactly what left even if a recipe changed since the
+        // sale; it reports false only for orders placed before migration 0062
+        // stamped order_id onto movements, and those fall back to re-deriving
+        // each line from the recipe as it stands now.
+        const replayed = await applyOrderStockReturn(tx, {
+          outletId: access.outlet.id,
+          orderId,
+          note: `Batal POS ${orderId}`,
+        });
 
-        for (const line of lines) {
-          if (!line.productId) continue;
-          await applySaleStockReturn(tx, {
-            outletId: access.outlet.id,
-            productId: line.productId,
-            qty: Number(line.quantity),
-            note: `Batal POS ${orderId}`,
-          });
+        if (!replayed) {
+          const lines = await tx
+            .select({
+              productId: orderDetailsTable.product_id,
+              quantity: orderDetailsTable.quantity,
+            })
+            .from(orderDetailsTable)
+            .where(eq(orderDetailsTable.order_id, orderId));
+
+          for (const line of lines) {
+            if (!line.productId) continue;
+            await applySaleStockReturn(tx, {
+              outletId: access.outlet.id,
+              productId: line.productId,
+              qty: Number(line.quantity),
+              note: `Batal POS ${orderId}`,
+            });
+          }
         }
 
         // status alongside deleted_at: the soft-delete filter is what hides the
@@ -367,7 +495,17 @@ export async function mutationRoutes(app: FastifyInstance) {
 
       const body = (request.body as any) || {};
 
-      await db.transaction((tx) => addPosToCashflowin(tx, access.outlet.id, body.total));
+      await db.transaction(async (tx) =>
+        addPosToCashflowin(
+          tx,
+          access.outlet.id,
+          body.total,
+          undefined,
+          parsePosPaymentMethod(body.paymentMethod),
+          // Cash taken at the counter belongs to whoever's drawer is open.
+          await getOpenShiftId(tx, access.outlet.id),
+        ),
+      );
 
       return { success: true };
     } catch (error: any) {
