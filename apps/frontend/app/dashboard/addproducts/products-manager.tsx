@@ -209,6 +209,10 @@ export const ProductsManager = ({
   gate,
 }: ProductsManagerProps) => {
   const router = useRouter();
+  // Bahan and Tambahan piggyback on the `stock` plan feature: both shelves are
+  // pointless without inventory tracking, and `stock` already draws the same
+  // basic/pro-vs-max_lite/max line for the Stock & Invoice pages.
+  const bahanAddonsAllowed = (gate?.features?.stock as boolean) === true;
   const [view, setView] = useState<'list' | 'category' | 'form'>('list');
   const [selectedCategory, setSelectedCategory] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1251,7 +1255,9 @@ export const ProductsManager = ({
                 // the right edge the way it did before.
                 className="mb-4 flex gap-1 overflow-x-auto rounded-2xl border bg-muted/30 p-1"
               >
-                {TABLE_TABS.map((t) => {
+                {TABLE_TABS.filter(
+                  (t) => t.id === 'produk' || bahanAddonsAllowed,
+                ).map((t) => {
                   const active = tab === t.id;
                   return (
                     <button
@@ -1785,7 +1791,10 @@ export const ProductsManager = ({
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-6">
-            {[...CATEGORIES, ...INTERNAL_CATEGORIES].map((cat) => (
+            {[
+              ...CATEGORIES,
+              ...(bahanAddonsAllowed ? INTERNAL_CATEGORIES : []),
+            ].map((cat) => (
               <button
                 key={cat.id}
                 disabled={!cat.isAvailable}
@@ -1878,11 +1887,18 @@ export const ProductsManager = ({
                   onChange={(e) => setSelectedCategory(e.target.value)}
                   className="flex h-12 w-full rounded-xl border border-input bg-background px-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                 >
-                  {categoryOptions.map((c) => (
-                    <option key={c.category} value={c.category}>
-                      {c.label} ({c.category})
-                    </option>
-                  ))}
+                  {categoryOptions
+                    .filter(
+                      (c) =>
+                        bahanAddonsAllowed ||
+                        (c.category !== INGREDIENT_CATEGORY.category &&
+                          c.category !== ADDON_CATEGORY.category),
+                    )
+                    .map((c) => (
+                      <option key={c.category} value={c.category}>
+                        {c.label} ({c.category})
+                      </option>
+                    ))}
                   {/* Legacy/renamed category no longer in the option list —
                       keep it selectable so an edit doesn't silently move it. */}
                   {selectedCategory &&

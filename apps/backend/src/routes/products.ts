@@ -22,8 +22,8 @@ import {
 } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
-import { getOutletAccess, requireOutletAccess, parseActiveOutletId, getSubscriptionGate } from "../lib/outlet-access";
-import { recalcOutletFeatures } from "../lib/outlet-features";
+import { getOutletAccess, requireOutletAccess, parseActiveOutletId, getSubscriptionGate, hasFeature, type SubscriptionGate } from "../lib/outlet-access";
+import { recalcOutletFeatures, INTERNAL_CATEGORIES } from "../lib/outlet-features";
 import { RecipeGraphError, applyProduction, findRecipeCycle, previewProduction } from "../lib/stock";
 import { addonGroupsForProducts } from "../lib/addons";
 import {
@@ -142,6 +142,16 @@ function ingredientPricedFields(category: string | undefined) {
   return { price: "0", price_mark_down: "0" };
 }
 
+// Bahan and Tambahan piggyback on the `stock` plan feature (same flag the
+// Stock & Invoice pages gate on): both shelves are pointless without
+// inventory tracking. Mirrored here rather than trusted from the client — the
+// etalase already hides the tabs and the category picker for a blocked plan,
+// but a request straight to the API must not be able to plant one anyway.
+function internalCategoryBlocked(gate: SubscriptionGate, category: string | undefined): boolean {
+  const c = (category ?? "").trim().toLowerCase();
+  return INTERNAL_CATEGORIES.includes(c) && gate.alive && !hasFeature(gate, "stock");
+}
+
 // Only mart and building materials can hold something a courier can't carry, so
 // only they are asked in the product form. Mirrored here rather than trusted
 // from the client: a stale `false` on a makanan product would silently route
@@ -256,6 +266,12 @@ export async function productRoutes(app: FastifyInstance) {
     if (!access) return;
     try {
       const data = request.body as AddProductInput;
+      if (internalCategoryBlocked(access.gate, data.category)) {
+        return reply.send({
+          success: false,
+          message: "Bahan dan Tambahan tidak termasuk paket Pian — upgrade paket untuk membukanya.",
+        });
+      }
       const id = crypto.randomUUID();
       const courierDeliverable = resolveCourierDeliverable(data.category, data.courier_deliverable);
       const ranged = rangePricedFields(data, courierDeliverable);
@@ -528,6 +544,13 @@ export async function productRoutes(app: FastifyInstance) {
         .limit(1);
       if (!existing || existing.outlet_id !== access.outlet.id)
         return reply.send({ success: false, message: "Product not found" });
+
+      if (internalCategoryBlocked(access.gate, data.category ?? existing.category)) {
+        return reply.send({
+          success: false,
+          message: "Bahan dan Tambahan tidak termasuk paket Pian — upgrade paket untuk membukanya.",
+        });
+      }
 
       // Fall back to the stored row for anything the caller omitted. Resolving
       // against the body alone would flip a besi product back to "deliverable"
