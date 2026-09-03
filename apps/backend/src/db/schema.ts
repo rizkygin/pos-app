@@ -541,6 +541,52 @@ export const productsTable = pgTable(
     avg_cost: numeric('avg_cost', { precision: 14, scale: 4 })
       .notNull()
       .default('0'),
+    // ── Variants (migration 0071) ──────────────────────────────────────────
+    // A VARIANT IS NOT AN ADD-ON. An add-on adds a line to the order; a variant
+    // decides WHICH THING the line is. "Large" is not a Kopi Susu with
+    // something added — it is a different drink, at its own price, made of
+    // different amounts of the same milk.
+    //
+    // So a variant is a products row like any other, pointed at its base by
+    // variant_of, and it therefore carries its own price, stock, recipe,
+    // avg_cost, barcode and availability. Nothing in the sale path knows the
+    // word: lib/cogs.ts freezes the variant's own unit_cost, lib/stock.ts
+    // expands the variant's own recipe, and every per-product report already
+    // groups by product_id, so "Kopi Susu (Large) x37" needs no reporting
+    // change at all. Same trade that made add-on options real products (0069).
+    //
+    // NULL = an ordinary product, and adding variants does not stop it being
+    // one: the base stays sellable and is the FIRST option in its own picker.
+    // That is what makes the feature free for an existing catalogue — a
+    // product with no variants behaves exactly as it did before 0071.
+    //
+    // ONE LEVEL DEEP: a variant is never itself a base. The database only
+    // blocks self-reference (products_variant_not_self); the real rule lives in
+    // the write path, exactly as it does for add-on children.
+    variant_of: text('variant_of').references(
+      (): AnyPgColumn => productsTable.id,
+      // NOT cascade: a variant's row is referenced by orderDetails, invoiceItems
+      // and the stock ledger, and deleting a product must never rewrite
+      // financial history. routes/products.ts archives a base's variants
+      // alongside it; this is only the floor under that.
+      { onDelete: 'set null' },
+    ),
+    // This row's short label among its siblings — "Reguler", "Large", "Dingin".
+    // Set on the base too, naming the base's own option.
+    //
+    // NOT the product's name. product_name stays the full "Kopi Susu (Large)",
+    // because that is the string receipts, kitchen tickets, the stock page and
+    // every sales report print, and none of them have a base to read context
+    // from. This column is only ever rendered beside its siblings.
+    variant_name: varchar('variant_name', { length: 40 }),
+    // The question the picker asks, on the BASE row only: "Ukuran", "Suhu".
+    // Per product, not per outlet the way addon_groups are shared — a variant
+    // set is not reusable, because the options ARE this product's own rows.
+    // NULL falls back to "Varian" in the UI.
+    variant_label: varchar('variant_label', { length: 40 }),
+    // Menu order, not price order. The base always sorts first: it is the
+    // default, whatever the owner charges for it.
+    variant_sort: integer('variant_sort').default(0).notNull(),
     ...timestamps,
   },
   (table) => [
@@ -553,6 +599,8 @@ export const productsTable = pgTable(
       table.outlet_id,
       table.barcode,
     ),
+    // Every read is "this base's variants, in menu order".
+    index('products_variant_of_idx').on(table.variant_of, table.variant_sort),
   ],
 );
 
@@ -839,8 +887,22 @@ export const orderDetailsTable = pgTable(
       .references(() => productsTable.id),
     quantity: integer('quantity').notNull(),
     note_product: text('note_product'),
-    extra: json('extra'),
     summary_price: varchar('summary_price', { length: 10 }).notNull(),
+    // Set on an ADD-ON line, pointing at the line it was added to. NULL on an
+    // ordinary line, which is the overwhelming majority — see migration 0069
+    // for why an add-on is a child line rather than a table of its own.
+    //
+    // Readers split two ways on this column and getting it wrong is silent:
+    //   summing money  (order total, revenue, COGS) -> include children
+    //   counting items ("3 item", a receipt's tally) -> parents only
+    //
+    // Exactly one level deep. A child is never itself a parent; the write path
+    // refuses it rather than the schema, since a depth check in SQL costs more
+    // than it protects.
+    parent_detail_id: integer('parent_detail_id').references(
+      (): AnyPgColumn => orderDetailsTable.id,
+      { onDelete: 'cascade' },
+    ),
     // What ONE unit of this line cost, frozen when the line was written.
     //
     // The cost ledger (stock_movements) covers a line only if the line MOVED
@@ -870,6 +932,7 @@ export const orderDetailsTable = pgTable(
   (table) => [
     index('order_details_created_at_idx').on(table.created_at),
     index('order_details_order_id_idx').on(table.order_id),
+    index('order_details_parent_idx').on(table.parent_detail_id),
   ],
 );
 
@@ -941,6 +1004,7 @@ export const cashInDetailTable = pgTable(
     type: CASHFLOWS_TRANSACTION_TYPE('type')
       .$default(() => 'cash')
       .notNull(),
+    explanation: text('explanation'),
     created_at: timestamp('created_at').defaultNow().notNull(),
   },
   (table) => [index('cash_in_detail_created_at_idx').on(table.created_at)],
@@ -956,6 +1020,7 @@ export const cashOutDetailTable = pgTable(
     type: CASHFLOWS_TRANSACTION_TYPE('type')
       .$default(() => 'cash')
       .notNull(),
+    explanation: text('explanation'),
     created_at: timestamp('created_at').defaultNow().notNull(),
   },
   (table) => [index('cash_out_detail_created_at_idx').on(table.created_at)],
@@ -1890,5 +1955,109 @@ export const maintenanceWindowsTable = pgTable(
     // index: newest-first over the window bounds.
     index('maintenance_windows_window_idx').on(t.ends_at, t.starts_at),
     check('maintenance_windows_order_ck', sql`${t.ends_at} > ${t.starts_at}`),
+  ],
+);
+
+// ============================================================================
+// Product add-ons ("Topping", "Level Pedas", "Ukuran").
+//
+// An add-on is NOT a new kind of entity. The thing being added is an ordinary
+// product — with its own stock, recipe, buying_price and avg_cost — and the
+// sale of it is an ordinary order line, pointed at its parent by
+// orderDetails.parent_detail_id. Everything the cost ledger already does for a
+// line therefore happens for an add-on with no new code: see migration 0069.
+//
+// These three tables are only the CATALOGUE: which questions get asked about
+// which dish, and what the answers cost the customer.
+//
+// Nothing here is ever consulted to settle a sale. The rules govern what a
+// cashier may COMPOSE in the picker; checkout honours whatever a tab already
+// holds. That split is why every table below soft-deletes — a held tab lives in
+// a cashier's localStorage for days, and removing an option from the menu must
+// never leave a parked cart unpayable.
+// ============================================================================
+
+// One question put to the cashier. Per OUTLET rather than per product, so
+// "Topping" is defined once and attached to twenty dishes via
+// productAddonGroupsTable — a rename is then one row, not twenty.
+export const addonGroupsTable = pgTable(
+  'addon_groups',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    outlet_id: integer('outlet_id')
+      .notNull()
+      .references(() => outletsTable.id, { onDelete: 'cascade' }),
+    name: varchar('name', { length: 60 }).notNull(),
+    // min_select >= 1 IS "wajib pilih" — there is no separate required flag to
+    // fall out of sync with it. max_select null = unlimited.
+    //
+    // Enforced in the picker, never at checkout. Tightening a rule must not
+    // make an already-parked tab unpayable.
+    min_select: integer('min_select').default(0).notNull(),
+    max_select: integer('max_select'),
+    sort_order: integer('sort_order').default(0).notNull(),
+    ...timestamps,
+  },
+  (t) => [index('addon_groups_outlet_idx').on(t.outlet_id, t.sort_order)],
+);
+
+// One pickable answer: a product, and what the customer pays for it here.
+//
+// The price lives on the option rather than on the product because the same
+// telur is 5.000 on one dish and free on another. 0 is a real value, not a
+// missing one — a free add-on that still consumes stock and still costs money
+// is precisely the case a POS ought to be able to state, and the one most of
+// them get wrong.
+export const addonGroupOptionsTable = pgTable(
+  'addon_group_options',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    group_id: integer('group_id')
+      .notNull()
+      .references(() => addonGroupsTable.id, { onDelete: 'cascade' }),
+    // is_for_sale=false on this product keeps it out of the POS grid on its
+    // own while leaving it a full product everywhere else: stock, recipe, cost.
+    product_id: text('product_id')
+      .notNull()
+      .references(() => productsTable.id, { onDelete: 'cascade' }),
+    // numeric, unlike the varchar money on productsTable — matching the newer
+    // columns (unit_cost, tax_amount, opening_float) rather than the legacy
+    // ones, so it needs no money() guard when read.
+    price: numeric('price', { precision: 14, scale: 2 }).default('0').notNull(),
+    sort_order: integer('sort_order').default(0).notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    // Partial: archiving an option and later adding it back must be allowed,
+    // which a plain unique index would forbid forever.
+    uniqueIndex('addon_group_options_group_product_uq')
+      .on(t.group_id, t.product_id)
+      .where(sql`${t.deletedAt} is null`),
+    index('addon_group_options_group_idx').on(t.group_id, t.sort_order),
+  ],
+);
+
+// Which questions get asked about which dish.
+export const productAddonGroupsTable = pgTable(
+  'product_addon_groups',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    product_id: text('product_id')
+      .notNull()
+      .references(() => productsTable.id, { onDelete: 'cascade' }),
+    group_id: integer('group_id')
+      .notNull()
+      .references(() => addonGroupsTable.id, { onDelete: 'cascade' }),
+    sort_order: integer('sort_order').default(0).notNull(),
+    created_at: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    deleted_at: timestamp('deleted_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('product_addon_groups_uq')
+      .on(t.product_id, t.group_id)
+      .where(sql`${t.deleted_at} is null`),
+    index('product_addon_groups_product_idx').on(t.product_id, t.sort_order),
   ],
 );

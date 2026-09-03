@@ -58,6 +58,7 @@ export default function CashflowPage() {
   const [type, setType] = useState<TransactionType>('IN');
   const [category, setCategory] = useState<string>(CATEGORY_IN[1]);
   const [amount, setAmount] = useState<string>('');
+  const [explanation, setExplanation] = useState<string>('');
 
   const handleTypeChange = (newType: TransactionType) => {
     setType(newType);
@@ -86,6 +87,7 @@ export default function CashflowPage() {
         category,
         amount: Number(amount),
         date: formatDateInput(selectedDate),
+        explanation: explanation.trim() || undefined,
         timezone,
       }),
     });
@@ -93,6 +95,7 @@ export default function CashflowPage() {
     if (res.ok) {
       setTransactions((prev) => [json.data, ...prev]);
       setAmount('');
+      setExplanation('');
     }
   };
 
@@ -344,6 +347,18 @@ export default function CashflowPage() {
 
               <div className="space-y-2">
                 <label className="text-sm font-medium leading-none">
+                  Penjelasan (Opsional)
+                </label>
+                <Input
+                  type="text"
+                  placeholder="Contoh: karyawan toni, ahsan, bobi tersisa amrul dan huda"
+                  value={explanation}
+                  onChange={(e) => setExplanation(e.target.value)}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium leading-none">
                   Tanggal
                 </label>
                 <Popover>
@@ -449,6 +464,11 @@ export default function CashflowPage() {
                             {t.note && (
                               <div className="text-xs text-muted-foreground">
                                 {t.note}
+                              </div>
+                            )}
+                            {t.explanation && (
+                              <div className="text-xs text-muted-foreground">
+                                {t.explanation}
                               </div>
                             )}
                           </TableCell>

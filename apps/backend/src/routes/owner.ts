@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, or, eq, desc, sql, gte, lte, ilike, count, inArray, isNull, notInArray, lt } from "drizzle-orm";
+import { and, or, asc, eq, desc, sql, gte, lte, ilike, count, inArray, isNull, notInArray, lt } from "drizzle-orm";
 import { db } from "../db";
 import {
   ordersTable,
@@ -324,6 +324,9 @@ export async function ownerRoutes(app: FastifyInstance) {
       const rows = await db
         .select({
           detailId: orderDetailsTable.id,
+          // Non-null on an add-on, naming the line it belongs to, so the UI can
+          // indent it under its dish instead of listing it as its own item.
+          parentDetailId: orderDetailsTable.parent_detail_id,
           quantity: orderDetailsTable.quantity,
           note: orderDetailsTable.note_product,
           summaryPrice: orderDetailsTable.summary_price,
@@ -338,7 +341,11 @@ export async function ownerRoutes(app: FastifyInstance) {
         .from(orderDetailsTable)
         .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
         .where(eq(orderDetailsTable.order_id, order_id))
-        .orderBy(desc(orderDetailsTable.created_at));
+        // created_at is now(), which Postgres freezes at transaction start, so
+        // every line of an order carries the SAME timestamp and sorting on it
+        // alone is unstable. The id tiebreak fixes that and, because add-ons are
+        // inserted straight after their parent, also lands each one under it.
+        .orderBy(desc(orderDetailsTable.created_at), asc(orderDetailsTable.id));
 
       const isOfflineOrder = order.customerEmail === OFFLINE_CUSTOMER_EMAIL;
 
@@ -840,9 +847,11 @@ export async function ownerRoutes(app: FastifyInstance) {
           in_category: cashInCategoryTable.category,
           in_amount: cashInDetailTable.money_amount,
           in_date: cashInDetailTable.created_at,
+          in_explanation: cashInDetailTable.explanation,
           out_category: cashOutCategoryTable.category,
           out_amount: cashOutDetailTable.money_amount,
           out_date: cashOutDetailTable.created_at,
+          out_explanation: cashOutDetailTable.explanation,
           invoice_number: invoicesTable.number,
         })
         .from(cashFlows)
@@ -885,6 +894,7 @@ export async function ownerRoutes(app: FastifyInstance) {
           date: dateFormatter.format(date),
           time: timeFormatter.format(date),
           note: row.invoice_number ?? "",
+          explanation: (row.in_explanation ?? row.out_explanation) ?? "",
         };
       });
 
@@ -902,7 +912,7 @@ export async function ownerRoutes(app: FastifyInstance) {
       const outlet = await outletFor(session.user.id, "cashflow", request);
       if (!outlet) return reply.status(401).send({ success: false });
 
-      const { type, category, amount, date, timezone = "Asia/Jakarta" } = request.body as Record<string, any>;
+      const { type, category, amount, date, explanation, timezone = "Asia/Jakarta" } = request.body as Record<string, any>;
 
       if (!type || !category || !amount || !date) return reply.status(400).send({ error: "Missing required fields" });
       if (isNaN(Number(amount)) || Number(amount) <= 0) return reply.status(400).send({ error: "Invalid amount" });
@@ -933,10 +943,10 @@ export async function ownerRoutes(app: FastifyInstance) {
 
         if (!cat) return reply.status(400).send({ error: "Unknown category" });
 
-        const [detail] = await db.insert(cashInDetailTable).values({ category_id: cat.id, money_amount: String(amount), type: "cash", created_at }).returning();
+        const [detail] = await db.insert(cashInDetailTable).values({ category_id: cat.id, money_amount: String(amount), type: "cash", explanation: explanation ?? null, created_at }).returning();
         const [cf] = await db.insert(cashFlows).values({ outlet_id: outlet.id, cash_in_detail_id: detail.id, shift_id }).returning();
 
-        return { data: { id: String(cf.id), type: "IN", category, amount: Number(amount), date, time: timeFormatter.format(detail.created_at), note: "" } };
+        return { data: { id: String(cf.id), type: "IN", category, amount: Number(amount), date, time: timeFormatter.format(detail.created_at), note: "", explanation: explanation ?? "" } };
       }
 
       if (type === "OUT") {
@@ -948,10 +958,10 @@ export async function ownerRoutes(app: FastifyInstance) {
 
         if (!cat) return reply.status(400).send({ error: "Unknown category" });
 
-        const [detail] = await db.insert(cashOutDetailTable).values({ category_id: cat.id, money_amount: String(amount), type: "cash", created_at }).returning();
+        const [detail] = await db.insert(cashOutDetailTable).values({ category_id: cat.id, money_amount: String(amount), type: "cash", explanation: explanation ?? null, created_at }).returning();
         const [cf] = await db.insert(cashFlows).values({ outlet_id: outlet.id, cash_out_detail_id: detail.id, shift_id }).returning();
 
-        return { data: { id: String(cf.id), type: "OUT", category, amount: Number(amount), date, time: timeFormatter.format(detail.created_at), note: "" } };
+        return { data: { id: String(cf.id), type: "OUT", category, amount: Number(amount), date, time: timeFormatter.format(detail.created_at), note: "", explanation: explanation ?? "" } };
       }
 
       return reply.status(400).send({ error: "Invalid type" });

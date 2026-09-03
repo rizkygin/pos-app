@@ -10,6 +10,7 @@ export interface Transaction {
     date: string;
     time?: string;
     note: string;
+    explanation?: string;
 }
 
 interface ExportParams {
