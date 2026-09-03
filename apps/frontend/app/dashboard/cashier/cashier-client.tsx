@@ -1008,11 +1008,26 @@ export const CashierClient = ({
   const [clearView, setClearView] = useState(false);
 
   /**
-   * Print order labels for cart items — one per item showing order info,
-   * customer name, product, variants, add-ons (no prices).
+   * Open preview of order labels for cart items — one per item showing order
+   * info, customer name, product, variants, add-ons (no prices).
    */
   const openLabelPreview = () => {
     if (cart.length === 0) return;
+    // Trigger preview modal with placeholder data; confirmPrintLabels will
+    // build the actual order labels from cart when confirmed.
+    const items: ProductLabel[] = cart.map((item) => ({
+      name: item.product.product_name,
+      price: '',
+      copies: item.quantity,
+    }));
+    setLabelPreview(items);
+  };
+
+  /**
+   * Build order labels from cart and send to LabelBridge.
+   */
+  const confirmPrintLabels = () => {
+    setLabelPreview(null);
 
     const orderLabels: OrderLabel[] = cart.map((item) => ({
       orderId: activeTabId,
@@ -1035,22 +1050,6 @@ export const CashierClient = ({
       ok: true,
       text: `Mencetak ${orderLabels.length} label pesanan...`,
     });
-  };
-
-  /**
-   * Hand the reviewed batch to LabelBridge as a single job rather than a deep
-   * link per line: it renders the batch into one command stream, so the printer
-   * sees one connection and one paper path.
-   */
-  const confirmPrintLabels = (batch: LabelBatchJob, total: number) => {
-    setLabelPreview(null);
-    openLabelApp(batch, () =>
-      setLabelFeedback({
-        ok: false,
-        text: 'LabelBridge belum terpasang di perangkat ini.',
-      }),
-    );
-    setLabelFeedback({ ok: true, text: `Mencetak ${total} label...` });
   };
 
   // Add-ons are part of what the customer pays, so they are part of the base
