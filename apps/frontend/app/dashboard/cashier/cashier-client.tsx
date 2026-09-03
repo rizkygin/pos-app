@@ -33,8 +33,11 @@ import { Button } from '@/components/ui/button';
 import { formatCurrency } from '@/lib/utils/format';
 import {
   openLabelApp,
+  openOrderLabelApp,
+  buildOrderLabelBatch,
   type LabelBatchJob,
   type ProductLabel,
+  type OrderLabel,
 } from '@/lib/labelbridge';
 import { API_URL } from '@/lib/api-url';
 import { POS_PAYMENT_OPTIONS, type PosPaymentMethod } from '@/lib/pos-payment';
@@ -1005,28 +1008,33 @@ export const CashierClient = ({
   const [clearView, setClearView] = useState(false);
 
   /**
-   * Stage a product label for every unit in the cart — a line with quantity 3
-   * yields three identical labels, because each one goes on a physical item.
-   *
-   * Discounted lines carry the marked-down price, since that is what the
-   * customer pays and what the label is for.
+   * Print order labels for cart items — one per item showing order info,
+   * customer name, product, variants, add-ons (no prices).
    */
   const openLabelPreview = () => {
     if (cart.length === 0) return;
 
-    const items: ProductLabel[] = cart.map((item) => {
-      return {
-        name: item.product.product_name,
-        // The line's unit price, add-ons included — the label is what the
-        // customer pays for that one item, and a topping is part of it.
-        price: formatCurrency(unitPriceOf(item)),
-        barcode: item.product.barcode,
-        note: item.note,
-        copies: item.quantity,
-      };
-    });
+    const orderLabels: OrderLabel[] = cart.map((item) => ({
+      orderId: activeTabId,
+      customerName: customerName.trim() || 'Pesanan',
+      productName: item.product.product_name,
+      variant: item.product.variant_name || null,
+      addons: (item.addons ?? []).map((a) => a.name),
+      date: new Date(),
+      outletName,
+    }));
 
-    setLabelPreview(items);
+    const batch = buildOrderLabelBatch(orderLabels);
+    openOrderLabelApp(batch, () =>
+      setLabelFeedback({
+        ok: false,
+        text: 'LabelBridge belum terpasang di perangkat ini.',
+      }),
+    );
+    setLabelFeedback({
+      ok: true,
+      text: `Mencetak ${orderLabels.length} label pesanan...`,
+    });
   };
 
   /**
