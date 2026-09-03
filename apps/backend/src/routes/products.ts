@@ -142,6 +142,31 @@ function ingredientPricedFields(category: string | undefined) {
   return { price: "0", price_mark_down: "0" };
 }
 
+// ── Plan features on the product form ───────────────────────────────────────
+// Three editors on the product form are plan-bound, and the etalase already
+// hides each one for a plan that lacks it. A hidden form is one fetch from
+// bypass though, so every write mirrors the check here.
+//
+//   RECIPE_FEATURE   the composition editor and the HPP explorer it feeds are
+//                    one capability, so they share one flag rather than
+//                    drawing two identical lines through the price list.
+//   OPTIONS_FEATURE  variants and add-ons ride on `stock`, the same flag that
+//                    decides whether the Bahan/Tambahan shelves exist at all.
+//                    An add-on option IS a `tambahan` product, so a plan whose
+//                    Tambahan shelf is hidden could only ever build an empty
+//                    group — the two must move together or the editor lies.
+//
+// Reads the counter depends on stay open: the POS resolves a line's add-ons
+// through /api/products/mine, never through these routes, so a downgrade mid
+// service can never strand a held tab that already has toppings on it.
+const RECIPE_FEATURE = "recipeExplorer";
+const OPTIONS_FEATURE = "stock";
+const RECIPE_UPGRADE_MESSAGE =
+  "Resep & HPP tersedia mulai paket Pro — upgrade paket untuk membukanya.";
+const OPTIONS_UPGRADE_MESSAGE =
+  "Varian & Add-on tersedia mulai paket Max Lite — upgrade paket untuk membukanya.";
+
+
 // Bahan and Tambahan piggyback on the `stock` plan feature (same flag the
 // Stock & Invoice pages gate on): both shelves are pointless without
 // inventory tracking. Mirrored here rather than trusted from the client — the
@@ -739,6 +764,11 @@ export async function productRoutes(app: FastifyInstance) {
   app.post("/api/products/:id/variants", async (request, reply) => {
     const access = await requireOutletAccess(request, reply, "products");
     if (!access) return;
+    if (!hasFeature(access.gate, OPTIONS_FEATURE)) {
+      return reply
+        .status(403)
+        .send({ success: false, error: OPTIONS_UPGRADE_MESSAGE, code: "PLAN_FEATURE" });
+    }
     const baseId = (request.params as { id: string }).id;
     const body = (request.body ?? {}) as {
       variant_name?: string;
@@ -852,6 +882,11 @@ export async function productRoutes(app: FastifyInstance) {
   app.patch("/api/products/:id/variants/:variantId", async (request, reply) => {
     const access = await requireOutletAccess(request, reply, "products");
     if (!access) return;
+    if (!hasFeature(access.gate, OPTIONS_FEATURE)) {
+      return reply
+        .status(403)
+        .send({ success: false, error: OPTIONS_UPGRADE_MESSAGE, code: "PLAN_FEATURE" });
+    }
     const { id: baseId, variantId } = request.params as { id: string; variantId: string };
     const body = (request.body ?? {}) as {
       variant_name?: string;
@@ -943,6 +978,11 @@ export async function productRoutes(app: FastifyInstance) {
   app.patch("/api/products/:id/variant-meta", async (request, reply) => {
     const access = await requireOutletAccess(request, reply, "products");
     if (!access) return;
+    if (!hasFeature(access.gate, OPTIONS_FEATURE)) {
+      return reply
+        .status(403)
+        .send({ success: false, error: OPTIONS_UPGRADE_MESSAGE, code: "PLAN_FEATURE" });
+    }
     const baseId = (request.params as { id: string }).id;
     const body = (request.body ?? {}) as { variant_label?: string; variant_name?: string };
 
@@ -979,6 +1019,11 @@ export async function productRoutes(app: FastifyInstance) {
   app.post("/api/products/:id/variants/reorder", async (request, reply) => {
     const access = await requireOutletAccess(request, reply, "products");
     if (!access) return;
+    if (!hasFeature(access.gate, OPTIONS_FEATURE)) {
+      return reply
+        .status(403)
+        .send({ success: false, error: OPTIONS_UPGRADE_MESSAGE, code: "PLAN_FEATURE" });
+    }
     const baseId = (request.params as { id: string }).id;
     const ids = (request.body as { ids?: string[] })?.ids;
     if (!Array.isArray(ids)) {
@@ -1057,6 +1102,11 @@ export async function productRoutes(app: FastifyInstance) {
   app.put("/api/products/:id/recipe", async (request, reply) => {
     const access = await requireOutletAccess(request, reply, "products");
     if (!access) return;
+    if (!hasFeature(access.gate, RECIPE_FEATURE)) {
+      return reply
+        .status(403)
+        .send({ success: false, error: RECIPE_UPGRADE_MESSAGE, code: "PLAN_FEATURE" });
+    }
     const productId = (request.params as { id: string }).id;
     const body =
       (request.body as {
@@ -1163,6 +1213,11 @@ export async function productRoutes(app: FastifyInstance) {
   app.get("/api/products/:id/recipe-explorer", async (request, reply) => {
     const access = await requireOutletAccess(request, reply, "products");
     if (!access) return;
+    if (!hasFeature(access.gate, RECIPE_FEATURE)) {
+      return reply
+        .status(403)
+        .send({ success: false, error: RECIPE_UPGRADE_MESSAGE, code: "PLAN_FEATURE" });
+    }
     const outletId = access.outlet.id;
     const productId = (request.params as { id: string }).id;
 
@@ -1844,6 +1899,11 @@ export async function productRoutes(app: FastifyInstance) {
   app.post("/api/addon-groups", async (request, reply) => {
     const access = await requireOutletAccess(request, reply, "products");
     if (!access) return;
+    if (!hasFeature(access.gate, OPTIONS_FEATURE)) {
+      return reply
+        .status(403)
+        .send({ success: false, error: OPTIONS_UPGRADE_MESSAGE, code: "PLAN_FEATURE" });
+    }
     const body = (request.body as { name?: string; min_select?: number; max_select?: number | null }) ?? {};
     const name = (body.name ?? "").trim();
     if (!name) return reply.status(400).send({ success: false, message: "Nama grup wajib diisi" });
@@ -1862,6 +1922,11 @@ export async function productRoutes(app: FastifyInstance) {
   app.patch("/api/addon-groups/:id", async (request, reply) => {
     const access = await requireOutletAccess(request, reply, "products");
     if (!access) return;
+    if (!hasFeature(access.gate, OPTIONS_FEATURE)) {
+      return reply
+        .status(403)
+        .send({ success: false, error: OPTIONS_UPGRADE_MESSAGE, code: "PLAN_FEATURE" });
+    }
     const id = Number((request.params as { id?: string }).id);
     if (!id) return reply.status(400).send({ success: false, message: "id wajib diisi" });
 
@@ -1900,6 +1965,11 @@ export async function productRoutes(app: FastifyInstance) {
   app.delete("/api/addon-groups/:id", async (request, reply) => {
     const access = await requireOutletAccess(request, reply, "products");
     if (!access) return;
+    if (!hasFeature(access.gate, OPTIONS_FEATURE)) {
+      return reply
+        .status(403)
+        .send({ success: false, error: OPTIONS_UPGRADE_MESSAGE, code: "PLAN_FEATURE" });
+    }
     const id = Number((request.params as { id?: string }).id);
     if (!id) return reply.status(400).send({ success: false, message: "id wajib diisi" });
 
@@ -1927,6 +1997,11 @@ export async function productRoutes(app: FastifyInstance) {
   app.put("/api/addon-groups/:id/options", async (request, reply) => {
     const access = await requireOutletAccess(request, reply, "products");
     if (!access) return;
+    if (!hasFeature(access.gate, OPTIONS_FEATURE)) {
+      return reply
+        .status(403)
+        .send({ success: false, error: OPTIONS_UPGRADE_MESSAGE, code: "PLAN_FEATURE" });
+    }
     const id = Number((request.params as { id?: string }).id);
     const body = (request.body as { options?: { product_id?: string; price?: number | string }[] }) ?? {};
     const items = Array.isArray(body.options) ? body.options : [];
@@ -2003,6 +2078,11 @@ export async function productRoutes(app: FastifyInstance) {
   app.put("/api/products/:id/addon-groups", async (request, reply) => {
     const access = await requireOutletAccess(request, reply, "products");
     if (!access) return;
+    if (!hasFeature(access.gate, OPTIONS_FEATURE)) {
+      return reply
+        .status(403)
+        .send({ success: false, error: OPTIONS_UPGRADE_MESSAGE, code: "PLAN_FEATURE" });
+    }
     const productId = (request.params as { id: string }).id;
     const body = (request.body as { group_ids?: number[] }) ?? {};
     const groupIds = Array.isArray(body.group_ids)

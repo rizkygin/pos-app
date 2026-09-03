@@ -213,6 +213,15 @@ export const ProductsManager = ({
   // pointless without inventory tracking, and `stock` already draws the same
   // basic/pro-vs-max_lite/max line for the Stock & Invoice pages.
   const bahanAddonsAllowed = (gate?.features?.stock as boolean) === true;
+  // The composition editor and the HPP explorer it feeds are one capability on
+  // one flag, off on Basic only: a recipe is worth having for costing long
+  // before an outlet pays for inventory tracking.
+  const recipeAllowed = (gate?.features?.recipeExplorer as boolean) === true;
+  // Variants and add-ons sit on the same Max Lite line as the shelves they
+  // need. An add-on option IS a `tambahan` product, so offering the editor on
+  // a plan whose Tambahan shelf is hidden would only ever build an empty
+  // group; variants are whole products too, and land in the same etalase.
+  const productOptionsAllowed = bahanAddonsAllowed;
   const [view, setView] = useState<'list' | 'category' | 'form'>('list');
   const [selectedCategory, setSelectedCategory] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -2362,6 +2371,7 @@ export const ProductsManager = ({
                   category. Absence of a composition is a valid permanent state,
                   so nothing is shown or nagged otherwise. */}
               {editingProductId &&
+                recipeAllowed &&
                 recipeIngredientOptions.length > 0 && (
                   <RecipeEditor
                     productId={editingProductId}
@@ -2382,6 +2392,7 @@ export const ProductsManager = ({
                   of its own — the dish it hangs off does) nor for a product
                   that is already somebody's variant: one level deep. */}
               {editingProductId &&
+                productOptionsAllowed &&
                 !isInternalCategory &&
                 !editingProduct?.variant_of && (
                   <VariantEditor
@@ -2398,7 +2409,7 @@ export const ProductsManager = ({
                   the composition above: attaching a group is a single PUT, so
                   the owner is never made to re-save the whole product to change
                   what toppings it offers. */}
-              {editingProductId && (
+              {editingProductId && productOptionsAllowed && (
                 <AddonEditor
                   productId={editingProductId}
                   products={recipeIngredientOptions}

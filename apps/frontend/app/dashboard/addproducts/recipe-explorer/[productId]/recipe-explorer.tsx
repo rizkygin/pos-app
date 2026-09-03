@@ -370,7 +370,20 @@ export function RecipeExplorer({ productId, productName }: { productId: string; 
                 if (!alive) return;
                 setFetched(
                     !res.ok || !json?.success
-                        ? { id, data: null, error: res.status === 404 ? 'Produk ini tidak ada di outlet pian.' : 'Gagal memuat resep produk.' }
+                        ? {
+                              id,
+                              data: null,
+                              // A 403 is a plan boundary, not a failure: the
+                              // server names the paket, so say that instead of
+                              // "gagal memuat" and send them somewhere useful.
+                              error:
+                                  res.status === 404
+                                      ? 'Produk ini tidak ada di outlet pian.'
+                                      : res.status === 403
+                                        ? ((json as { error?: string } | null)?.error ??
+                                          'Fitur ini belum termasuk paket pian.')
+                                        : 'Gagal memuat resep produk.',
+                          }
                         : { id, data: json, error: null },
                 );
             })
