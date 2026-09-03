@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: Geist, system-ui, sans-serif; background: oklch(0.985 0 0); color: oklch(0.145 0 0); -webkit-font-smoothing: antialiased; }
+  a { color: #e11d48; text-decoration: none; }
+  a:hover { color: #be123c; text-decoration: underline; }
+  @keyframes gradient-pan { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+  @keyframes nodeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes edgeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes lowPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(225,29,72,0.30); } 50% { box-shadow: 0 0 0 7px rgba(225,29,72,0); } }
+  @keyframes dashRun { to { background-position: 14px 0; } }
+  @keyframes ringSpin { to { transform: rotate(360deg); } }
+</style>
+</helmet>
+<div style="display:flex;flex-direction:column;height:100vh;min-height:0;overflow:hidden">
+
+  <div style="height:40px;flex:none;display:flex;align-items:center;gap:10px;padding:0 14px;overflow:hidden;position:relative;background-image:linear-gradient(90deg,#6b21a8,#4f46e5,#2563eb,#16a34a,#2563eb,#4f46e5,#6b21a8);background-size:300% 100%;animation:gradient-pan 12s ease infinite">
+    <span style="width:6px;height:6px;border-radius:99px;background:#6ee7b7;box-shadow:0 0 8px rgba(110,231,183,0.9)"></span>
+    <span style="font-size:13px;font-weight:600;color:#fffbeb">Dashboard</span>
+    <span style="margin-left:auto;font-size:11px;font-weight:500;color:rgba(255,251,235,0.75);font-family:'Geist Mono',monospace">Ulun Pesan · Resep &amp; HPP</span>
+  </div>
+
+  <div style="flex:none;display:flex;align-items:center;gap:14px;padding:12px 20px;background:oklch(1 0 0);border-bottom:1px solid oklch(0.922 0 0)">
+    <div style="display:flex;align-items:baseline;gap:8px">
+      <span style="font-size:12px;font-weight:500;color:oklch(0.556 0 0)">Produk</span>
+      <span style="font-size:12px;color:oklch(0.75 0 0)">/</span>
+      <span style="font-size:17px;font-weight:700;letter-spacing:-0.01em">Nut Latte</span>
+      <span style="font-size:11px;font-weight:600;font-family:'Geist Mono',monospace;color:oklch(0.556 0 0);background:oklch(0.97 0 0);padding:3px 7px;border-radius:6px">SKU {{ m.sku }}</span>
+    </div>
+    <div style="margin-left:auto;display:flex;padding:3px;gap:3px;background:oklch(0.97 0 0);border-radius:10px">
+      <sc-for list="{{ viewTabs }}" as="t" hint-placeholder-count="2">
+        <button type="button" onClick="{{ t.onClick }}" style="border:none;cursor:pointer;font-family:inherit;font-size:12.5px;font-weight:600;padding:6px 14px;border-radius:8px;transition:all 160ms;background:{{ t.bg }};color:{{ t.fg }};box-shadow:{{ t.sh }}">{{ t.label }}</button>
+      </sc-for>
+    </div>
+  </div>
+
+  <div style="flex:1;display:flex;min-height:0">
+
+    <div style="width:clamp(232px,23vw,316px);flex:none;min-width:0;display:flex;flex-direction:column;gap:14px;padding:16px;overflow-y:auto;background:oklch(1 0 0);border-right:1px solid oklch(0.922 0 0)">
+
+      <div style="display:flex;gap:12px;align-items:center">
+        <div style="width:64px;height:64px;flex:none;border-radius:14px;background:linear-gradient(150deg,oklch(0.94 0.02 60),oklch(0.88 0.04 40));display:flex;align-items:center;justify-content:center;font-family:'Geist Mono',monospace;font-size:19px;font-weight:600;color:oklch(0.42 0.06 40)">NL</div>
+        <div style="min-width:0;display:flex;flex-direction:column;gap:4px">
+          <div style="font-size:14.5px;font-weight:700;line-height:1.2">{{ m.variantLabel }}</div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <span style="font-size:12px;font-weight:600;color:#d97706">★ {{ m.rating }}</span>
+            <span style="font-size:11.5px;color:oklch(0.556 0 0)">{{ m.ratingCount }} ulasan</span>
+          </div>
+          <div style="font-size:11.5px;color:oklch(0.556 0 0)">Harga jual <span style="font-family:'Geist Mono',monospace;font-weight:600;color:oklch(0.145 0 0)">{{ m.price }}</span></div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div style="padding:10px 11px;border-radius:12px;background:oklch(0.98 0 0);border:1px solid oklch(0.922 0 0)">
+          <div style="font-size:10.5px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;color:oklch(0.556 0 0)">HPP / cup</div>
+          <div style="font-family:'Geist Mono',monospace;font-size:16px;font-weight:600;margin-top:3px">{{ m.cogs }}</div>
+        </div>
+        <div style="padding:10px 11px;border-radius:12px;background:oklch(0.98 0 0);border:1px solid oklch(0.922 0 0)">
+          <div style="font-size:10.5px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;color:oklch(0.556 0 0)">Margin</div>
+          <div style="font-family:'Geist Mono',monospace;font-size:16px;font-weight:600;margin-top:3px;color:{{ m.marginColor }}">{{ m.margin }}</div>
+        </div>
+        <div style="padding:10px 11px;border-radius:12px;background:oklch(0.98 0 0);border:1px solid oklch(0.922 0 0)">
+          <div style="font-size:10.5px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;color:oklch(0.556 0 0)">Transaksi 30h</div>
+          <div style="font-family:'Geist Mono',monospace;font-size:16px;font-weight:600;margin-top:3px">{{ m.tx }}</div>
+        </div>
+        <div style="padding:10px 11px;border-radius:12px;background:oklch(0.98 0 0);border:1px solid oklch(0.922 0 0)">
+          <div style="font-size:10.5px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;color:oklch(0.556 0 0)">Laba kotor</div>
+          <div style="font-family:'Geist Mono',monospace;font-size:16px;font-weight:600;margin-top:3px">{{ m.profit }}</div>
+        </div>
+      </div>
+
+      <div style="height:1px;background:oklch(0.922 0 0)"></div>
+
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div style="font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:oklch(0.556 0 0)">Varian</div>
+        <sc-for list="{{ axes }}" as="ax" hint-placeholder-count="3">
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <div style="font-size:11.5px;font-weight:600;color:oklch(0.42 0 0)">{{ ax.label }}</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <sc-for list="{{ ax.options }}" as="o" hint-placeholder-count="3">
+                <button type="button" onClick="{{ o.onClick }}" style="flex:1 1 auto;cursor:pointer;font-family:inherit;font-size:12px;font-weight:600;padding:7px 10px;border-radius:9px;transition:all 160ms;background:{{ o.bg }};color:{{ o.fg }};border:1px solid {{ o.bd }}">{{ o.label }}</button>
+              </sc-for>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="height:1px;background:oklch(0.922 0 0)"></div>
+
+      <div style="display:flex;flex-direction:column;gap:9px">
+        <div style="display:flex;align-items:baseline;gap:8px">
+          <div style="font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:oklch(0.556 0 0)">Add-on</div>
+          <div style="margin-left:auto;font-size:11px;font-family:'Geist Mono',monospace;color:oklch(0.556 0 0)">{{ m.addonSummary }}</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <sc-for list="{{ addonOpts }}" as="a" hint-placeholder-count="5">
+            <button type="button" onClick="{{ a.onClick }}" style="cursor:pointer;font-family:inherit;font-size:12px;font-weight:600;padding:7px 11px;border-radius:99px;transition:all 160ms;display:flex;align-items:center;gap:6px;background:{{ a.bg }};color:{{ a.fg }};border:1px dashed {{ a.bd }}">
+              <span>{{ a.label }}</span>
+              <span style="font-family:'Geist Mono',monospace;font-size:10.5px;opacity:0.75">+{{ a.hpp }}</span>
+            </button>
+          </sc-for>
+        </div>
+        <div style="font-size:11px;line-height:1.5;color:oklch(0.556 0 0)">Add-on aktif ikut tergambar di diagram (garis putus-putus) dan langsung menambah HPP.</div>
+      </div>
+    </div>
+
+    <sc-if value="{{ isDiagram }}" hint-placeholder-val="{{ true }}">
+      <div style="flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden">
+        <div style="flex:none;display:flex;align-items:center;gap:8px 10px;flex-wrap:wrap;min-width:0;padding:10px 14px;background:oklch(1 0 0);border-bottom:1px solid oklch(0.922 0 0)">
+          <div style="display:flex;align-items:center;gap:14px;font-size:11px;color:oklch(0.42 0 0);flex-wrap:wrap;display:{{ legendDisplay }}">
+            <span style="display:flex;align-items:center;gap:5px"><span style="width:9px;height:9px;border-radius:3px;background:oklch(1 0 0);border:1.5px solid oklch(0.78 0 0)"></span>Bahan baku</span>
+            <span style="display:flex;align-items:center;gap:5px"><span style="width:9px;height:9px;border-radius:3px;background:#eef2ff;border:1.5px solid #6366f1"></span>Olahan sendiri</span>
+            <span style="display:flex;align-items:center;gap:5px"><span style="width:9px;height:9px;border-radius:3px;background:#fff1f2;border:1.5px solid #e11d48"></span>Stok kritis</span>
+          </div>
+          <div style="margin-left:auto;display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0">
+            <button type="button" onClick="{{ expandAll }}" style="cursor:pointer;font-family:inherit;font-size:11.5px;font-weight:600;padding:6px 11px;border-radius:8px;background:oklch(1 0 0);color:oklch(0.32 0 0);border:1px solid oklch(0.922 0 0)" style-hover="background:oklch(0.97 0 0)">Buka semua</button>
+            <button type="button" onClick="{{ collapseAll }}" style="cursor:pointer;font-family:inherit;font-size:11.5px;font-weight:600;padding:6px 11px;border-radius:8px;background:oklch(1 0 0);color:oklch(0.32 0 0);border:1px solid oklch(0.922 0 0)" style-hover="background:oklch(0.97 0 0)">Ringkas</button>
+            <div style="width:1px;height:20px;background:oklch(0.922 0 0);margin:0 2px"></div>
+            <button type="button" onClick="{{ zoomOut }}" style="cursor:pointer;font-family:inherit;font-size:14px;font-weight:600;width:28px;height:28px;border-radius:8px;background:oklch(1 0 0);color:oklch(0.32 0 0);border:1px solid oklch(0.922 0 0)">−</button>
+            <span style="font-family:'Geist Mono',monospace;font-size:11.5px;font-weight:500;width:42px;text-align:center;color:oklch(0.42 0 0)">{{ zoomPct }}</span>
+            <button type="button" onClick="{{ zoomIn }}" style="cursor:pointer;font-family:inherit;font-size:14px;font-weight:600;width:28px;height:28px;border-radius:8px;background:oklch(1 0 0);color:oklch(0.32 0 0);border:1px solid oklch(0.922 0 0)">+</button>
+            <sc-if value="{{ hasMoved }}" hint-placeholder-val="{{ false }}">
+              <button type="button" onClick="{{ tidyNodes }}" style="cursor:pointer;font-family:inherit;font-size:11.5px;font-weight:600;padding:6px 11px;border-radius:8px;background:oklch(1 0 0);color:#e11d48;border:1px solid #fecdd3">Rapikan node</button>
+            </sc-if>
+            <button type="button" onClick="{{ resetView }}" style="cursor:pointer;font-family:inherit;font-size:11.5px;font-weight:600;padding:6px 11px;border-radius:8px;background:oklch(0.205 0 0);color:oklch(0.985 0 0);border:1px solid oklch(0.205 0 0)">Pas layar</button>
+          </div>
+        </div>
+
+        <div ref="{{ canvasRef }}" onPointerDown="{{ onDown }}" onPointerMove="{{ onMove }}" onPointerUp="{{ onUp }}" style="flex:1;position:relative;overflow:hidden;cursor:grab;touch-action:none;background-color:oklch(0.975 0 0);background-image:radial-gradient(oklch(0.9 0 0) 1px, transparent 1px);background-size:22px 22px">
+          <div style="position:absolute;left:50%;top:50%;width:0;height:0;transform:{{ canvasTf }}">
+
+            <sc-if value="{{ showRings }}" hint-placeholder-val="{{ true }}">
+              <sc-for list="{{ rings }}" as="r" hint-placeholder-count="3">
+                <div style="position:absolute;left:0;top:0;border-radius:50%;border:1px dashed oklch(0.9 0 0);width:{{ r.d }}px;height:{{ r.d }}px;transform:translate(-50%,-50%);opacity:0.9"></div>
+              </sc-for>
+            </sc-if>
+
+            <sc-for list="{{ edges }}" as="e" hint-placeholder-count="6">
+              <div style="position:absolute;left:0;top:0;height:0;transform-origin:0 50%;animation:edgeIn 240ms ease both;transition:{{ e.trans }};width:{{ e.len }}px;transform:{{ e.tf }};border-top:{{ e.stroke }};opacity:{{ e.op }}"></div>
+            </sc-for>
+
+            <sc-for list="{{ nodes }}" as="n" hint-placeholder-count="7">
+              <div onClick="{{ n.onClick }}" onPointerDown="{{ n.onDown }}" onPointerMove="{{ n.onMove }}" onPointerUp="{{ n.onUp }}" style="position:absolute;left:0;top:0;padding:9px 10px;border-radius:12px;touch-action:none;animation:nodeIn 260ms ease both;width:{{ n.w }}px;cursor:{{ n.cursor }};transition:{{ n.trans }};background:{{ n.bg }};border:1.5px solid {{ n.bd }};box-shadow:{{ n.shadow }};transform:{{ n.tf }};z-index:{{ n.z }}">
+                <div style="display:flex;align-items:flex-start;gap:6px">
+                  <div style="flex:1;min-width:0">
+                    <div style="font-size:12.5px;font-weight:650;line-height:1.25;color:oklch(0.145 0 0);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ n.name }}</div>
+                    <div style="font-family:'Geist Mono',monospace;font-size:10.5px;color:oklch(0.5 0 0);margin-top:2px">{{ n.qtyLine }}</div>
+                  </div>
+                  <div style="text-align:right;flex:none">
+                    <div style="font-family:'Geist Mono',monospace;font-size:11.5px;font-weight:600;color:oklch(0.2 0 0)">{{ n.cost }}</div>
+                    <div style="font-family:'Geist Mono',monospace;font-size:10px;color:{{ n.stockColor }};margin-top:2px">{{ n.stockLine }}</div>
+                  </div>
+                </div>
+                <div style="margin-top:7px;height:3px;border-radius:99px;background:oklch(0.93 0 0);overflow:hidden">
+                  <div style="height:100%;border-radius:99px;transition:width 380ms ease;width:{{ n.sharePct }};background:{{ n.shareColor }}"></div>
+                </div>
+                <sc-if value="{{ n.hasKids }}" hint-placeholder-val="{{ true }}">
+                  <button type="button" onClick="{{ n.onToggle }}" style="position:absolute;left:50%;bottom:-11px;transform:translateX(-50%);cursor:pointer;font-family:'Geist Mono',monospace;font-size:9.5px;font-weight:600;padding:2px 8px;border-radius:99px;background:{{ n.togBg }};color:{{ n.togFg }};border:1px solid {{ n.togBd }};white-space:nowrap;z-index:3">{{ n.togLabel }}</button>
+                </sc-if>
+              </div>
+            </sc-for>
+
+            <div onClick="{{ selectRoot }}" style="position:absolute;left:0;top:0;width:224px;padding:14px;border-radius:16px;cursor:pointer;background:oklch(0.205 0 0);color:oklch(0.985 0 0);box-shadow:0 12px 34px rgba(0,0,0,0.22);transform:translate(-50%,-50%);z-index:5;transition:box-shadow 200ms">
+              <div style="font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:rgba(255,255,255,0.5)">Produk jadi</div>
+              <div style="font-size:15.5px;font-weight:700;margin-top:5px;line-height:1.2">Nut Latte</div>
+              <div style="font-size:11px;color:rgba(255,255,255,0.62);margin-top:3px">{{ m.variantLabel }}</div>
+              <div style="height:1px;background:rgba(255,255,255,0.12);margin:10px 0"></div>
+              <div style="display:flex;align-items:baseline;justify-content:space-between">
+                <span style="font-size:10.5px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;color:rgba(255,255,255,0.5)">HPP</span>
+                <span style="font-family:'Geist Mono',monospace;font-size:17px;font-weight:600">{{ m.cogs }}</span>
+              </div>
+              <div style="display:flex;align-items:baseline;justify-content:space-between;margin-top:4px">
+                <span style="font-size:10.5px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;color:rgba(255,255,255,0.5)">Margin</span>
+                <span style="font-family:'Geist Mono',monospace;font-size:12.5px;font-weight:600;color:#86efac">{{ m.margin }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div style="position:absolute;left:16px;bottom:14px;font-size:11px;color:oklch(0.6 0 0);background:rgba(255,255,255,0.8);padding:5px 9px;border-radius:8px;backdrop-filter:blur(4px)">Tarik node untuk memindahkannya · tarik kanvas untuk geser · scroll untuk zoom · klik node untuk detail</div>
+        </div>
+      </div>
+
+      <div style="width:clamp(252px,25vw,340px);flex:none;min-width:0;overflow-y:auto;background:oklch(1 0 0);border-left:1px solid oklch(0.922 0 0)">
+        <div style="padding:16px;display:flex;flex-direction:column;gap:14px">
+          <div style="display:flex;align-items:center;gap:8px">
+            <div style="font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:oklch(0.556 0 0)">{{ sel.kicker }}</div>
+            <div style="margin-left:auto;font-size:10.5px;font-weight:600;font-family:'Geist Mono',monospace;padding:3px 7px;border-radius:6px;background:{{ sel.tagBg }};color:{{ sel.tagFg }}">{{ sel.tag }}</div>
+          </div>
+          <div>
+            <div style="font-size:19px;font-weight:700;letter-spacing:-0.01em;line-height:1.2">{{ sel.name }}</div>
+            <div style="font-size:12px;color:oklch(0.556 0 0);margin-top:4px">{{ sel.sub }}</div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <sc-for list="{{ sel.stats }}" as="s" hint-placeholder-count="4">
+              <div style="padding:10px 11px;border-radius:12px;background:oklch(0.98 0 0);border:1px solid oklch(0.922 0 0)">
+                <div style="font-size:10.5px;font-weight:600;letter-spacing:0.03em;text-transform:uppercase;color:oklch(0.556 0 0)">{{ s.label }}</div>
+                <div style="font-family:'Geist Mono',monospace;font-size:15px;font-weight:600;margin-top:3px;color:{{ s.color }}">{{ s.value }}</div>
+                <div style="font-size:10.5px;color:oklch(0.6 0 0);margin-top:2px">{{ s.note }}</div>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:7px">
+            <div style="font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:oklch(0.556 0 0)">{{ sel.breakdownTitle }}</div>
+            <sc-for list="{{ sel.breakdown }}" as="b" hint-placeholder-count="4">
+              <div onClick="{{ b.onClick }}" style="display:flex;flex-direction:column;gap:5px;padding:9px 10px;border-radius:10px;background:oklch(0.99 0 0);border:1px solid oklch(0.93 0 0);cursor:pointer;transition:background 150ms" style-hover="background:oklch(0.97 0 0)">
+                <div style="display:flex;align-items:baseline;gap:8px">
+                  <span style="font-size:12.5px;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ b.name }}</span>
+                  <span style="font-family:'Geist Mono',monospace;font-size:11.5px;font-weight:600">{{ b.cost }}</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <div style="flex:1;height:3px;border-radius:99px;background:oklch(0.93 0 0);overflow:hidden">
+                    <div style="height:100%;border-radius:99px;background:#e11d48;transition:width 380ms ease;width:{{ b.pct }}"></div>
+                  </div>
+                  <span style="font-family:'Geist Mono',monospace;font-size:10.5px;color:oklch(0.556 0 0);width:96px;text-align:right">{{ b.qty }}</span>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="font-size:11px;line-height:1.55;color:oklch(0.6 0 0);padding:10px;border-radius:10px;background:oklch(0.98 0 0);border:1px dashed oklch(0.9 0 0)">{{ sel.hint }}</div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isTable }}" hint-placeholder-val="{{ false }}">
+      <div style="flex:1;min-width:0;overflow:auto;padding:18px 20px">
+        <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:12px">
+          <div style="font-size:14.5px;font-weight:700">Rincian bahan per cup</div>
+          <div style="font-size:12px;color:oklch(0.556 0 0)">{{ m.variantLabel }} · {{ m.addonSummary }}</div>
+          <div style="margin-left:auto;font-family:'Geist Mono',monospace;font-size:12px;font-weight:600">Total HPP {{ m.cogs }}</div>
+        </div>
+        <div style="border:1px solid oklch(0.922 0 0);border-radius:14px;overflow:hidden;background:oklch(1 0 0)">
+          <div style="display:grid;grid-template-columns:2.1fr 1fr 1fr 0.9fr 1fr 1fr 0.9fr;gap:0;padding:10px 14px;background:oklch(0.97 0 0);font-size:10.5px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:oklch(0.45 0 0)">
+            <div>Bahan</div><div style="text-align:right">Pakai / cup</div><div style="text-align:right">Harga satuan</div><div style="text-align:right">Susut</div><div style="text-align:right">Biaya</div><div style="text-align:right">Stok</div><div style="text-align:right">Sisa hari</div>
+          </div>
+          <sc-for list="{{ rows }}" as="r" hint-placeholder-count="8">
+            <div style="display:grid;grid-template-columns:2.1fr 1fr 1fr 0.9fr 1fr 1fr 0.9fr;gap:0;padding:11px 14px;border-top:1px solid oklch(0.94 0 0);font-size:12.5px;align-items:center">
+              <div style="display:flex;align-items:center;gap:8px;min-width:0">
+                <span style="width:7px;height:7px;border-radius:2px;flex:none;background:{{ r.dot }}"></span>
+                <span style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.name }}</span>
+                <span style="font-size:10.5px;color:oklch(0.6 0 0);white-space:nowrap">{{ r.via }}</span>
+              </div>
+              <div style="text-align:right;font-family:'Geist Mono',monospace">{{ r.qty }}</div>
+              <div style="text-align:right;font-family:'Geist Mono',monospace;color:oklch(0.45 0 0)">{{ r.unitPrice }}</div>
+              <div style="text-align:right;font-family:'Geist Mono',monospace;color:oklch(0.556 0 0)">{{ r.waste }}</div>
+              <div style="text-align:right;font-family:'Geist Mono',monospace;font-weight:600">{{ r.cost }} <span style="font-size:10.5px;font-weight:400;color:oklch(0.6 0 0)">{{ r.share }}</span></div>
+              <div style="text-align:right;font-family:'Geist Mono',monospace;color:oklch(0.45 0 0)">{{ r.stock }}</div>
+              <div style="text-align:right;font-family:'Geist Mono',monospace;font-weight:600;color:{{ r.daysColor }}">{{ r.days }}</div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </sc-if>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;showRings&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Diagram&quot;},&quot;highlightCostPath&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Diagram&quot;},&quot;lowStockDays&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:12,&quot;min&quot;:3,&quot;max&quot;:40,&quot;unit&quot;:&quot;hari&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Ambang&quot;},&quot;defaultView&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;Diagram&quot;,&quot;Tabel&quot;],&quot;default&quot;:&quot;Diagram&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Diagram&quot;}}">
+const NF = new Intl.NumberFormat('id-ID', { maximumFractionDigits: 0 });
+const NF1 = new Intl.NumberFormat('id-ID', { maximumFractionDigits: 1 });
+const rp = n => 'Rp ' + NF.format(Math.round(n));
+const rp1 = n => 'Rp ' + NF1.format(n);
+
+const CAT = {
+  arabica:   { name: 'Arabica Gayo', unit: 'g', price: 220, stock: 4200, waste: 0.02, daily: 175 },
+  robusta:   { name: 'Robusta Lampung', unit: 'g', price: 145, stock: 6100, waste: 0.02, daily: 92 },
+  air:       { name: 'Air Filter RO', unit: 'ml', price: 0.9, stock: 486000, waste: 0, daily: 11800 },
+  almond:    { name: 'Kacang Almond', unit: 'g', price: 310, stock: 12400, waste: 0.06, daily: 340 },
+  hazelnut:  { name: 'Kacang Hazelnut', unit: 'g', price: 420, stock: 2100, waste: 0.06, daily: 118 },
+  pistachio: { name: 'Kacang Pistachio', unit: 'g', price: 690, stock: 470, waste: 0.08, daily: 62 },
+  peanut:    { name: 'Kacang Tanah', unit: 'g', price: 48, stock: 8800, waste: 0.05, daily: 205 },
+  aren:      { name: 'Gula Aren Cair', unit: 'g', price: 38, stock: 8600, waste: 0.01, daily: 265 },
+  es:        { name: 'Es Batu Kristal', unit: 'g', price: 1.2, stock: 158000, waste: 0.08, daily: 5200 },
+  krim:      { name: 'Krim Kental', unit: 'ml', price: 62, stock: 5400, waste: 0.03, daily: 240 },
+  gulahalus: { name: 'Gula Halus', unit: 'g', price: 22, stock: 4100, waste: 0.01, daily: 90 },
+  boba:      { name: 'Boba Tapioka', unit: 'g', price: 95, stock: 2400, waste: 0.05, daily: 310 },
+  keju:      { name: 'Keju Krim', unit: 'g', price: 210, stock: 1480, waste: 0.03, daily: 96 },
+  cup12:     { name: 'Cup Panas 12oz', unit: 'pcs', price: 1150, stock: 1920, waste: 0.01, daily: 58 },
+  cup16:     { name: 'Cup Dingin 16oz', unit: 'pcs', price: 980, stock: 3100, waste: 0.01, daily: 96 },
+  cup22:     { name: 'Cup Dingin 22oz', unit: 'pcs', price: 1250, stock: 3400, waste: 0.01, daily: 104 },
+  lid:       { name: 'Lid Dome', unit: 'pcs', price: 320, stock: 7200, waste: 0.01, daily: 240 },
+  sedotan:   { name: 'Sedotan Kertas', unit: 'pcs', price: 180, stock: 6100, waste: 0.02, daily: 205 },
+
+  blend:     { name: 'House Blend Roast', unit: 'g', yield: 1000, waste: 0.12, kids: [['arabica', 700], ['robusta', 300]] },
+  espresso:  { name: 'Espresso Shot 30ml', unit: 'shot', yield: 1, waste: 0.05, kids: [['blend', 18], ['air', 42]] },
+  sirup:     { name: 'Sirup Gula Aren', unit: 'ml', yield: 1000, waste: 0.03, kids: [['aren', 700], ['air', 420]] },
+  m_almond:    { name: 'Susu Almond House', unit: 'ml', yield: 1000, waste: 0.04, kids: [['almond', 180], ['air', 950], ['aren', 30]] },
+  m_hazelnut:  { name: 'Susu Hazelnut House', unit: 'ml', yield: 1000, waste: 0.04, kids: [['hazelnut', 165], ['air', 950], ['aren', 30]] },
+  m_pistachio: { name: 'Susu Pistachio House', unit: 'ml', yield: 1000, waste: 0.05, kids: [['pistachio', 150], ['air', 940], ['aren', 35]] },
+  m_peanut:    { name: 'Susu Kacang Tanah', unit: 'ml', yield: 1000, waste: 0.04, kids: [['peanut', 200], ['air', 940], ['aren', 40]] },
+  pack_hot12: { name: 'Kemasan Panas 12oz', unit: 'set', yield: 1, waste: 0.01, kids: [['cup12', 1], ['lid', 1]] },
+  pack_hot16: { name: 'Kemasan Panas 16oz', unit: 'set', yield: 1, waste: 0.01, kids: [['cup16', 1], ['lid', 1]] },
+  pack_ice16: { name: 'Kemasan Dingin 16oz', unit: 'set', yield: 1, waste: 0.01, kids: [['cup16', 1], ['lid', 1], ['sedotan', 1]] },
+  pack_ice22: { name: 'Kemasan Dingin 22oz', unit: 'set', yield: 1, waste: 0.01, kids: [['cup22', 1], ['lid', 1], ['sedotan', 1]] },
+  whip:      { name: 'Whipped Cream', unit: 'porsi', yield: 1, waste: 0.04, kids: [['krim', 45], ['gulahalus', 9]] },
+  bobaaren:  { name: 'Boba Gula Aren', unit: 'porsi', yield: 1, waste: 0.05, kids: [['boba', 60], ['sirup', 18]] },
+  cheesefoam:{ name: 'Cheese Foam', unit: 'porsi', yield: 1, waste: 0.04, kids: [['keju', 25], ['krim', 30], ['gulahalus', 6]] },
+};
+
+const NUTS = [['Almond', 'm_almond'], ['Hazelnut', 'm_hazelnut'], ['Pistachio', 'm_pistachio'], ['Kacang Tanah', 'm_peanut']];
+const SIZES = [['Kecil', 0.75], ['Sedang', 1], ['Besar', 1.35]];
+const TEMPS = ['Dingin', 'Panas'];
+const ADDONS = [
+  { id: 'shot', label: 'Extra Shot', node: 'espresso', qty: 1, price: 6000 },
+  { id: 'aren', label: 'Extra Aren', node: 'sirup', qty: 15, price: 3000 },
+  { id: 'whip', label: 'Whipped Cream', node: 'whip', qty: 1, price: 7000 },
+  { id: 'boba', label: 'Boba Aren', node: 'bobaaren', qty: 1, price: 8000 },
+  { id: 'cheese', label: 'Cheese Foam', node: 'cheesefoam', qty: 1, price: 9000 },
+];
+const SIZE_PRICE = { Kecil: 24000, Sedang: 28000, Besar: 33000 };
+const NUT_PREM = { 'Almond': 0, 'Hazelnut': 2000, 'Pistachio': 5000, 'Kacang Tanah': -2000 };
+const TX = { Dingin: { Kecil: 186, Sedang: 412, Besar: 297 }, Panas: { Kecil: 74, Sedang: 158, Besar: 96 } };
+const NUT_F = { 'Almond': 1, 'Hazelnut': 0.62, 'Pistachio': 0.28, 'Kacang Tanah': 0.74 };
+const RATING = { 'Almond': 4.8, 'Hazelnut': 4.6, 'Pistachio': 4.9, 'Kacang Tanah': 4.3 };
+const RADII = [0, 262, 476, 668];
+const NODE_W = [224, 190, 172, 156];
+
+class Component extends DCLogic {
+  state = { temp: 'Dingin', size: 'Sedang', nut: 'Almond', addons: [], collapsed: {}, selected: null, zoom: 0.62, pan: { x: 0, y: 0 }, view: null, offsets: {}, dragKey: null };
+  canvasRef = React.createRef();
+
+  componentDidMount() {
+    const el = this.canvasRef.current;
+    if (!el) return;
+    this._wheel = e => {
+      e.preventDefault();
+      const z = Math.min(1.7, Math.max(0.34, this.state.zoom * (e.deltaY > 0 ? 0.92 : 1.08)));
+      this.setState({ zoom: z });
+    };
+    el.addEventListener('wheel', this._wheel, { passive: false });
+    this._onResize = () => { this.setState({ w: window.innerWidth }); this.fit(); };
+    window.addEventListener('resize', this._onResize);
+    this.setState({ w: window.innerWidth });
+    requestAnimationFrame(() => this.fit());
+  }
+
+  fit() {
+    const el = this.canvasRef.current;
+    const bb = this._bbox;
+    if (!el || !bb) return;
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    const z = Math.max(0.28, Math.min(1.4, Math.min((r.width - 48) / bb.w, (r.height - 48) / bb.h)));
+    this.setState({ zoom: z, pan: { x: -bb.cx * z, y: -bb.cy * z } });
+  }
+  componentWillUnmount() {
+    const el = this.canvasRef.current;
+    if (el && this._wheel) el.removeEventListener('wheel', this._wheel, { passive: false });
+    if (this._onResize) window.removeEventListener('resize', this._onResize);
+  }
+
+  eff(id, cache) {
+    if (cache[id] != null) return cache[id];
+    const c = CAT[id];
+    let v;
+    if (c.kids) {
+      let s = 0;
+      for (const [k, q] of c.kids) s += q * this.eff(k, cache);
+      v = s / (c.yield * (1 - c.waste));
+    } else v = c.price / (1 - c.waste);
+    cache[id] = v;
+    return v;
+  }
+
+  recipe() {
+    const { temp, size, nut, addons } = this.state;
+    const f = SIZES.find(s => s[0] === size)[1];
+    const milk = NUTS.find(n => n[0] === nut)[1];
+    const r = [];
+    r.push(['espresso', size === 'Besar' ? 3 : 2]);
+    r.push([milk, Math.round((temp === 'Dingin' ? 180 : 205) * f)]);
+    r.push(['sirup', Math.round((temp === 'Dingin' ? 25 : 20) * f)]);
+    if (temp === 'Dingin') r.push(['es', Math.round(130 * f)]);
+    const pack = temp === 'Dingin' ? (size === 'Kecil' ? 'pack_ice16' : 'pack_ice22') : (size === 'Besar' ? 'pack_hot16' : 'pack_hot12');
+    r.push([pack, 1]);
+    const extra = ADDONS.filter(a => addons.includes(a.id)).map(a => [a.node, a.qty, a.id]);
+    return { base: r, extra };
+  }
+
+  daysOf(id) {
+    const c = CAT[id];
+    if (c.kids) {
+      let m = Infinity;
+      for (const [k] of c.kids) m = Math.min(m, this.daysOf(k));
+      return m;
+    }
+    return c.stock / c.daily;
+  }
+
+  isCollapsed(key, depth, hasKids) {
+    if (!hasKids) return false;
+    const v = this.state.collapsed[key];
+    return v === undefined ? depth >= 2 : v;
+  }
+
+  build() {
+    const cache = {};
+    const { base, extra } = this.recipe();
+    const lines = base.map(([id, q]) => ({ id, q, addon: null })).concat(extra.map(([id, q, a]) => ({ id, q, addon: a })));
+    let total = 0;
+    for (const l of lines) total += l.q * this.eff(l.id, cache);
+
+    const nodes = [];
+    const walk = (id, q, key, depth, mult, addon, parentKey) => {
+      const c = CAT[id];
+      const unitCost = this.eff(id, cache);
+      const contrib = q * unitCost * mult;
+      const kids = c.kids || [];
+      const collapsed = this.isCollapsed(key, depth, kids.length > 0);
+      const n = { key, id, name: c.name, depth, q, unit: c.unit, unitCost, contrib, share: total ? contrib / total : 0,
+        comp: !!c.kids, addon, parentKey, kidCount: kids.length, collapsed, childKeys: [] };
+      nodes.push(n);
+      if (!collapsed && kids.length) {
+        const cm = mult * q / (c.yield * (1 - c.waste));
+        for (const [k, kq] of kids) {
+          const ck = key + '/' + k;
+          n.childKeys.push(ck);
+          walk(k, kq, ck, depth + 1, cm, addon, key);
+        }
+      }
+      return n;
+    };
+    for (const l of lines) walk(l.id, l.q, 'r/' + l.id + (l.addon ? '+' + l.addon : ''), 1, 1, l.addon, 'root');
+
+    const byKey = {};
+    for (const n of nodes) byKey[n.key] = n;
+    const leafCount = n => (n.collapsed || !n.childKeys.length) ? 1 : n.childKeys.reduce((s, k) => s + leafCount(byKey[k]), 0);
+    const roots = nodes.filter(n => n.depth === 1);
+    const totalLeaves = roots.reduce((s, n) => s + leafCount(n), 0) || 1;
+
+    let cursor = -Math.PI / 2 - Math.PI / totalLeaves;
+    const place = (n, a0, a1, idx) => {
+      const a = (a0 + a1) / 2;
+      const span = a1 - a0;
+      const r = RADII[Math.min(n.depth, 3)] + (idx % 2 ? 46 : 0) + (span < 0.34 && idx % 3 === 2 ? 24 : 0);
+      n.x = Math.cos(a) * r;
+      n.y = Math.sin(a) * r * 0.82;
+      n.angle = a;
+      if (!n.collapsed && n.childKeys.length) {
+        const kl = n.childKeys.map(k => leafCount(byKey[k]));
+        const sum = kl.reduce((s, v) => s + v, 0);
+        let c = a0;
+        n.childKeys.forEach((k, i) => {
+          const w = span * kl[i] / sum;
+          place(byKey[k], c, c + w, i);
+          c += w;
+        });
+      }
+    };
+    for (const n of roots) {
+      const w = 2 * Math.PI * leafCount(n) / totalLeaves;
+      place(n, cursor, cursor + w, roots.indexOf(n));
+      cursor += w;
+    }
+    const off = this.state.offsets || {};
+    for (const n of nodes) {
+      const o = off[n.key];
+      if (o) { n.x += o.x; n.y += o.y; n.moved = true; }
+    }
+    return { nodes, byKey, total, lines, cache };
+  }
+
+  set(k, v) { this.setState({ [k]: v, selected: null }, () => requestAnimationFrame(() => this.fit())); }
+  refit() { requestAnimationFrame(() => requestAnimationFrame(() => this.fit())); }
+  toggleAddon(id) {
+    this.setState(s => ({ addons: s.addons.includes(id) ? s.addons.filter(a => a !== id) : s.addons.concat(id) }));
+  }
+
+  onDown = e => {
+    this._drag = { x: e.clientX, y: e.clientY, pan: { ...this.state.pan }, moved: false };
+    if (e.currentTarget.setPointerCapture) e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  onMove = e => {
+    const d = this._drag;
+    if (!d) return;
+    const dx = e.clientX - d.x, dy = e.clientY - d.y;
+    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) d.moved = true;
+    if (d.moved) this.setState({ pan: { x: d.pan.x + dx, y: d.pan.y + dy } });
+  };
+  onUp = () => { const d = this._drag; this._drag = null; this._justDragged = !!(d && d.moved); };
+
+  pick(key) { if (this._justDragged) return; this.setState({ selected: key }); }
+
+  nodeDown = (key, e) => {
+    if (e.target && e.target.closest && e.target.closest('button')) return;
+    e.stopPropagation();
+    this._justDragged = false;
+    this._nd = { key, x: e.clientX, y: e.clientY, start: this.state.offsets[key] || { x: 0, y: 0 }, moved: false };
+    if (e.currentTarget.setPointerCapture) e.currentTarget.setPointerCapture(e.pointerId);
+    this.setState({ dragKey: key });
+  };
+  nodeMove = e => {
+    const d = this._nd;
+    if (!d) return;
+    const dx = (e.clientX - d.x) / this.state.zoom, dy = (e.clientY - d.y) / this.state.zoom;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) d.moved = true;
+    if (d.moved) this.setState(s => ({ offsets: { ...s.offsets, [d.key]: { x: d.start.x + dx, y: d.start.y + dy } } }));
+  };
+  nodeUp = () => {
+    const d = this._nd;
+    this._nd = null;
+    this._justDragged = !!(d && d.moved);
+    this.setState({ dragKey: null });
+  };
+
+  flatRows(g) {
+    const rows = {};
+    const walkAll = (id, q, mult, via) => {
+      const c = CAT[id];
+      if (c.kids) {
+        const cm = mult * q / (c.yield * (1 - c.waste));
+        for (const [k, kq] of c.kids) walkAll(k, kq, cm, c.name);
+        return;
+      }
+      const use = q * mult;
+      const r = rows[id] || (rows[id] = { id, name: c.name, unit: c.unit, qty: 0, cost: 0, via: via, price: c.price, waste: c.waste, stock: c.stock, daily: c.daily });
+      r.qty += use / (1 - c.waste);
+      r.cost += use * this.eff(id, g.cache);
+    };
+    for (const l of g.lines) walkAll(l.id, l.q, 1, null);
+    return Object.values(rows).sort((a, b) => b.cost - a.cost).map(r => ({
+      name: r.name,
+      via: r.via ? '· ' + r.via : '· langsung',
+      qty: NF1.format(r.qty) + ' ' + r.unit,
+      unitPrice: rp1(r.price) + '/' + r.unit,
+      waste: Math.round(r.waste * 100) + '%',
+      cost: rp(r.cost),
+      share: '(' + Math.round(r.cost / g.total * 100) + '%)',
+      stock: NF.format(r.stock) + ' ' + r.unit,
+      days: NF1.format(r.stock / r.daily) + 'h',
+      daysColor: r.stock / r.daily < (this.props.lowStockDays ?? 12) ? '#e11d48' : 'oklch(0.35 0 0)',
+      dot: r.stock / r.daily < (this.props.lowStockDays ?? 12) ? '#e11d48' : 'oklch(0.78 0 0)',
+    }));
+  }
+
+  renderVals() {
+    const st = this.state;
+    const view = st.view ?? (this.props.defaultView ?? 'Diagram');
+    const lowDays = this.props.lowStockDays ?? 12;
+    const hiPath = this.props.highlightCostPath ?? true;
+    const g = this.build();
+    const addonHpp = {};
+    for (const a of ADDONS) addonHpp[a.id] = a.qty * this.eff(a.node, g.cache);
+
+    const price = SIZE_PRICE[st.size] + NUT_PREM[st.nut] + (st.temp === 'Panas' ? -1000 : 0)
+      + ADDONS.filter(a => st.addons.includes(a.id)).reduce((s, a) => s + a.price, 0);
+    const margin = (price - g.total) / price * 100;
+    const tx = Math.round(TX[st.temp][st.size] * NUT_F[st.nut]);
+    const variantLabel = st.temp + ' · ' + st.size + ' · ' + st.nut;
+
+    const selKey = st.selected;
+    const sel = selKey ? g.byKey[selKey] : null;
+    const ancestors = {};
+    if (hiPath && sel) { let c = sel; while (c) { ancestors[c.key] = true; c = c.parentKey === 'root' ? null : g.byKey[c.parentKey]; } }
+
+    const nodes = g.nodes.map(n => {
+      const days = this.daysOf(n.id);
+      const low = days < lowDays;
+      const on = selKey === n.key;
+      const lit = ancestors[n.key];
+      const bd = on ? 'oklch(0.205 0 0)' : low ? '#e11d48' : n.addon ? '#a855f7' : n.comp ? '#6366f1' : 'oklch(0.8 0 0)';
+      const dragging = st.dragKey === n.key;
+      return {
+        name: n.name,
+        w: NODE_W[Math.min(n.depth, 3)],
+        trans: dragging ? 'box-shadow 180ms' : 'transform 420ms cubic-bezier(.22,1,.36,1),box-shadow 180ms,border-color 180ms',
+        cursor: dragging ? 'grabbing' : 'grab',
+        onDown: e => this.nodeDown(n.key, e),
+        onMove: this.nodeMove,
+        onUp: this.nodeUp,
+        qtyLine: NF1.format(n.q) + ' ' + n.unit + ' · ' + rp1(n.unitCost) + '/' + n.unit,
+        cost: rp(n.contrib),
+        stockLine: n.comp ? 'in-house · ' + NF1.format(days) + 'h' : NF.format(CAT[n.id].stock) + ' ' + n.unit + ' · ' + NF1.format(days) + 'h',
+        stockColor: low ? '#e11d48' : 'oklch(0.55 0 0)',
+        sharePct: Math.max(2, Math.round(n.share * 100)) + '%',
+        shareColor: n.share > 0.25 ? '#e11d48' : n.share > 0.1 ? '#f59e0b' : 'oklch(0.72 0 0)',
+        bg: n.addon ? '#faf5ff' : low ? '#fff1f2' : n.comp ? '#eef2ff' : 'oklch(1 0 0)',
+        bd,
+        shadow: dragging ? '0 18px 40px rgba(0,0,0,0.22)' : on ? '0 10px 26px rgba(0,0,0,0.16)' : lit ? '0 6px 16px rgba(225,29,72,0.14)' : '0 2px 6px rgba(0,0,0,0.05)',
+        tf: 'translate(' + Math.round(n.x) + 'px,' + Math.round(n.y) + 'px) translate(-50%,-50%) scale(' + (dragging ? 1.09 : on ? 1.06 : 1) + ')',
+        z: dragging ? 6 : on ? 4 : 2,
+        hasKids: n.kidCount > 0,
+        togLabel: n.collapsed ? '+ ' + n.kidCount + ' bahan' : '− tutup',
+        togBg: n.collapsed ? 'oklch(0.205 0 0)' : 'oklch(1 0 0)',
+        togFg: n.collapsed ? 'oklch(0.985 0 0)' : 'oklch(0.42 0 0)',
+        togBd: n.collapsed ? 'oklch(0.205 0 0)' : 'oklch(0.88 0 0)',
+        onClick: () => this.pick(n.key),
+        onToggle: e => { e.stopPropagation(); this.setState(s => ({ collapsed: { ...s.collapsed, [n.key]: !this.isCollapsed(n.key, n.depth, true) } })); },
+      };
+    });
+
+    const edges = g.nodes.map(n => {
+      const px = n.parentKey === 'root' ? 0 : g.byKey[n.parentKey].x;
+      const py = n.parentKey === 'root' ? 0 : g.byKey[n.parentKey].y;
+      const dx = n.x - px, dy = n.y - py;
+      const len = Math.sqrt(dx * dx + dy * dy);
+      const lit = ancestors[n.key];
+      const w = Math.max(1, Math.min(4.5, 1 + n.share * 12));
+      return {
+        trans: st.dragKey ? 'none' : 'transform 420ms cubic-bezier(.22,1,.36,1),width 420ms cubic-bezier(.22,1,.36,1)',
+        len: Math.round(len),
+        tf: 'translate(' + Math.round(px) + 'px,' + Math.round(py) + 'px) rotate(' + (Math.atan2(dy, dx) * 180 / Math.PI).toFixed(2) + 'deg)',
+        stroke: (n.addon ? '1.5px dashed #c084fc' : w.toFixed(1) + 'px solid ' + (lit ? '#e11d48' : 'oklch(0.84 0 0)')),
+        op: lit ? 1 : 0.75,
+      };
+    });
+
+    let x0 = -120, x1 = 120, y0 = -74, y1 = 74;
+    for (const n of g.nodes) {
+      x0 = Math.min(x0, n.x - 99); x1 = Math.max(x1, n.x + 99);
+      y0 = Math.min(y0, n.y - 42); y1 = Math.max(y1, n.y + 42);
+    }
+    this._bbox = { w: x1 - x0, h: y1 - y0, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2 };
+
+    const stat = (label, value, note, color) => ({ label, value, note: note || '', color: color || 'oklch(0.145 0 0)' });
+    let selVals;
+    if (sel) {
+      const days = this.daysOf(sel.id);
+      const c = CAT[sel.id];
+      selVals = {
+        kicker: sel.comp ? 'Bahan olahan' : 'Bahan baku',
+        tag: sel.addon ? 'ADD-ON' : sel.comp ? 'IN-HOUSE' : 'BELI',
+        tagBg: sel.addon ? '#faf5ff' : sel.comp ? '#eef2ff' : 'oklch(0.97 0 0)',
+        tagFg: sel.addon ? '#7e22ce' : sel.comp ? '#4338ca' : 'oklch(0.42 0 0)',
+        name: sel.name,
+        sub: NF1.format(sel.q) + ' ' + sel.unit + ' dipakai · ' + rp1(sel.unitCost) + ' per ' + sel.unit,
+        stats: [
+          stat('Kontribusi HPP', Math.round(sel.share * 100) + '%', rp(sel.contrib) + ' dari ' + rp(g.total)),
+          stat('Susut / yield', Math.round(c.waste * 100) + '%', sel.comp ? 'yield ' + NF.format(c.yield) + ' ' + c.unit : 'per pembelian'),
+          stat('Stok tersisa', sel.comp ? 'in-house' : NF.format(c.stock) + ' ' + c.unit, sel.comp ? 'dibuat dari bahan lain' : 'terpakai ' + NF.format(c.daily) + '/hari'),
+          stat('Sisa hari', NF1.format(days) + ' hari', days < lowDays ? 'segera restock' : 'aman', days < lowDays ? '#e11d48' : '#16a34a'),
+        ],
+        breakdownTitle: sel.comp ? 'Tersusun dari' : 'Dipakai di resep ini',
+        breakdown: sel.comp
+          ? c.kids.map(([k, q]) => {
+              const cc = q * this.eff(k, g.cache);
+              const sum = c.kids.reduce((s, [k2, q2]) => s + q2 * this.eff(k2, g.cache), 0);
+              return { name: CAT[k].name, cost: rp1(cc), pct: Math.round(cc / sum * 100) + '%', qty: NF1.format(q) + ' ' + CAT[k].unit, onClick: () => this.pick(sel.key + '/' + k) };
+            })
+          : [{ name: sel.parentKey === 'root' ? 'Langsung ke produk' : g.byKey[sel.parentKey].name, cost: rp(sel.contrib), pct: Math.round(sel.share * 100) + '%', qty: NF1.format(sel.q) + ' ' + sel.unit, onClick: () => this.pick(sel.parentKey === 'root' ? null : sel.parentKey) }],
+        hint: sel.comp ? 'Klik badge di bawah node untuk buka / tutup turunannya. Biaya olahan dihitung ulang dari bahan penyusun tiap kali harga bahan berubah.' : 'Sisa hari dihitung dari rata-rata pemakaian 30 hari terakhir pada semua produk, bukan hanya Nut Latte.',
+      };
+    } else {
+      selVals = {
+        kicker: 'Ringkasan produk', tag: 'HPP', tagBg: 'oklch(0.97 0 0)', tagFg: 'oklch(0.42 0 0)',
+        name: 'Nut Latte', sub: variantLabel + ' · ' + rp(price) + ' harga jual',
+        stats: [
+          stat('HPP / cup', rp(g.total), Math.round(g.total / price * 100) + '% dari harga jual'),
+          stat('Margin', margin.toFixed(1) + '%', rp(price - g.total) + ' / cup', margin > 55 ? '#16a34a' : margin > 40 ? '#d97706' : '#e11d48'),
+          stat('Transaksi 30h', NF.format(tx), 'varian ini saja'),
+          stat('Rating', RATING[st.nut].toFixed(1), Math.round(tx * 0.42) + ' ulasan'),
+        ],
+        breakdownTitle: 'Komposisi HPP',
+        breakdown: g.nodes.filter(n => n.depth === 1).sort((a, b) => b.contrib - a.contrib).map(n => ({
+          name: n.name + (n.addon ? ' (add-on)' : ''), cost: rp(n.contrib), pct: Math.round(n.share * 100) + '%',
+          qty: NF1.format(n.q) + ' ' + n.unit, onClick: () => this.pick(n.key),
+        })),
+        hint: 'Klik node mana pun di diagram untuk melihat harga satuan, susut, stok, dan kontribusinya ke HPP.',
+      };
+    }
+
+    return {
+      isDiagram: view === 'Diagram', isTable: view === 'Tabel',
+      showRings: this.props.showRings ?? true,
+      rings: [1, 2, 3].map(i => ({ d: RADII[i] * 2 })),
+      viewTabs: ['Diagram', 'Tabel'].map(v => ({
+        label: v === 'Diagram' ? 'Diagram resep' : 'Tabel bahan',
+        bg: view === v ? 'oklch(1 0 0)' : 'transparent',
+        fg: view === v ? 'oklch(0.145 0 0)' : 'oklch(0.5 0 0)',
+        sh: view === v ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+        onClick: () => this.setState({ view: v }),
+      })),
+      axes: [
+        { label: 'Suhu', options: TEMPS.map(t => this.opt(t, st.temp === t, () => this.set('temp', t))) },
+        { label: 'Ukuran', options: SIZES.map(s => this.opt(s[0], st.size === s[0], () => this.set('size', s[0]))) },
+        { label: 'Jenis kacang', options: NUTS.map(n => this.opt(n[0], st.nut === n[0], () => this.set('nut', n[0]))) },
+      ],
+      addonOpts: ADDONS.map(a => {
+        const on = st.addons.includes(a.id);
+        return { label: a.label, hpp: rp(addonHpp[a.id]), onClick: () => this.toggleAddon(a.id),
+          bg: on ? '#faf5ff' : 'oklch(1 0 0)', fg: on ? '#7e22ce' : 'oklch(0.42 0 0)', bd: on ? '#a855f7' : 'oklch(0.85 0 0)' };
+      }),
+      m: {
+        sku: 'NL-' + st.temp[0] + st.size[0] + '-' + st.nut.slice(0, 3).toUpperCase(),
+        variantLabel, cogs: rp(g.total), margin: margin.toFixed(1) + '%',
+        marginColor: margin > 55 ? '#16a34a' : margin > 40 ? '#d97706' : '#e11d48',
+        price: rp(price), profit: rp(price - g.total), tx: NF.format(tx),
+        rating: RATING[st.nut].toFixed(1), ratingCount: NF.format(Math.round(tx * 0.42)),
+        addonSummary: st.addons.length ? st.addons.length + ' add-on aktif' : 'tanpa add-on',
+      },
+      nodes, edges, sel: selVals, rows: this.flatRows(g),
+      canvasTf: 'translate(' + st.pan.x + 'px,' + st.pan.y + 'px) scale(' + st.zoom + ')',
+      zoomPct: Math.round(st.zoom * 100) + '%',
+      canvasRef: this.canvasRef,
+      onDown: this.onDown, onMove: this.onMove, onUp: this.onUp,
+      selectRoot: () => this.pick(null),
+      zoomIn: () => this.setState(s => ({ zoom: Math.min(1.7, s.zoom * 1.15) })),
+      zoomOut: () => this.setState(s => ({ zoom: Math.max(0.34, s.zoom / 1.15) })),
+      resetView: () => this.fit(),
+      hasMoved: Object.keys(st.offsets).length > 0,
+      tidyNodes: () => this.setState({ offsets: {} }, () => this.refit()),
+      legendDisplay: (st.w || 1440) < 1240 ? 'none' : 'flex',
+      expandAll: () => {
+        const all = {};
+        const mark = id => { const c = CAT[id]; if (!c.kids) return; for (const [k] of c.kids) mark(k); };
+        for (const n of this.build().nodes) all[n.key] = false;
+        const deep = {};
+        const walk = (id, key) => { const c = CAT[id]; if (!c.kids) return; deep[key] = false; for (const [k] of c.kids) walk(k, key + '/' + k); };
+        const { base, extra } = this.recipe();
+        for (const [id] of base) walk(id, 'r/' + id);
+        for (const [id, q, a] of extra) walk(id, 'r/' + id + '+' + a);
+        this.setState({ collapsed: { ...all, ...deep } }, () => this.refit());
+      },
+      collapseAll: () => {
+        const c = {};
+        for (const n of this.build().nodes) if (n.kidCount) c[n.key] = true;
+        this.setState({ collapsed: c }, () => this.refit());
+      },
+    };
+  }
+
+  opt(label, on, onClick) {
+    return { label, onClick, bg: on ? 'oklch(0.205 0 0)' : 'oklch(1 0 0)', fg: on ? 'oklch(0.985 0 0)' : 'oklch(0.42 0 0)', bd: on ? 'oklch(0.205 0 0)' : 'oklch(0.89 0 0)' };
+  }
+}
+</script>
+</body>
+</html>

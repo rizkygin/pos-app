@@ -13,6 +13,7 @@ const cashflow_categories_1 = require("../lib/cashflow-categories");
 const road_distance_1 = require("../lib/utils/road-distance");
 const push_1 = require("../lib/push");
 const dispatch_1 = require("../lib/dispatch");
+const cogs_1 = require("../lib/cogs");
 /**
  * Decide which lane an order runs in, from the products in the cart.
  *
@@ -266,6 +267,11 @@ async function orderRoutes(app) {
                         quantity: item.quantity,
                         note_product: item.note_product,
                         summary_price: item.summary_price,
+                        // Freeze what this line cost. An app order never moves stock, so
+                        // the cost ledger covers none of its lines and this snapshot is
+                        // the whole cost story for the order. Taken at order time, which
+                        // is when the price was quoted. See lib/cogs.ts.
+                        unit_cost: (0, cogs_1.lineUnitCostSql)(item.product_id),
                     })));
                 }
             });

@@ -1059,6 +1059,8 @@ async function adminRoutes(app) {
         const items = await db_1.db
             .select({
             detail_id: schema_1.orderDetailsTable.id,
+            // Non-null on an add-on — see orderDetails.parent_detail_id.
+            parent_detail_id: schema_1.orderDetailsTable.parent_detail_id,
             quantity: schema_1.orderDetailsTable.quantity,
             note: schema_1.orderDetailsTable.note_product,
             summary_price: schema_1.orderDetailsTable.summary_price,
@@ -1069,7 +1071,9 @@ async function adminRoutes(app) {
         })
             .from(schema_1.orderDetailsTable)
             .innerJoin(schema_1.productsTable, (0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.product_id, schema_1.productsTable.id))
-            .where((0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, orderId));
+            .where((0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, orderId))
+            // Parents before their own add-ons.
+            .orderBy((0, drizzle_orm_1.asc)(schema_1.orderDetailsTable.id));
         return reply.send({ success: true, order, items });
     });
     // Courier shift log. Sessions are platform-wide (couriers have no outlet_id),

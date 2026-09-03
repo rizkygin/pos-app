@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.dashboardRoutes = dashboardRoutes;
 const drizzle_orm_1 = require("drizzle-orm");
 const db_1 = require("../db");
+const addons_1 = require("../lib/addons");
 const schema_1 = require("../db/schema");
 const auth_1 = require("../auth");
 const web_headers_1 = require("../lib/web-headers");
@@ -65,7 +66,10 @@ async function dashboardRoutes(app) {
             .select({
             orderId: schema_1.ordersTable.id,
             status: schema_1.ordersTable.status,
-            itemCount: (0, drizzle_orm_1.sum)(schema_1.orderDetailsTable.quantity).mapWith(Number),
+            // FILTER, not a join condition: this query counts items and sums money
+            // in one pass, and the two disagree about add-ons (lib/addons.ts).
+            // Narrowing the LEFT JOIN instead would also drop the revenue.
+            itemCount: (0, drizzle_orm_1.sql) `coalesce(sum(${schema_1.orderDetailsTable.quantity}) filter (where ${schema_1.orderDetailsTable.parent_detail_id} is null), 0)`.mapWith(Number),
             totalAmount: (0, drizzle_orm_1.sum)((0, drizzle_orm_1.sql) `CAST(${schema_1.orderDetailsTable.summary_price} AS NUMERIC)`).mapWith(Number),
         })
             .from(schema_1.ordersTable)
@@ -323,7 +327,8 @@ async function dashboardRoutes(app) {
             const [{ itemCount }] = await db_1.db
                 .select({ itemCount: (0, drizzle_orm_1.count)(schema_1.orderDetailsTable.id) })
                 .from(schema_1.orderDetailsTable)
-                .where((0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, activeOrder.id));
+                // "How many things to hand over" — a topping is not one of them.
+                .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, activeOrder.id), addons_1.parentLinesOnly));
             currentPickUpItems = itemCount;
         }
         const currentPickUp = activeOrder
@@ -386,13 +391,15 @@ async function dashboardRoutes(app) {
             FROM ${schema_1.orderDetailsTable}
             JOIN ${schema_1.productsTable} ON ${schema_1.productsTable.id} = ${schema_1.orderDetailsTable.product_id}
             WHERE ${schema_1.orderDetailsTable.order_id} = ${schema_1.ordersTable.id}
+              AND ${schema_1.orderDetailsTable.parent_detail_id} IS NULL
             ORDER BY ${schema_1.orderDetailsTable.id}
             LIMIT 1
           )`,
                 outletAvatar: schema_1.outletsTable.avatar,
-                itemCount: (0, drizzle_orm_1.sum)(schema_1.orderDetailsTable.quantity).mapWith(Number),
+                itemCount: (0, drizzle_orm_1.sql) `coalesce(sum(${schema_1.orderDetailsTable.quantity}) filter (where ${schema_1.orderDetailsTable.parent_detail_id} is null), 0)`.mapWith(Number),
                 totalAmount: (0, drizzle_orm_1.sum)((0, drizzle_orm_1.sql) `CAST(${schema_1.orderDetailsTable.summary_price} AS NUMERIC)`).mapWith(Number),
-                itemNames: (0, drizzle_orm_1.sql) `array_agg(${schema_1.productsTable.product_name})`,
+                // The preview strip names the dishes, not their toppings.
+                itemNames: (0, drizzle_orm_1.sql) `array_agg(${schema_1.productsTable.product_name}) filter (where ${schema_1.orderDetailsTable.parent_detail_id} is null)`,
             })
                 .from(schema_1.ordersTable)
                 .innerJoin(schema_1.outletsTable, (0, drizzle_orm_1.eq)(schema_1.ordersTable.outlet_id, schema_1.outletsTable.id))

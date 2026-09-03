@@ -32,6 +32,7 @@ const push_1 = require("./routes/push");
 const routing_1 = require("./routes/routing");
 const maintenance_1 = require("./routes/maintenance");
 const reports_1 = require("./routes/reports");
+const shifts_1 = require("./routes/shifts");
 const dispatch_scheduler_1 = require("./lib/dispatch-scheduler");
 const app_env_1 = require("./lib/app-env");
 const PORT = Number(process.env.PORT ?? 4000);
@@ -115,6 +116,7 @@ async function main() {
     await app.register(routing_1.routingRoutes);
     await app.register(maintenance_1.maintenanceRoutes);
     await app.register(reports_1.reportRoutes);
+    await app.register(shifts_1.shiftRoutes);
     app.get("/health", async () => ({ ok: true }));
     // The courier dispatch clock. Started after the routes are registered so a
     // tick can never fire against a half-built app.

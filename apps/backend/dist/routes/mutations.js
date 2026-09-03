@@ -8,7 +8,12 @@ const auth_1 = require("../auth");
 const web_headers_1 = require("../lib/web-headers");
 const outlet_access_1 = require("../lib/outlet-access");
 const stock_1 = require("../lib/stock");
+const cogs_1 = require("../lib/cogs");
 const cashflow_categories_1 = require("../lib/cashflow-categories");
+const pos_payment_1 = require("../lib/pos-payment");
+const shift_1 = require("../lib/shift");
+const tax_1 = require("../lib/tax");
+const addons_1 = require("../lib/addons");
 const phone_1 = require("../lib/utils/phone");
 const coords_1 = require("../lib/utils/coords");
 const service_area_1 = require("../lib/service-area");
@@ -19,7 +24,15 @@ const service_area_1 = require("../lib/service-area");
 // orderId is optional because /api/add-pos-to-cashflowin calls this with no
 // order in hand. When it is passed the cashflow row carries it, which is what
 // makes the sale reversible — see cancelPosOrder.
-async function addPosToCashflowin(tx, outletId, total, orderId) {
+//
+// `method` decides which side of the ledger this lands on. It used to be
+// hardcoded 'cash', which meant a QRIS sale counted as notes in the drawer:
+// harmless while nothing ever counted the drawer, and wrong the moment a shift
+// close does. See lib/pos-payment.ts.
+//
+// `shiftId` is which cashier stint was open when it was rung up, so a closing
+// report can sum the drawer by foreign key instead of by time window.
+async function addPosToCashflowin(tx, outletId, total, orderId, method = "cash", shiftId = null) {
     let [category] = await tx
         .select({ id: schema_1.cashInCategoryTable.id })
         .from(schema_1.cashInCategoryTable)
@@ -36,13 +49,14 @@ async function addPosToCashflowin(tx, outletId, total, orderId) {
         .values({
         category_id: category.id,
         money_amount: String(total),
-        type: "cash",
+        type: (0, pos_payment_1.posCashflowTypeFor)(method),
     })
         .returning();
     await tx.insert(schema_1.cashFlows).values({
         outlet_id: outletId,
         cash_in_detail_id: detail.id,
         order_id: orderId ?? null,
+        shift_id: shiftId,
     });
 }
 async function mutationRoutes(app) {
@@ -74,6 +88,20 @@ async function mutationRoutes(app) {
                     return { success: true, message: "Order already processed", orderId: clientOrderId, replay: true };
                 }
             }
+            // The cashier's name is what the report groups on, so it must never be
+            // left blank: clients that don't send one (the web cashier historically
+            // didn't) fall back to the signed-in user's name.
+            let cashierName = typeof body.cashierName === "string" && body.cashierName.trim() !== ""
+                ? body.cashierName.trim()
+                : null;
+            if (!cashierName) {
+                const [actor] = await db_1.db
+                    .select({ name: schema_1.usersTable.name })
+                    .from(schema_1.usersTable)
+                    .where((0, drizzle_orm_1.eq)(schema_1.usersTable.id, access.userId))
+                    .limit(1);
+                cashierName = actor?.name?.trim() || null;
+            }
             // Find offline customer and courier (hardcoded for now, can be made dynamic)
             const EMAIL = "rizkygin1@gmail.com";
             const EMAIL_COURIER = "rizkygin3@gmail.com";
@@ -89,9 +117,35 @@ async function mutationRoutes(app) {
                 .innerJoin(schema_1.usersTable, (0, drizzle_orm_1.eq)(schema_1.couriersTable.user_id, schema_1.usersTable.id))
                 .where((0, drizzle_orm_1.eq)(schema_1.usersTable.email, EMAIL_COURIER))
                 .limit(1);
+            // Whatever the cashier picked, coerced to a value the reports know. An
+            // unrecognised string would otherwise become its own permanent bucket in
+            // the payment report, invisible until someone wonders why the columns
+            // don't add up.
+            const paymentMethod = (0, pos_payment_1.parsePosPaymentMethod)(body.paymentMethod);
+            // Tax is computed HERE, from the outlet's own settings, and never taken
+            // from the request. The cashier screen works the same sum out for display,
+            // but a client is free to send anything and the amount handed to the tax
+            // office is not a number to accept on trust.
+            //
+            // body.total is already net of the discount, which is the correct base:
+            // tax is charged on what the customer pays, not on a price they were
+            // given a discount off.
+            const taxable = (0, outlet_access_1.hasFeature)(access.gate, "tax");
+            const tax = (0, tax_1.computeTax)(Number(body.total) || 0, taxable
+                ? (0, tax_1.taxConfigFrom)(access.outlet)
+                : { enabled: false, rate: 0, inclusive: false, label: "Pajak" });
             let new_order_id;
             try {
                 await db_1.db.transaction(async (tx) => {
+                    // Which stint at the drawer this sale belongs to, read inside the
+                    // transaction so a shift closing at this exact moment can't leave the
+                    // sale attributed to a shift whose totals are already frozen.
+                    //
+                    // null is a normal answer: selling with no shift open is allowed (a
+                    // forgotten "Buka Shift" must never cost a sale). Those orders appear
+                    // on no closing report, which is the honest outcome — there is no
+                    // drawer to reconcile them against.
+                    const shiftId = await (0, shift_1.getOpenShiftId)(tx, body.outletId);
                     if (body.cart && body.cart.length > 0) {
                         new_order_id = clientOrderId ?? crypto.randomUUID();
                         await tx.insert(schema_1.ordersTable).values({
@@ -105,11 +159,18 @@ async function mutationRoutes(app) {
                             source: "pos",
                             status: "delivered",
                             outlet_id: body.outletId,
+                            shift_id: shiftId,
+                            // Frozen: a rate change tomorrow must not rewrite this sale.
+                            // All three stay NULL when no tax applied, so a reader can tell
+                            // "not taxed" from "taxed at zero".
+                            tax_rate: tax.rate === null ? null : String(tax.rate),
+                            tax_amount: tax.amount === null ? null : String(tax.amount),
+                            tax_inclusive: tax.inclusive,
                             note: {
                                 customerName: body.customerName || null,
-                                cashierName: body.cashierName || null,
+                                cashierName,
                                 discountAmount: body.discountAmount ?? 0,
-                                paymentMethod: body.paymentMethod ?? "cash",
+                                paymentMethod,
                                 amountPaid: body.amountPaid ?? 0,
                                 changeDue: body.changeDue ?? 0,
                             },
@@ -119,14 +180,33 @@ async function mutationRoutes(app) {
                             const summary_price = item.product.price_mark_down && item.product.price_mark_down !== "0"
                                 ? parseFloat(item.product.price_mark_down) * qty
                                 : parseFloat(item.product.price) * qty;
-                            await tx.insert(schema_1.orderDetailsTable).values({
+                            // Priced and sized before the parent row is written, so a bad
+                            // add-on payload fails before anything has been committed rather
+                            // than half way through the line. See lib/addons.ts for why the
+                            // price comes from the client and a vanished option is tolerated.
+                            const { resolved: addons, dropped } = await (0, addons_1.resolveAddons)(body.outletId, qty, item.addons);
+                            if (dropped.length > 0) {
+                                app.log.warn({ orderId: new_order_id, outletId: body.outletId, dropped }, "POS add-ons dropped: not products of this outlet");
+                            }
+                            // `returning` because the movements written just below have to
+                            // carry this row's id — see orderDetailId there.
+                            const [detail] = await tx
+                                .insert(schema_1.orderDetailsTable)
+                                .values({
                                 order_id: new_order_id,
                                 product_id: item.product.id,
                                 quantity: item.quantity,
                                 note_product: item.note_product || "-",
                                 summary_price: summary_price.toString(),
                                 status: "checkout",
-                            });
+                                // Freeze what this line cost, for the lines the cost ledger
+                                // cannot see (a service or fee moves no stock, so it writes no
+                                // movement). Stamped on every line all the same — deciding here
+                                // which ones the ledger will cover would re-read the very
+                                // product config that can change afterwards. See lib/cogs.ts.
+                                unit_cost: (0, cogs_1.lineUnitCostSql)(item.product.id),
+                            })
+                                .returning({ id: schema_1.orderDetailsTable.id });
                             // POS is an immediate sale: move stock (own stock for track_stock
                             // products, ingredients for recipe products) with an audit trail.
                             // Oversell warnings are ignored here — a POS sale must never fail
@@ -135,11 +215,64 @@ async function mutationRoutes(app) {
                                 outletId: body.outletId,
                                 productId: item.product.id,
                                 qty,
+                                // Stamped so cancelling this order can replay these exact
+                                // movements instead of re-expanding the recipe later.
+                                orderId: new_order_id,
+                                // And the LINE, so the cost of what moved can be attributed
+                                // back to the item that was sold — a composition's movements
+                                // are against its ingredients and carry no other link to it.
+                                orderDetailId: detail.id,
                                 note: `POS ${new_order_id}`,
                             });
+                            // ── Add-ons: child lines of the one just written ──────────────
+                            //
+                            // Each is an ordinary order line that happens to point at its
+                            // parent, so it takes the SAME two steps the parent just took —
+                            // freeze its own unit_cost, then move its own stock — and by
+                            // doing so inherits the whole cost ledger for free. Nothing in
+                            // lib/cogs.ts or lib/stock.ts knows add-ons exist.
+                            //
+                            // The two things that must not drift:
+                            //   * orderDetailId is the CHILD's id, never the parent's. It is
+                            //     what attributes an add-on's ingredients to the add-on
+                            //     rather than to the dish.
+                            //   * summary_price on this row is the ADD-ON's price alone. The
+                            //     parent keeps the base price it was written with; folding
+                            //     the add-on into it would count the money twice, because the
+                            //     order total is a plain sum over every line.
+                            for (const addon of addons) {
+                                const [addonDetail] = await tx
+                                    .insert(schema_1.orderDetailsTable)
+                                    .values({
+                                    order_id: new_order_id,
+                                    product_id: addon.product_id,
+                                    quantity: addon.quantity,
+                                    parent_detail_id: detail.id,
+                                    // Deliberately no note: the kitchen instruction belongs to
+                                    // the dish, and repeating it per topping would print it
+                                    // three times on the ticket.
+                                    note_product: "-",
+                                    summary_price: addon.summary_price.toString(),
+                                    status: "checkout",
+                                    unit_cost: (0, cogs_1.lineUnitCostSql)(addon.product_id),
+                                })
+                                    .returning({ id: schema_1.orderDetailsTable.id });
+                                await (0, stock_1.applySaleStockOut)(tx, {
+                                    outletId: body.outletId,
+                                    productId: addon.product_id,
+                                    qty: addon.quantity,
+                                    orderId: new_order_id,
+                                    orderDetailId: addonDetail.id,
+                                    note: `POS ${new_order_id}`,
+                                });
+                            }
                         }
                     }
-                    await addPosToCashflowin(tx, body.outletId, body.total, new_order_id);
+                    // tax.total, not body.total: under exclusive pricing the customer
+                    // hands over the tax as well, and that money is physically in the
+                    // drawer. Booking the pre-tax figure would leave every shift close
+                    // short by exactly the tax collected.
+                    await addPosToCashflowin(tx, body.outletId, tax.total, new_order_id, paymentMethod, shiftId);
                 });
             }
             catch (err) {
@@ -185,6 +318,8 @@ async function mutationRoutes(app) {
                     source: schema_1.ordersTable.source,
                     deletedAt: schema_1.ordersTable.deletedAt,
                     note: schema_1.ordersTable.note,
+                    taxAmount: schema_1.ordersTable.tax_amount,
+                    taxInclusive: schema_1.ordersTable.tax_inclusive,
                 })
                     .from(schema_1.ordersTable)
                     .where((0, drizzle_orm_1.eq)(schema_1.ordersTable.id, orderId))
@@ -230,8 +365,24 @@ async function mutationRoutes(app) {
                         .from(schema_1.orderDetailsTable)
                         .where((0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, orderId));
                     const discount = Number(order.note?.discountAmount ?? 0);
-                    amount = Math.max(0, Number(sum?.total ?? 0) - discount);
+                    // Tax has to come back too, or a refund on a taxed sale is short by
+                    // the tax. Only under EXCLUSIVE pricing though: an inclusive tax was
+                    // already inside the line prices this sum is built from, so adding it
+                    // again would refund it twice.
+                    const taxBack = order.taxInclusive === false ? Number(order.taxAmount ?? 0) : 0;
+                    amount = Math.max(0, Number(sum?.total ?? 0) - discount + taxBack);
                 }
+                // Which drawer pays the refund back out: the one that is open NOW, not
+                // the shift that took the sale. A sale rung up yesterday and voided
+                // today takes money out of today's till, and yesterday's report was
+                // already printed and signed — silently editing it is exactly what a
+                // frozen closing count exists to prevent.
+                const reversalShiftId = await (0, shift_1.getOpenShiftId)(tx, access.outlet.id);
+                // Reverse it the same way it came in. The original booking is only
+                // 'cash' if the customer actually paid cash; reversing a QRIS sale as a
+                // cash-out would drain a drawer that never received the money, and the
+                // next shift close would come up short by exactly that amount.
+                const reversalType = (0, pos_payment_1.posCashflowTypeFor)((0, pos_payment_1.parsePosPaymentMethod)(order.note?.paymentMethod));
                 // Reverse the money. Zero is skipped rather than booked: a 0-rupiah
                 // cash-out row is noise in the cashflow report, and a free order is a
                 // real case (fully discounted).
@@ -249,31 +400,47 @@ async function mutationRoutes(app) {
                     }
                     const [detail] = await tx
                         .insert(schema_1.cashOutDetailTable)
-                        .values({ category_id: category.id, money_amount: String(amount), type: "cash" })
+                        .values({
+                        category_id: category.id,
+                        money_amount: String(amount),
+                        type: reversalType,
+                    })
                         .returning({ id: schema_1.cashOutDetailTable.id });
                     await tx.insert(schema_1.cashFlows).values({
                         outlet_id: access.outlet.id,
                         cash_out_detail_id: detail.id,
                         order_id: orderId,
+                        shift_id: reversalShiftId,
                     });
                 }
-                // Hand the stock back, line by line.
-                const lines = await tx
-                    .select({
-                    productId: schema_1.orderDetailsTable.product_id,
-                    quantity: schema_1.orderDetailsTable.quantity,
-                })
-                    .from(schema_1.orderDetailsTable)
-                    .where((0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, orderId));
-                for (const line of lines) {
-                    if (!line.productId)
-                        continue;
-                    await (0, stock_1.applySaleStockReturn)(tx, {
-                        outletId: access.outlet.id,
-                        productId: line.productId,
-                        qty: Number(line.quantity),
-                        note: `Batal POS ${orderId}`,
-                    });
+                // Hand the stock back. Preferred path replays the order's own ledger,
+                // which returns exactly what left even if a recipe changed since the
+                // sale; it reports false only for orders placed before migration 0062
+                // stamped order_id onto movements, and those fall back to re-deriving
+                // each line from the recipe as it stands now.
+                const replayed = await (0, stock_1.applyOrderStockReturn)(tx, {
+                    outletId: access.outlet.id,
+                    orderId,
+                    note: `Batal POS ${orderId}`,
+                });
+                if (!replayed) {
+                    const lines = await tx
+                        .select({
+                        productId: schema_1.orderDetailsTable.product_id,
+                        quantity: schema_1.orderDetailsTable.quantity,
+                    })
+                        .from(schema_1.orderDetailsTable)
+                        .where((0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, orderId));
+                    for (const line of lines) {
+                        if (!line.productId)
+                            continue;
+                        await (0, stock_1.applySaleStockReturn)(tx, {
+                            outletId: access.outlet.id,
+                            productId: line.productId,
+                            qty: Number(line.quantity),
+                            note: `Batal POS ${orderId}`,
+                        });
+                    }
                 }
                 // status alongside deleted_at: the soft-delete filter is what hides the
                 // order, but anything that reads a cancelled row directly (the reprint
@@ -308,7 +475,9 @@ async function mutationRoutes(app) {
             if (!access)
                 return;
             const body = request.body || {};
-            await db_1.db.transaction((tx) => addPosToCashflowin(tx, access.outlet.id, body.total));
+            await db_1.db.transaction(async (tx) => addPosToCashflowin(tx, access.outlet.id, body.total, undefined, (0, pos_payment_1.parsePosPaymentMethod)(body.paymentMethod), 
+            // Cash taken at the counter belongs to whoever's drawer is open.
+            await (0, shift_1.getOpenShiftId)(tx, access.outlet.id)));
             return { success: true };
         }
         catch (error) {

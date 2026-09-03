@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ratingRoutes = ratingRoutes;
 const drizzle_orm_1 = require("drizzle-orm");
 const db_1 = require("../db");
+const addons_1 = require("../lib/addons");
 const schema_1 = require("../db/schema");
 const auth_1 = require("../auth");
 const web_headers_1 = require("../lib/web-headers");
@@ -39,7 +40,10 @@ async function ratingAnchorDetail(orderId) {
     const [detail] = await db_1.db
         .select({ id: schema_1.orderDetailsTable.id })
         .from(schema_1.orderDetailsTable)
-        .where((0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, orderId))
+        // Parents only. ratings.order_details_id must never point at an add-on:
+        // "3 bintang untuk Telur" is not a review anyone asked for, and the anchor
+        // has to be a row the customer would recognise as what they ordered.
+        .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, orderId), addons_1.parentLinesOnly))
         .orderBy((0, drizzle_orm_1.asc)(schema_1.orderDetailsTable.id))
         .limit(1);
     return detail ?? null;
@@ -127,7 +131,8 @@ async function ratingRoutes(app) {
         })
             .from(schema_1.orderDetailsTable)
             .innerJoin(schema_1.productsTable, (0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.product_id, schema_1.productsTable.id))
-            .where((0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, orderId));
+            // Add-ons are not rated separately from the dish they came on.
+            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, orderId), addons_1.parentLinesOnly));
         if (products.length === 0)
             return reply.send({ ok: false });
         if (await alreadyRatedOrder(session.user.id, orderId))
@@ -292,7 +297,8 @@ async function ratingRoutes(app) {
         })
             .from(schema_1.orderDetailsTable)
             .innerJoin(schema_1.productsTable, (0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.product_id, schema_1.productsTable.id))
-            .where((0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, orderId));
+            // Add-ons are not rated separately from the dish they came on.
+            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, orderId), addons_1.parentLinesOnly));
         if (products.length === 0)
             return reply.send({ ok: false });
         if (await alreadyRatedOrder(session.user.id, orderId))

@@ -11,11 +11,11 @@ const outlet_id_1 = require("../lib/outlet-id");
 const outlet_access_1 = require("../lib/outlet-access");
 const order_items_1 = require("../lib/utils/order-items");
 const timezone_1 = require("../lib/timezone");
-// Money columns (summary_price, buying_price) are varchar; a single blank or
-// non-numeric row makes `cast(... as numeric)` throw and kills the whole
-// aggregate ("invalid input syntax for type numeric"). Guard the cast so bad or
-// blank values count as 0 instead of crashing the query.
-const money = (col) => (0, drizzle_orm_1.sql) `(case when ${col} ~ '^\\s*-?[0-9]+(\\.[0-9]+)?\\s*$' then cast(${col} as numeric) else 0 end)`;
+const shift_1 = require("../lib/shift");
+const money_sql_1 = require("../lib/money-sql");
+const cogs_1 = require("../lib/cogs");
+// Money columns (summary_price, buying_price) are varchar and a single blank
+// row makes the cast throw, killing the whole aggregate. See lib/money-sql.ts.
 // POS/cashier orders are attached to this hardcoded "offline" customer (see
 // mutations.ts /api/add-order-detail). Matches admin.ts OFFLINE_CUSTOMER_EMAIL.
 const OFFLINE_CUSTOMER_EMAIL = "rizkygin1@gmail.com";
@@ -95,7 +95,7 @@ async function ownerRoutes(app) {
                     .select({
                     orderId: schema_1.orderDetailsTable.order_id,
                     itemCount: (0, drizzle_orm_1.sql) `cast(count(*) as int)`,
-                    totalAmount: (0, drizzle_orm_1.sql) `coalesce(sum(${money(schema_1.orderDetailsTable.summary_price)}), 0)`,
+                    totalAmount: (0, drizzle_orm_1.sql) `coalesce(sum(${(0, money_sql_1.money)(schema_1.orderDetailsTable.summary_price)}), 0)`,
                     status: schema_1.ordersTable.status,
                     // Drives whether the row offers a cancel button — only cashier
                     // orders can be cancelled here.
@@ -263,6 +263,9 @@ async function ownerRoutes(app) {
             const rows = await db_1.db
                 .select({
                 detailId: schema_1.orderDetailsTable.id,
+                // Non-null on an add-on, naming the line it belongs to, so the UI can
+                // indent it under its dish instead of listing it as its own item.
+                parentDetailId: schema_1.orderDetailsTable.parent_detail_id,
                 quantity: schema_1.orderDetailsTable.quantity,
                 note: schema_1.orderDetailsTable.note_product,
                 summaryPrice: schema_1.orderDetailsTable.summary_price,
@@ -277,7 +280,11 @@ async function ownerRoutes(app) {
                 .from(schema_1.orderDetailsTable)
                 .innerJoin(schema_1.productsTable, (0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.product_id, schema_1.productsTable.id))
                 .where((0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, order_id))
-                .orderBy((0, drizzle_orm_1.desc)(schema_1.orderDetailsTable.created_at));
+                // created_at is now(), which Postgres freezes at transaction start, so
+                // every line of an order carries the SAME timestamp and sorting on it
+                // alone is unstable. The id tiebreak fixes that and, because add-ons are
+                // inserted straight after their parent, also lands each one under it.
+                .orderBy((0, drizzle_orm_1.desc)(schema_1.orderDetailsTable.created_at), (0, drizzle_orm_1.asc)(schema_1.orderDetailsTable.id));
             const isOfflineOrder = order.customerEmail === OFFLINE_CUSTOMER_EMAIL;
             return {
                 success: true,
@@ -469,7 +476,7 @@ async function ownerRoutes(app) {
             const months = getLast6Months();
             const data = await Promise.all(months.map(async ({ start, end, month }) => {
                 const [result] = await db_1.db
-                    .select({ total: (0, drizzle_orm_1.sql) `coalesce(sum(${money(schema_1.orderDetailsTable.summary_price)}), 0)` })
+                    .select({ total: (0, drizzle_orm_1.sql) `coalesce(sum(${(0, money_sql_1.money)(schema_1.orderDetailsTable.summary_price)}), 0)` })
                     .from(schema_1.orderDetailsTable)
                     .innerJoin(schema_1.productsTable, (0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.product_id, schema_1.productsTable.id))
                     .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.productsTable.outlet_id, outlet.id), (0, drizzle_orm_1.gte)(schema_1.orderDetailsTable.created_at, start), (0, drizzle_orm_1.lt)(schema_1.orderDetailsTable.created_at, end)));
@@ -497,7 +504,7 @@ async function ownerRoutes(app) {
                 .select({
                 hour: (0, drizzle_orm_1.sql) `extract(hour from ${schema_1.orderDetailsTable.created_at} at time zone ${timezone})::int`,
                 count: (0, drizzle_orm_1.sql) `count(distinct ${schema_1.orderDetailsTable.order_id})`,
-                total: (0, drizzle_orm_1.sql) `coalesce(sum(${money(schema_1.orderDetailsTable.summary_price)}), 0)`,
+                total: (0, drizzle_orm_1.sql) `coalesce(sum(${(0, money_sql_1.money)(schema_1.orderDetailsTable.summary_price)}), 0)`,
             })
                 .from(schema_1.orderDetailsTable)
                 .innerJoin(schema_1.productsTable, (0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.product_id, schema_1.productsTable.id))
@@ -573,11 +580,38 @@ async function ownerRoutes(app) {
             const prevTo = from;
             const scope = (start, end) => (0, drizzle_orm_1.and)(order_scope_1.orderNotDeleted, (0, drizzle_orm_1.eq)(schema_1.productsTable.outlet_id, outlet.id), (0, drizzle_orm_1.gte)(schema_1.orderDetailsTable.created_at, start), (0, drizzle_orm_1.lt)(schema_1.orderDetailsTable.created_at, end), (0, drizzle_orm_1.notInArray)(schema_1.ordersTable.status, ["cancelled", "pending"]));
             const kpiSelect = {
-                revenue: (0, drizzle_orm_1.sql) `coalesce(sum(${money(schema_1.orderDetailsTable.summary_price)}), 0)`.mapWith(Number),
-                cogs: (0, drizzle_orm_1.sql) `coalesce(sum(${money(schema_1.productsTable.buying_price)} * ${schema_1.orderDetailsTable.quantity}), 0)`.mapWith(Number),
+                revenue: (0, drizzle_orm_1.sql) `coalesce(sum(${(0, money_sql_1.money)(schema_1.orderDetailsTable.summary_price)}), 0)`.mapWith(Number),
                 orders: (0, drizzle_orm_1.sql) `count(distinct ${schema_1.orderDetailsTable.order_id})`.mapWith(Number),
             };
-            const [cur, prev, trendRows, topRows, hourRows] = await Promise.all([
+            // Aggregated per ORDER rather than per line, and so a separate query
+            // rather than another column in kpiSelect. Since 0066 a line CAN be costed
+            // on its own (see lineCogsSql, used by topProducts below), but only the
+            // order-level reader carries the pre-0066 branch — an order written before
+            // the tag has a ledger total and no way to split it — so this stays the
+            // more truthful of the two for the headline number.
+            //
+            // Windowed on orders.created_at rather than orderDetails.created_at (what
+            // `scope` above uses). They are written in the same transaction, so the
+            // two agree in practice; the order's own timestamp is the right key for an
+            // order-level total.
+            const cogsFor = async (start, end) => {
+                const res = await db_1.db.execute((0, drizzle_orm_1.sql) `
+          select coalesce(sum(c.cogs), 0)::float8 as cogs
+          from (
+            select ${(0, cogs_1.orderCogsSql)((0, drizzle_orm_1.sql) `o.id`)} as cogs
+            from orders o
+            where o.outlet_id = ${outlet.id}
+              and o.deleted_at is null
+              and o.status not in ('cancelled', 'pending')
+              and o.created_at >= ${start}
+              and o.created_at < ${end}
+          ) c
+        `);
+                const row = res.rows?.[0]
+                    ?? (Array.isArray(res) ? res[0] : undefined);
+                return Number(row?.cogs ?? 0);
+            };
+            const [cur, prev, curCogs, prevCogs, trendRows, topRows, hourRows] = await Promise.all([
                 db_1.db
                     .select(kpiSelect)
                     .from(schema_1.orderDetailsTable)
@@ -590,10 +624,12 @@ async function ownerRoutes(app) {
                     .innerJoin(schema_1.productsTable, (0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.product_id, schema_1.productsTable.id))
                     .innerJoin(schema_1.ordersTable, (0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, schema_1.ordersTable.id))
                     .where(scope(prevFrom, prevTo)),
+                cogsFor(from, to),
+                cogsFor(prevFrom, prevTo),
                 db_1.db
                     .select({
                     day: (0, drizzle_orm_1.sql) `(${schema_1.orderDetailsTable.created_at} at time zone ${timezone})::date`,
-                    revenue: (0, drizzle_orm_1.sql) `coalesce(sum(${money(schema_1.orderDetailsTable.summary_price)}), 0)`.mapWith(Number),
+                    revenue: (0, drizzle_orm_1.sql) `coalesce(sum(${(0, money_sql_1.money)(schema_1.orderDetailsTable.summary_price)}), 0)`.mapWith(Number),
                 })
                     .from(schema_1.orderDetailsTable)
                     .innerJoin(schema_1.productsTable, (0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.product_id, schema_1.productsTable.id))
@@ -605,21 +641,34 @@ async function ownerRoutes(app) {
                     .select({
                     name: schema_1.productsTable.product_name,
                     qty: (0, drizzle_orm_1.sql) `coalesce(sum(${schema_1.orderDetailsTable.quantity}), 0)`.mapWith(Number),
-                    revenue: (0, drizzle_orm_1.sql) `coalesce(sum(${money(schema_1.orderDetailsTable.summary_price)}), 0)`.mapWith(Number),
-                    profit: (0, drizzle_orm_1.sql) `coalesce(sum(${money(schema_1.orderDetailsTable.summary_price)} - ${money(schema_1.productsTable.buying_price)} * ${schema_1.orderDetailsTable.quantity}), 0)`.mapWith(Number),
+                    revenue: (0, drizzle_orm_1.sql) `coalesce(sum(${(0, money_sql_1.money)(schema_1.orderDetailsTable.summary_price)}), 0)`.mapWith(Number),
+                    // From the cost ledger, the same source as the profit KPI above.
+                    // This used to be a live buying_price join with a note explaining
+                    // that per-product cost was unreadable from the ledger — true until
+                    // migration 0066 tagged each movement with the orderDetails row
+                    // that caused it, ingredient movements of a composition included.
+                    // Until then a nasi goreng cost whatever was typed into its
+                    // buying_price, which for a recipe product is usually nothing, so
+                    // the dishes an owner actually makes ranked as pure profit.
+                    profit: (0, drizzle_orm_1.sql) `coalesce(sum(${(0, money_sql_1.money)(schema_1.orderDetailsTable.summary_price)} - ${(0, cogs_1.lineCogsSql)({
+                        id: schema_1.orderDetailsTable.id,
+                        unitCost: schema_1.orderDetailsTable.unit_cost,
+                        quantity: schema_1.orderDetailsTable.quantity,
+                        buyingPrice: schema_1.productsTable.buying_price,
+                    })}), 0)`.mapWith(Number),
                 })
                     .from(schema_1.orderDetailsTable)
                     .innerJoin(schema_1.productsTable, (0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.product_id, schema_1.productsTable.id))
                     .innerJoin(schema_1.ordersTable, (0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.order_id, schema_1.ordersTable.id))
                     .where(scope(from, to))
                     .groupBy(schema_1.productsTable.id)
-                    .orderBy((0, drizzle_orm_1.desc)((0, drizzle_orm_1.sql) `coalesce(sum(${money(schema_1.orderDetailsTable.summary_price)}), 0)`))
+                    .orderBy((0, drizzle_orm_1.desc)((0, drizzle_orm_1.sql) `coalesce(sum(${(0, money_sql_1.money)(schema_1.orderDetailsTable.summary_price)}), 0)`))
                     .limit(8),
                 db_1.db
                     .select({
                     hour: (0, drizzle_orm_1.sql) `extract(hour from (${schema_1.orderDetailsTable.created_at} at time zone ${timezone}))::int`,
                     orders: (0, drizzle_orm_1.sql) `count(distinct ${schema_1.orderDetailsTable.order_id})`.mapWith(Number),
-                    revenue: (0, drizzle_orm_1.sql) `coalesce(sum(${money(schema_1.orderDetailsTable.summary_price)}), 0)`.mapWith(Number),
+                    revenue: (0, drizzle_orm_1.sql) `coalesce(sum(${(0, money_sql_1.money)(schema_1.orderDetailsTable.summary_price)}), 0)`.mapWith(Number),
                 })
                     .from(schema_1.orderDetailsTable)
                     .innerJoin(schema_1.productsTable, (0, drizzle_orm_1.eq)(schema_1.orderDetailsTable.product_id, schema_1.productsTable.id))
@@ -628,8 +677,8 @@ async function ownerRoutes(app) {
                     .groupBy((0, drizzle_orm_1.sql) `1`)
                     .orderBy((0, drizzle_orm_1.sql) `1`),
             ]);
-            const c = cur[0] ?? { revenue: 0, cogs: 0, orders: 0 };
-            const p = prev[0] ?? { revenue: 0, cogs: 0, orders: 0 };
+            const c = { ...(cur[0] ?? { revenue: 0, orders: 0 }), cogs: curCogs };
+            const p = { ...(prev[0] ?? { revenue: 0, orders: 0 }), cogs: prevCogs };
             const pct = (a, b) => (b > 0 ? ((a - b) / b) * 100 : a > 0 ? 100 : 0);
             const hourly = Array.from({ length: 24 }, (_, i) => ({ hour: i, orders: 0, revenue: 0 }));
             hourRows.forEach((r) => {
@@ -684,9 +733,11 @@ async function ownerRoutes(app) {
                 in_category: schema_1.cashInCategoryTable.category,
                 in_amount: schema_1.cashInDetailTable.money_amount,
                 in_date: schema_1.cashInDetailTable.created_at,
+                in_explanation: schema_1.cashInDetailTable.explanation,
                 out_category: schema_1.cashOutCategoryTable.category,
                 out_amount: schema_1.cashOutDetailTable.money_amount,
                 out_date: schema_1.cashOutDetailTable.created_at,
+                out_explanation: schema_1.cashOutDetailTable.explanation,
                 invoice_number: schema_1.invoicesTable.number,
             })
                 .from(schema_1.cashFlows)
@@ -713,6 +764,7 @@ async function ownerRoutes(app) {
                     date: dateFormatter.format(date),
                     time: timeFormatter.format(date),
                     note: row.invoice_number ?? "",
+                    explanation: (row.in_explanation ?? row.out_explanation) ?? "",
                 };
             });
             return { data };
@@ -729,7 +781,7 @@ async function ownerRoutes(app) {
             const outlet = await outletFor(session.user.id, "cashflow", request);
             if (!outlet)
                 return reply.status(401).send({ success: false });
-            const { type, category, amount, date, timezone = "Asia/Jakarta" } = request.body;
+            const { type, category, amount, date, explanation, timezone = "Asia/Jakarta" } = request.body;
             if (!type || !category || !amount || !date)
                 return reply.status(400).send({ error: "Missing required fields" });
             if (isNaN(Number(amount)) || Number(amount) <= 0)
@@ -737,6 +789,16 @@ async function ownerRoutes(app) {
             const { startUTC, endUTC } = (0, timezone_1.getUTCRangeFromLocalDate)(date, timezone);
             const now = new Date();
             const created_at = now >= startUTC && now <= endUTC ? now : startUTC;
+            // Money moved right now, while a shift is open, came out of (or went
+            // into) that drawer — petty cash for ice, a supplier paid from the till —
+            // so it belongs on that shift's closing report.
+            //
+            // Only for entries happening NOW. A backdated entry gets no shift: it
+            // describes a day that is over, and hanging it on today's open drawer
+            // would make that drawer come up short against a count that was already
+            // correct.
+            const isBackdated = created_at !== now;
+            const shift_id = isBackdated ? null : await (0, shift_1.getOpenShiftId)(db_1.db, outlet.id);
             const timeFormatter = new Intl.DateTimeFormat("en-GB", { timeZone: timezone, hour: "2-digit", minute: "2-digit", hour12: false });
             if (type === "IN") {
                 const [cat] = await db_1.db
@@ -746,9 +808,9 @@ async function ownerRoutes(app) {
                     .limit(1);
                 if (!cat)
                     return reply.status(400).send({ error: "Unknown category" });
-                const [detail] = await db_1.db.insert(schema_1.cashInDetailTable).values({ category_id: cat.id, money_amount: String(amount), type: "cash", created_at }).returning();
-                const [cf] = await db_1.db.insert(schema_1.cashFlows).values({ outlet_id: outlet.id, cash_in_detail_id: detail.id }).returning();
-                return { data: { id: String(cf.id), type: "IN", category, amount: Number(amount), date, time: timeFormatter.format(detail.created_at), note: "" } };
+                const [detail] = await db_1.db.insert(schema_1.cashInDetailTable).values({ category_id: cat.id, money_amount: String(amount), type: "cash", explanation: explanation ?? null, created_at }).returning();
+                const [cf] = await db_1.db.insert(schema_1.cashFlows).values({ outlet_id: outlet.id, cash_in_detail_id: detail.id, shift_id }).returning();
+                return { data: { id: String(cf.id), type: "IN", category, amount: Number(amount), date, time: timeFormatter.format(detail.created_at), note: "", explanation: explanation ?? "" } };
             }
             if (type === "OUT") {
                 const [cat] = await db_1.db
@@ -758,9 +820,9 @@ async function ownerRoutes(app) {
                     .limit(1);
                 if (!cat)
                     return reply.status(400).send({ error: "Unknown category" });
-                const [detail] = await db_1.db.insert(schema_1.cashOutDetailTable).values({ category_id: cat.id, money_amount: String(amount), type: "cash", created_at }).returning();
-                const [cf] = await db_1.db.insert(schema_1.cashFlows).values({ outlet_id: outlet.id, cash_out_detail_id: detail.id }).returning();
-                return { data: { id: String(cf.id), type: "OUT", category, amount: Number(amount), date, time: timeFormatter.format(detail.created_at), note: "" } };
+                const [detail] = await db_1.db.insert(schema_1.cashOutDetailTable).values({ category_id: cat.id, money_amount: String(amount), type: "cash", explanation: explanation ?? null, created_at }).returning();
+                const [cf] = await db_1.db.insert(schema_1.cashFlows).values({ outlet_id: outlet.id, cash_out_detail_id: detail.id, shift_id }).returning();
+                return { data: { id: String(cf.id), type: "OUT", category, amount: Number(amount), date, time: timeFormatter.format(detail.created_at), note: "", explanation: explanation ?? "" } };
             }
             return reply.status(400).send({ error: "Invalid type" });
         }
@@ -866,7 +928,7 @@ async function ownerRoutes(app) {
             }
             const [salesResult] = await db_1.db
                 .select({
-                total: (0, drizzle_orm_1.sql) `coalesce(sum(${money(schema_1.orderDetailsTable.summary_price)}), 0)`,
+                total: (0, drizzle_orm_1.sql) `coalesce(sum(${(0, money_sql_1.money)(schema_1.orderDetailsTable.summary_price)}), 0)`,
                 count: (0, drizzle_orm_1.sql) `count(distinct ${schema_1.orderDetailsTable.order_id})`,
             })
                 .from(schema_1.orderDetailsTable)

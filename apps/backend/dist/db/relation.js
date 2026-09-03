@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.accountRelations = exports.sessionRelations = exports.cashFlowsRelation = exports.cashOutCategoryRelation = exports.cashInCategoryRelation = exports.ordersRelations = exports.ratingsRelations = exports.orderDetailsRelations = exports.productsRelations = exports.couriersRelations = exports.customersRelations = exports.outletsRelations = exports.usersRelations = void 0;
+exports.productAddonGroupsRelations = exports.addonGroupOptionsRelations = exports.addonGroupsRelations = exports.accountRelations = exports.sessionRelations = exports.cashFlowsRelation = exports.cashOutCategoryRelation = exports.cashInCategoryRelation = exports.ordersRelations = exports.ratingsRelations = exports.orderDetailsRelations = exports.productsRelations = exports.couriersRelations = exports.customersRelations = exports.outletsRelations = exports.usersRelations = void 0;
 const drizzle_orm_1 = require("drizzle-orm");
 const schema = __importStar(require("./schema"));
 exports.usersRelations = (0, drizzle_orm_1.relations)(schema.usersTable, ({ one, many }) => ({
@@ -79,9 +79,20 @@ exports.productsRelations = (0, drizzle_orm_1.relations)(schema.productsTable, (
         fields: [schema.productsTable.outlet_id],
         references: [schema.outletsTable.id]
     }),
-    orderDetails: many(schema.orderDetailsTable)
+    orderDetails: many(schema.orderDetailsTable),
+    // A variant and the product it varies (migration 0071). Self-referencing,
+    // so both ends carry the same relationName — without it drizzle cannot tell
+    // which side of the same table it is looking at. Same shape as the add-on
+    // self-relation on orderDetails below, and for a related reason: both model
+    // "this row belongs under that one", one level deep.
+    variantOf: one(schema.productsTable, {
+        fields: [schema.productsTable.variant_of],
+        references: [schema.productsTable.id],
+        relationName: "productVariants"
+    }),
+    variants: many(schema.productsTable, { relationName: "productVariants" })
 }));
-exports.orderDetailsRelations = (0, drizzle_orm_1.relations)(schema.orderDetailsTable, ({ one }) => ({
+exports.orderDetailsRelations = (0, drizzle_orm_1.relations)(schema.orderDetailsTable, ({ one, many }) => ({
     hasProduct: one(schema.productsTable, {
         fields: [schema.orderDetailsTable.product_id],
         references: [schema.productsTable.id]
@@ -89,7 +100,16 @@ exports.orderDetailsRelations = (0, drizzle_orm_1.relations)(schema.orderDetails
     hasOrder: one(schema.ordersTable, {
         fields: [schema.orderDetailsTable.order_id],
         references: [schema.ordersTable.id]
-    })
+    }),
+    // Add-on lines and the line they were added to. Self-referencing, so both
+    // ends carry the same relationName — without it drizzle cannot tell which
+    // side of the same table it is looking at.
+    parentLine: one(schema.orderDetailsTable, {
+        fields: [schema.orderDetailsTable.parent_detail_id],
+        references: [schema.orderDetailsTable.id],
+        relationName: "lineAddons"
+    }),
+    addons: many(schema.orderDetailsTable, { relationName: "lineAddons" })
 }));
 exports.ratingsRelations = (0, drizzle_orm_1.relations)(schema.ratingsTable, ({ one }) => ({
     hasOrderDetails: one(schema.orderDetailsTable, {
@@ -167,3 +187,34 @@ exports.accountRelations = (0, drizzle_orm_1.relations)(schema.account, ({ one }
     })
 }));
 // promosTable has no FK relations — platform admin creates promos independently
+// ── Add-on catalogue (see db/schema.ts) ─────────────────────────────────────
+exports.addonGroupsRelations = (0, drizzle_orm_1.relations)(schema.addonGroupsTable, ({ one, many }) => ({
+    hasOutlet: one(schema.outletsTable, {
+        fields: [schema.addonGroupsTable.outlet_id],
+        references: [schema.outletsTable.id]
+    }),
+    options: many(schema.addonGroupOptionsTable),
+    attachedTo: many(schema.productAddonGroupsTable)
+}));
+exports.addonGroupOptionsRelations = (0, drizzle_orm_1.relations)(schema.addonGroupOptionsTable, ({ one }) => ({
+    hasGroup: one(schema.addonGroupsTable, {
+        fields: [schema.addonGroupOptionsTable.group_id],
+        references: [schema.addonGroupsTable.id]
+    }),
+    // The product actually sold when this option is picked — where its stock,
+    // recipe and cost come from.
+    hasProduct: one(schema.productsTable, {
+        fields: [schema.addonGroupOptionsTable.product_id],
+        references: [schema.productsTable.id]
+    })
+}));
+exports.productAddonGroupsRelations = (0, drizzle_orm_1.relations)(schema.productAddonGroupsTable, ({ one }) => ({
+    hasProduct: one(schema.productsTable, {
+        fields: [schema.productAddonGroupsTable.product_id],
+        references: [schema.productsTable.id]
+    }),
+    hasGroup: one(schema.addonGroupsTable, {
+        fields: [schema.productAddonGroupsTable.group_id],
+        references: [schema.addonGroupsTable.id]
+    })
+}));

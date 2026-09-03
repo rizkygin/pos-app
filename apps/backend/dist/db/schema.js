@@ -1,7 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.recipeItemsTable = exports.stockMovementsTable = exports.invoicePaymentsTable = exports.invoiceItemsTable = exports.invoicesTable = exports.suppliersTable = exports.verification = exports.account = exports.session = exports.courierSessionsTable = exports.productAdsTable = exports.productAdsSchedule = exports.scheduleProductAdsTable = exports.promosTable = exports.cashFlows = exports.cashOutDetailTable = exports.cashInDetailTable = exports.cashOutCategoryTable = exports.cashInCategoryTable = exports.ratingsTable = exports.orderDetailsTable = exports.errandOrdersTable = exports.orderOffersTable = exports.ordersTable = exports.productsTable = exports.courierDocumentsTable = exports.couriersTable = exports.serviceAreaTable = exports.customersTable = exports.adminsTable = exports.outletsTable = exports.locationsTable = exports.phoneVerificationsTable = exports.usersTable = exports.STOCK_MOVEMENT_REASON = exports.INVOICE_STATUS = exports.INVOICE_TYPE = exports.AD_STATUS = exports.REJECTED_BY = exports.CASHFLOWS_TRANSACTION_TYPE = exports.RECIEPENT = exports.ERRAND_STATUS = exports.ORDER_FULFILLMENT = exports.ORDER_SOURCE = exports.ORDER_STATUS = exports.STATUS = exports.COURIER_DOCUMENT_KIND = exports.OFFER_STATE = exports.COURIER_VERIFICATION_STATUS = exports.VEHICLE_TYPE = void 0;
-exports.maintenanceWindowsTable = exports.menuGroupsTable = exports.courierDevicesTable = exports.pushSubscriptionsTable = exports.subscriptionNotificationsTable = exports.subscriptionEventsTable = exports.subscriptionPaymentsTable = exports.subscriptionsTable = exports.subscriptionPlansTable = exports.NOTIFICATION_STATUS = exports.NOTIFICATION_CHANNEL = exports.SUBSCRIPTION_ACTOR = exports.SUBSCRIPTION_PAYMENT_STATUS = exports.SUBSCRIPTION_PAYMENT_METHOD = exports.SUBSCRIPTION_STATUS = exports.BILLING_INTERVAL = exports.SUBSCRIPTION_TIER = exports.employeesTable = void 0;
+exports.invoicePaymentsTable = exports.invoiceItemsTable = exports.invoicesTable = exports.suppliersTable = exports.verification = exports.account = exports.session = exports.courierSessionsTable = exports.productAdsTable = exports.productAdsSchedule = exports.scheduleProductAdsTable = exports.promosTable = exports.cashFlows = exports.cashOutDetailTable = exports.cashInDetailTable = exports.cashOutCategoryTable = exports.cashInCategoryTable = exports.ratingsTable = exports.orderDetailsTable = exports.errandOrdersTable = exports.orderOffersTable = exports.ordersTable = exports.cashierShiftsTable = exports.productsTable = exports.courierDocumentsTable = exports.couriersTable = exports.serviceAreaTable = exports.customersTable = exports.adminsTable = exports.outletsTable = exports.locationsTable = exports.phoneVerificationsTable = exports.usersTable = exports.STOCK_MOVEMENT_REASON = exports.INVOICE_STATUS = exports.INVOICE_TYPE = exports.AD_STATUS = exports.REJECTED_BY = exports.INVOICE_PAYMENT_METHOD = exports.CASHFLOWS_TRANSACTION_TYPE = exports.RECIEPENT = exports.ERRAND_STATUS = exports.ORDER_FULFILLMENT = exports.ORDER_SOURCE = exports.ORDER_STATUS = exports.STATUS = exports.COURIER_DOCUMENT_KIND = exports.OFFER_STATE = exports.COURIER_VERIFICATION_STATUS = exports.VEHICLE_TYPE = void 0;
+exports.productAddonGroupsTable = exports.addonGroupOptionsTable = exports.addonGroupsTable = exports.maintenanceWindowsTable = exports.menuGroupsTable = exports.courierDevicesTable = exports.pushSubscriptionsTable = exports.subscriptionNotificationsTable = exports.subscriptionEventsTable = exports.subscriptionPaymentsTable = exports.subscriptionsTable = exports.subscriptionPlansTable = exports.NOTIFICATION_STATUS = exports.NOTIFICATION_CHANNEL = exports.SUBSCRIPTION_ACTOR = exports.SUBSCRIPTION_PAYMENT_STATUS = exports.SUBSCRIPTION_PAYMENT_METHOD = exports.SUBSCRIPTION_STATUS = exports.BILLING_INTERVAL = exports.SUBSCRIPTION_TIER = exports.employeesTable = exports.recipeItemsTable = exports.stockMovementsTable = void 0;
 const pg_core_1 = require("drizzle-orm/pg-core");
 const drizzle_orm_1 = require("drizzle-orm");
 const columns_helper_1 = require("./columns.helper");
@@ -109,6 +109,18 @@ exports.CASHFLOWS_TRANSACTION_TYPE = (0, pg_core_1.pgEnum)('cashflows_transactio
     'transfer',
     'cash',
 ]);
+// How an invoice payment actually came in. Finer than the cash/transfer split
+// the cashflow ledger needs — every non-cash method still books as 'transfer'
+// there (see cashflowTypeFor), this enum just keeps the real-world label so the
+// owner can tell a QRIS settlement from a bank transfer on the invoice.
+exports.INVOICE_PAYMENT_METHOD = (0, pg_core_1.pgEnum)('invoice_payment_method', [
+    'cash',
+    'transfer',
+    'qris',
+    'debit',
+    'credit',
+    'ewallet',
+]);
 exports.REJECTED_BY = (0, pg_core_1.pgEnum)('rejected_by', [
     'courier',
     'customer',
@@ -140,6 +152,10 @@ exports.STOCK_MOVEMENT_REASON = (0, pg_core_1.pgEnum)('stock_movement_reason', [
     'sales',
     'adjustment',
     'void',
+    // An in-house production batch: the ingredients go out, the batch comes in.
+    // Not 'purchase' (no cash moved — it moved when the ingredients were bought)
+    // and not 'adjustment' (nothing was recounted).
+    'production',
 ]);
 exports.usersTable = (0, pg_core_1.pgTable)('users', {
     id: (0, pg_core_1.text)('id').primaryKey(),
@@ -248,6 +264,29 @@ exports.outletsTable = (0, pg_core_1.pgTable)('outlets', {
     // Defaults true: inert until an admin configures an area, matching the
     // "unset means permissive" rule the rest of this feature follows.
     courier_reachable: (0, pg_core_1.boolean)('courier_reachable').default(true).notNull(),
+    // --- Counter tax (PB1 / PPN), configured per outlet ---
+    //
+    // Never hardcoded: PB1 (pajak restoran) is set by each kabupaten/kota and PPN
+    // for goods is different again, so the rate is the merchant's to enter. The
+    // label rides along so the receipt can print what was actually charged
+    // ("PB1 10%") instead of a generic "Pajak".
+    //
+    // tax_inclusive is the whole reason this is three columns and not one. It
+    // says which side of the menu price the tax sits on:
+    //   false — prices are net, tax is ADDED at checkout (total goes up)
+    //   true  — "harga sudah termasuk pajak": the price already contains the tax,
+    //           and checkout EXTRACTS it so the books can tell revenue from the
+    //           portion being held for the tax office. The customer pays the same
+    //           either way; what changes is what counts as income.
+    //
+    // Same model as invoicesTable, deliberately — one tax convention in this
+    // codebase, not two.
+    tax_enabled: (0, pg_core_1.boolean)('tax_enabled').default(false).notNull(),
+    tax_rate: (0, pg_core_1.numeric)('tax_rate', { precision: 5, scale: 2 })
+        .default('0')
+        .notNull(),
+    tax_inclusive: (0, pg_core_1.boolean)('tax_inclusive').default(false).notNull(),
+    tax_label: (0, pg_core_1.varchar)('tax_label', { length: 20 }).default('Pajak').notNull(),
     ...columns_helper_1.timestamps,
 });
 exports.adminsTable = (0, pg_core_1.pgTable)('admins', {
@@ -434,11 +473,142 @@ exports.productsTable = (0, pg_core_1.pgTable)('products', {
     // Scale 3 matches recipe_items.qty so gram/ml-size recipe decrements
     // (e.g. 0.005 kg per portion) survive the write without rounding.
     stock: (0, pg_core_1.numeric)('stock', { precision: 12, scale: 3 }).notNull().default('0'),
+    // How many stock units ONE production batch of this product yields
+    // ("sekali masak sambal jadi 2.5 kg"). Only meaningful for a product that
+    // both tracks stock and has recipe rows — an in-house intermediate.
+    // This is a DEFAULT FOR THE PRODUCTION FORM, nothing else reads it:
+    // recipe_items.qty stays "per one output unit" for every kind of product,
+    // so lib/stock.ts can expand any recipe without asking what it is looking at.
+    yield_qty: (0, pg_core_1.numeric)('yield_qty', { precision: 12, scale: 3 })
+        .notNull()
+        .default('1'),
+    // Running weighted-average unit cost, maintained by the cost ledger
+    // (lib/cost.ts). Cached balance derived from stock_movements.cost_change,
+    // exactly as `stock` above is derived from qty_change.
+    //
+    // This is what the goods on the shelf are actually worth, as opposed to
+    // buying_price, which is what the owner last typed into the form. For a
+    // produced intermediate it is the only honest figure there is — nobody ever
+    // bought a batch of sambal. Scale 4 so per-gram costs do not round to zero.
+    avg_cost: (0, pg_core_1.numeric)('avg_cost', { precision: 14, scale: 4 })
+        .notNull()
+        .default('0'),
+    // ── Variants (migration 0071) ──────────────────────────────────────────
+    // A VARIANT IS NOT AN ADD-ON. An add-on adds a line to the order; a variant
+    // decides WHICH THING the line is. "Large" is not a Kopi Susu with
+    // something added — it is a different drink, at its own price, made of
+    // different amounts of the same milk.
+    //
+    // So a variant is a products row like any other, pointed at its base by
+    // variant_of, and it therefore carries its own price, stock, recipe,
+    // avg_cost, barcode and availability. Nothing in the sale path knows the
+    // word: lib/cogs.ts freezes the variant's own unit_cost, lib/stock.ts
+    // expands the variant's own recipe, and every per-product report already
+    // groups by product_id, so "Kopi Susu (Large) x37" needs no reporting
+    // change at all. Same trade that made add-on options real products (0069).
+    //
+    // NULL = an ordinary product, and adding variants does not stop it being
+    // one: the base stays sellable and is the FIRST option in its own picker.
+    // That is what makes the feature free for an existing catalogue — a
+    // product with no variants behaves exactly as it did before 0071.
+    //
+    // ONE LEVEL DEEP: a variant is never itself a base. The database only
+    // blocks self-reference (products_variant_not_self); the real rule lives in
+    // the write path, exactly as it does for add-on children.
+    variant_of: (0, pg_core_1.text)('variant_of').references(() => exports.productsTable.id, 
+    // NOT cascade: a variant's row is referenced by orderDetails, invoiceItems
+    // and the stock ledger, and deleting a product must never rewrite
+    // financial history. routes/products.ts archives a base's variants
+    // alongside it; this is only the floor under that.
+    { onDelete: 'set null' }),
+    // This row's short label among its siblings — "Reguler", "Large", "Dingin".
+    // Set on the base too, naming the base's own option.
+    //
+    // NOT the product's name. product_name stays the full "Kopi Susu (Large)",
+    // because that is the string receipts, kitchen tickets, the stock page and
+    // every sales report print, and none of them have a base to read context
+    // from. This column is only ever rendered beside its siblings.
+    variant_name: (0, pg_core_1.varchar)('variant_name', { length: 40 }),
+    // The question the picker asks, on the BASE row only: "Ukuran", "Suhu".
+    // Per product, not per outlet the way addon_groups are shared — a variant
+    // set is not reusable, because the options ARE this product's own rows.
+    // NULL falls back to "Varian" in the UI.
+    variant_label: (0, pg_core_1.varchar)('variant_label', { length: 40 }),
+    // Menu order, not price order. The base always sorts first: it is the
+    // default, whatever the owner charges for it.
+    variant_sort: (0, pg_core_1.integer)('variant_sort').default(0).notNull(),
     ...columns_helper_1.timestamps,
 }, (table) => [
     (0, pg_core_1.index)('products_available_deleted_idx').on(table.isAvailable, table.deletedAt),
     (0, pg_core_1.index)('products_outlet_id_idx').on(table.outlet_id),
     (0, pg_core_1.uniqueIndex)('products_outlet_barcode_uq').on(table.outlet_id, table.barcode),
+    // Every read is "this base's variants, in menu order".
+    (0, pg_core_1.index)('products_variant_of_idx').on(table.variant_of, table.variant_sort),
+]);
+/**
+ * One cashier's stint at the drawer: opened with a float, closed with a count.
+ *
+ * The shift exists so the three things a closing report needs can be FACTS
+ * rather than guesses. Without it: "modal awal" is unrecorded, "jam buka/tutup"
+ * has to be faked from the first and last order of the day, and nothing ever
+ * compares the money in the drawer against the money the system thinks is in
+ * it — which is the only part of the report that catches anything.
+ *
+ * Sales and cash movements point AT the shift (orders.shift_id,
+ * cashFlows.shift_id) instead of being gathered by a time window. A window
+ * would have to answer "which local day?" for a shift that closes after
+ * midnight and would silently re-bucket a sale if anyone's clock drifted; a
+ * foreign key just says which stint rang it up. See lib/timezone.ts for why
+ * date maths is the thing to avoid here.
+ *
+ * opening_float is deliberately NOT a cashflow row. It is drawer float — money
+ * moved from a safe or yesterday's takings into a till — not income, and
+ * booking it as cash-in would inflate both the day's revenue and this report's
+ * own "Total Tunai Masuk" (which sums the ledger, so the float would land in it
+ * twice). It lives here and nowhere else.
+ *
+ * The closing figures (expected/counted/variance) are frozen columns rather
+ * than derived at read time, because the whole point of a count is what it said
+ * AT THE MOMENT it was counted. A later cancellation or backdated cash entry
+ * must not quietly rewrite a discrepancy someone already signed off on.
+ */
+exports.cashierShiftsTable = (0, pg_core_1.pgTable)('cashier_shifts', {
+    id: (0, pg_core_1.integer)('id').primaryKey().generatedByDefaultAsIdentity(),
+    outlet_id: (0, pg_core_1.integer)('outlet_id')
+        .notNull()
+        .references(() => exports.outletsTable.id),
+    // Who opened it. The name is frozen alongside because the report is a
+    // record: renaming the user account later must not rewrite shifts they
+    // already closed, and an employee row can be deactivated and gone.
+    user_id: (0, pg_core_1.text)('user_id')
+        .notNull()
+        .references(() => exports.usersTable.id),
+    cashier_name: (0, pg_core_1.varchar)('cashier_name', { length: 100 }).notNull(),
+    opening_float: (0, pg_core_1.numeric)('opening_float', { precision: 14, scale: 2 })
+        .notNull()
+        .default('0'),
+    opened_at: (0, pg_core_1.timestamp)('opened_at', { withTimezone: true })
+        .defaultNow()
+        .notNull(),
+    // NULL means open. That is the whole status model — a separate status
+    // column would be a second source of truth for the same fact, and the
+    // partial unique index below already depends on this one.
+    closed_at: (0, pg_core_1.timestamp)('closed_at', { withTimezone: true }),
+    counted_cash: (0, pg_core_1.numeric)('counted_cash', { precision: 14, scale: 2 }),
+    expected_cash: (0, pg_core_1.numeric)('expected_cash', { precision: 14, scale: 2 }),
+    // counted - expected. Stored rather than computed on read so it stays the
+    // number that was on the printed slip: negative = short, positive = over.
+    variance: (0, pg_core_1.numeric)('variance', { precision: 14, scale: 2 }),
+    closing_note: (0, pg_core_1.varchar)('closing_note', { length: 255 }),
+}, (table) => [
+    // One open shift per outlet: a single physical drawer cannot be two
+    // stints at once, and without this a second "Buka Shift" tap (or two
+    // devices at the same counter) silently splits the day's takings across
+    // two shifts, neither of which reconciles.
+    (0, pg_core_1.uniqueIndex)('cashier_shifts_one_open_per_outlet')
+        .on(table.outlet_id)
+        .where((0, drizzle_orm_1.sql) `closed_at is null`),
+    (0, pg_core_1.index)('cashier_shifts_outlet_opened_idx').on(table.outlet_id, table.opened_at),
 ]);
 exports.ordersTable = (0, pg_core_1.pgTable)('orders', {
     id: (0, pg_core_1.text)('id').primaryKey(),
@@ -459,6 +629,35 @@ exports.ordersTable = (0, pg_core_1.pgTable)('orders', {
     note: (0, pg_core_1.json)('note'),
     rejected_by: (0, exports.REJECTED_BY)('rejected_by'),
     rejected_reason: (0, pg_core_1.varchar)('rejected_reason', { length: 255 }),
+    // The cashier stint that rang this up, for counter sales taken while a
+    // shift was open. Nullable and never enforced: a POS sale must not fail
+    // because someone forgot to tap "Buka Shift", so an unattributed sale is a
+    // real state. Those simply do not appear on any closing report.
+    //
+    // App orders never carry one — nobody is standing at the drawer for them.
+    shift_id: (0, pg_core_1.integer)('shift_id').references(() => exports.cashierShiftsTable.id),
+    // --- Tax, frozen at the moment of sale ---
+    //
+    // All three are NULL when no tax applied: every order taken before this
+    // existed, and every order taken while the outlet has tax switched off.
+    // NULL is not zero — "no tax was charged" and "tax was charged at 0%" are
+    // different claims, and only one of them should print a tax line.
+    //
+    // Frozen rather than derived from the outlet's current settings for the
+    // same reason orderDetails.unit_cost is frozen: changing the rate today
+    // must not rewrite what was charged on a sale that closed last month.
+    // Re-deriving would make every historical receipt a liability.
+    //
+    // *** orderDetails.summary_price is NOT adjusted for any of this. *** It is
+    // the price the line was sold at and stays the app's revenue column — 47
+    // read sites across 16 files depend on that meaning. See lib/tax.ts for
+    // what each mode implies for revenue, and note the asymmetry: with
+    // tax_inclusive = false, summary_price is already net of tax and every
+    // reader is correct untouched; with tax_inclusive = true the price contains
+    // the tax, so revenue readers must SUBTRACT tax_amount.
+    tax_rate: (0, pg_core_1.numeric)('tax_rate', { precision: 5, scale: 2 }),
+    tax_amount: (0, pg_core_1.numeric)('tax_amount', { precision: 14, scale: 2 }),
+    tax_inclusive: (0, pg_core_1.boolean)('tax_inclusive'),
     // Set when sequential dispatch has run out of couriers to offer this order
     // to. From that moment it falls back to the old free-for-all lobby, visible
     // to everyone who is online — a stuck order helps nobody, so exhausting the
@@ -479,6 +678,8 @@ exports.ordersTable = (0, pg_core_1.pgTable)('orders', {
     // cannot round-trip them, and a generate would drop them. Do not remove the
     // migration.
     (0, pg_core_1.index)('orders_courier_status_idx').on(table.courier_id, table.status),
+    // The closing report reads every order of one shift, several ways over.
+    (0, pg_core_1.index)('orders_shift_id_idx').on(table.shift_id),
 ]);
 /**
  * One order offered to one courier, with a clock on it.
@@ -599,8 +800,40 @@ exports.orderDetailsTable = (0, pg_core_1.pgTable)('orderDetails', {
         .references(() => exports.productsTable.id),
     quantity: (0, pg_core_1.integer)('quantity').notNull(),
     note_product: (0, pg_core_1.text)('note_product'),
-    extra: (0, pg_core_1.json)('extra'),
     summary_price: (0, pg_core_1.varchar)('summary_price', { length: 10 }).notNull(),
+    // Set on an ADD-ON line, pointing at the line it was added to. NULL on an
+    // ordinary line, which is the overwhelming majority — see migration 0069
+    // for why an add-on is a child line rather than a table of its own.
+    //
+    // Readers split two ways on this column and getting it wrong is silent:
+    //   summing money  (order total, revenue, COGS) -> include children
+    //   counting items ("3 item", a receipt's tally) -> parents only
+    //
+    // Exactly one level deep. A child is never itself a parent; the write path
+    // refuses it rather than the schema, since a depth check in SQL costs more
+    // than it protects.
+    parent_detail_id: (0, pg_core_1.integer)('parent_detail_id').references(() => exports.orderDetailsTable.id, { onDelete: 'cascade' }),
+    // What ONE unit of this line cost, frozen when the line was written.
+    //
+    // The cost ledger (stock_movements) covers a line only if the line MOVED
+    // something. A track_stock=false product with no recipe never does — a
+    // service, a fee, an item nobody counts — so its cost has always come from
+    // products.buying_price, joined LIVE at report time. That join is the
+    // problem this column fixes: editing a purchase price today silently
+    // rewrote the profit on every sale ever made, and flipping a product's
+    // track_stock changed the cost of orders that closed months ago.
+    //
+    // NULL means "no price was on record when this line was written" — either
+    // it predates this column, or buying_price was blank/zero, which is a
+    // routine state (see lib/money-sql.ts). NULL is NOT zero: readers fall back
+    // to the live buying_price for those, exactly as before, so a line with no
+    // cost on record starts telling the truth the day a real price is entered.
+    // A frozen zero never would. Same reasoning as 0064_backfill_cost_ledger.
+    //
+    // Written on EVERY line, but only ever READ for the lines the ledger cannot
+    // see (lib/cogs.ts). Summing it across all lines would double count every
+    // line the ledger already covers.
+    unit_cost: (0, pg_core_1.numeric)('unit_cost', { precision: 14, scale: 4 }),
     created_at: (0, pg_core_1.timestamp)('created_at', { withTimezone: true })
         .defaultNow()
         .notNull(),
@@ -608,6 +841,7 @@ exports.orderDetailsTable = (0, pg_core_1.pgTable)('orderDetails', {
 }, (table) => [
     (0, pg_core_1.index)('order_details_created_at_idx').on(table.created_at),
     (0, pg_core_1.index)('order_details_order_id_idx').on(table.order_id),
+    (0, pg_core_1.index)('order_details_parent_idx').on(table.parent_detail_id),
 ]);
 exports.ratingsTable = (0, pg_core_1.pgTable)('ratings', {
     id: (0, pg_core_1.text)('id').primaryKey(),
@@ -661,6 +895,7 @@ exports.cashInDetailTable = (0, pg_core_1.pgTable)('cashInDetailTable', {
     type: (0, exports.CASHFLOWS_TRANSACTION_TYPE)('type')
         .$default(() => 'cash')
         .notNull(),
+    explanation: (0, pg_core_1.text)('explanation'),
     created_at: (0, pg_core_1.timestamp)('created_at').defaultNow().notNull(),
 }, (table) => [(0, pg_core_1.index)('cash_in_detail_created_at_idx').on(table.created_at)]);
 exports.cashOutDetailTable = (0, pg_core_1.pgTable)('cashOutDetailTable', {
@@ -672,6 +907,7 @@ exports.cashOutDetailTable = (0, pg_core_1.pgTable)('cashOutDetailTable', {
     type: (0, exports.CASHFLOWS_TRANSACTION_TYPE)('type')
         .$default(() => 'cash')
         .notNull(),
+    explanation: (0, pg_core_1.text)('explanation'),
     created_at: (0, pg_core_1.timestamp)('created_at').defaultNow().notNull(),
 }, (table) => [(0, pg_core_1.index)('cash_out_detail_created_at_idx').on(table.created_at)]);
 exports.cashFlows = (0, pg_core_1.pgTable)('cashFlows', {
@@ -694,7 +930,20 @@ exports.cashFlows = (0, pg_core_1.pgTable)('cashFlows', {
     // been reversed?" from the ledger itself rather than trusting the caller
     // not to double-submit.
     order_id: (0, pg_core_1.text)('order_id').references(() => exports.ordersTable.id),
-}, (table) => [(0, pg_core_1.index)('cash_flows_order_id_idx').on(table.order_id)]);
+    // The cashier stint this movement happened during, stamped at insert from
+    // whichever shift was open at the outlet. This is what makes "Total Tunai
+    // Masuk / Keluar" on a closing report the drawer's own arithmetic rather
+    // than a time-window guess — including the cash-out a cashier books for
+    // petty spending mid-shift.
+    //
+    // Nullable for the same reason orders.shift_id is: money still moves when
+    // no shift is open (the owner posting an invoice payment from the office),
+    // and that is not a failure.
+    shift_id: (0, pg_core_1.integer)('shift_id').references(() => exports.cashierShiftsTable.id),
+}, (table) => [
+    (0, pg_core_1.index)('cash_flows_order_id_idx').on(table.order_id),
+    (0, pg_core_1.index)('cash_flows_shift_id_idx').on(table.shift_id),
+]);
 exports.promosTable = (0, pg_core_1.pgTable)('promos', {
     id: (0, pg_core_1.integer)('id').primaryKey().generatedByDefaultAsIdentity(),
     code: (0, pg_core_1.varchar)('code', { length: 20 }).notNull().unique(),
@@ -879,6 +1128,11 @@ exports.invoicesTable = (0, pg_core_1.pgTable)('invoices', {
     down_payment: (0, pg_core_1.numeric)('down_payment', { precision: 14, scale: 2 })
         .notNull()
         .default('0'),
+    // How that DP will be received. Lives on the header because the draft is
+    // agreed before /post books the actual invoice_payments row.
+    down_payment_method: (0, exports.INVOICE_PAYMENT_METHOD)('down_payment_method')
+        .notNull()
+        .default('cash'),
     notes: (0, pg_core_1.varchar)('notes', { length: 500 }).default(''),
     // Who created the invoice (owner or employee) — staff attribution for the
     // "dibuat oleh" line. Nullable: rows predating the column stay unattributed.
@@ -930,6 +1184,9 @@ exports.invoicePaymentsTable = (0, pg_core_1.pgTable)('invoice_payments', {
     cash_in_detail_id: (0, pg_core_1.integer)('cash_in_detail_id').references(() => exports.cashInDetailTable.id),
     cash_out_detail_id: (0, pg_core_1.integer)('cash_out_detail_id').references(() => exports.cashOutDetailTable.id),
     amount: (0, pg_core_1.numeric)('amount', { precision: 14, scale: 2 }).notNull(),
+    // Rows predating this column were all booked as cash, which is what the
+    // default records — so the backfill is a no-op and the history stays honest.
+    method: (0, exports.INVOICE_PAYMENT_METHOD)('method').notNull().default('cash'),
     created_at: (0, pg_core_1.timestamp)('created_at').defaultNow().notNull(),
 }, (table) => [(0, pg_core_1.index)('invoice_payments_invoice_id_idx').on(table.invoice_id)]);
 exports.stockMovementsTable = (0, pg_core_1.pgTable)('stock_movements', {
@@ -944,8 +1201,48 @@ exports.stockMovementsTable = (0, pg_core_1.pgTable)('stock_movements', {
     // Scale 3 to carry recipe-precision decrements losslessly.
     qty_change: (0, pg_core_1.numeric)('qty_change', { precision: 12, scale: 3 }).notNull(),
     reason: (0, exports.STOCK_MOVEMENT_REASON)('reason').notNull(),
+    // ── Cost ledger ────────────────────────────────────────────────────────
+    // The money side of this movement. Null on rows written before migration
+    // 0063; readers must treat null as "unknown", never as zero.
+    //
+    // Stock coming IN carries the price it came in at (purchase price, or a
+    // batch's computed cost); stock going OUT carries the weighted-average cost
+    // at that moment. Frozen at write time on purpose: editing a price or a
+    // recipe today must not rewrite the profit on sales that already happened.
+    unit_cost: (0, pg_core_1.numeric)('unit_cost', { precision: 14, scale: 4 }),
+    // Signed money, qty_change * unit_cost. Positive = value in, negative =
+    // value out. COGS over a period is -sum(cost_change) where reason='sales';
+    // voids net themselves out, carrying the opposite sign.
+    cost_change: (0, pg_core_1.numeric)('cost_change', { precision: 14, scale: 2 }),
     // The invoice that caused this movement (null for manual adjustments).
     invoice_id: (0, pg_core_1.integer)('invoice_id').references(() => exports.invoicesTable.id),
+    // The POS order that caused this movement — the cashier-side twin of
+    // invoice_id above, and null for everything that did not come from a POS
+    // sale. Cancelling a cashier order replays these rows (flip the sign) rather
+    // than re-expanding the recipe, so a recipe edited after the sale cannot
+    // change how much comes back. Movements written before migration 0062 have
+    // no order_id; applySaleStockReturn keeps a re-expansion fallback for them.
+    order_id: (0, pg_core_1.text)('order_id').references(() => exports.ordersTable.id),
+    // WHICH LINE of that order caused this movement.
+    //
+    // order_id above says the sale happened; this says which item in it. The
+    // difference matters for a composition, whose movements are written against
+    // its INGREDIENTS: without this there is no way back from "3 kg of beras
+    // left" to the Nasi Goreng line that took it, and lib/cogs.ts had to guess
+    // which lines the ledger covered by re-reading products.track_stock and
+    // recipe_items as they stand TODAY. Flip either one after the sale and the
+    // guess changes: the line gets counted twice, or dropped entirely, on an
+    // order that closed months ago.
+    //
+    // With the line recorded, "did this line leave a cost trail?" is answered by
+    // history instead of by current config. A line with no rows here never moved
+    // anything (a service, a fee) and is costed from orderDetails.unit_cost.
+    //
+    // Null for: movements from a sales INVOICE (invoice_id carries those, and
+    // invoice lines are not orderDetails), and everything written before
+    // migration 0066 — which is why lib/cogs.ts keeps the pre-0066 expression
+    // for orders that have no tagged movement.
+    order_detail_id: (0, pg_core_1.integer)('order_detail_id').references(() => exports.orderDetailsTable.id),
     note: (0, pg_core_1.varchar)('note', { length: 255 }).default(''),
     created_at: (0, pg_core_1.timestamp)('created_at', { withTimezone: true })
         .defaultNow()
@@ -954,28 +1251,53 @@ exports.stockMovementsTable = (0, pg_core_1.pgTable)('stock_movements', {
     (0, pg_core_1.index)('stock_movements_product_idx').on(table.product_id),
     (0, pg_core_1.index)('stock_movements_outlet_idx').on(table.outlet_id),
     (0, pg_core_1.index)('stock_movements_invoice_idx').on(table.invoice_id),
+    // Serves the cancellation replay: "the sales movements of THIS order".
+    (0, pg_core_1.index)('stock_movements_order_idx').on(table.order_id),
+    // Serves the reports' per-order cost drill-down.
+    (0, pg_core_1.index)('stock_movements_order_reason_idx').on(table.order_id, table.reason),
+    // Serves the per-LINE cost lookup in lib/cogs.ts, which runs once per line
+    // of every order on the page. Partial: only tagged rows are ever looked up
+    // this way, and every row written before 0066 is null.
+    (0, pg_core_1.index)('stock_movements_order_detail_idx')
+        .on(table.order_detail_id)
+        .where((0, drizzle_orm_1.sql) `order_detail_id IS NOT NULL`),
     // Opname history: filter by outlet + reason, range/sort on created_at.
     (0, pg_core_1.index)('stock_movements_outlet_reason_created_idx').on(table.outlet_id, table.reason, table.created_at),
 ]);
-// Optional bill-of-materials: what one sold unit of `product_id` consumes.
-// Only consulted when the sold product has track_stock=false (a menu item with
-// no countable stock of its own); a menu item with no rows here moves no stock
-// at all — recipes are strictly opt-in per product. Rows are kept (dormant) if
-// the owner toggles track_stock back on. Hard-deleted, replace-on-save.
+// Optional bill-of-materials: what ONE unit of `product_id` consumes. A product
+// with no rows here moves no stock through a recipe at all — recipes are
+// strictly opt-in. Hard-deleted, replace-on-save.
+//
+// Recipes NEST: an ingredient may itself have a recipe. Expansion (lib/stock.ts)
+// walks down and stops at the first ingredient that tracks its own stock:
+//
+//   * ingredient tracks stock  -> LEAF. Decrement it and stop. This is the
+//     prep-batch boundary: you count sambal, so a sold dish just draws sambal
+//     down, and the chilies left stock when the batch was PRODUCED.
+//   * ingredient does not      -> pass-through. Recurse into its recipe. This is
+//     a "bumbu dasar" you define once and never count.
+//
+// So the same edge table carries both levels, and which kind of node something
+// is falls out of products.track_stock rather than a separate flag. Cycles and
+// depth are rejected at write time (routes/products.ts), with a second guard at
+// expansion time so bad data can never spin inside a transaction.
 exports.recipeItemsTable = (0, pg_core_1.pgTable)('recipe_items', {
     id: (0, pg_core_1.integer)('id').primaryKey().generatedByDefaultAsIdentity(),
     outlet_id: (0, pg_core_1.integer)('outlet_id')
         .notNull()
         .references(() => exports.outletsTable.id),
-    // The menu item being sold (track_stock = false).
+    // The product being made: a sold menu item, or an in-house intermediate
+    // that is itself produced in batches.
     product_id: (0, pg_core_1.text)('product_id')
         .notNull()
         .references(() => exports.productsTable.id, { onDelete: 'cascade' }),
-    // The ingredient consumed (track_stock = true), in its own stock unit.
+    // What it consumes, in that ingredient's own stock unit. May itself have a
+    // recipe (see the nesting rules above).
     ingredient_id: (0, pg_core_1.text)('ingredient_id')
         .notNull()
         .references(() => exports.productsTable.id, { onDelete: 'cascade' }),
-    // Consumed per ONE unit sold. Scale 3 (not 2) so gram/ml-size amounts of
+    // Consumed per ONE unit of product_id — never per batch, even for a product
+    // with a yield_qty. Scale 3 (not 2) so gram/ml-size amounts of
     // kg/L-stocked ingredients fit, e.g. 0.005 kg of garlic per portion.
     qty: (0, pg_core_1.numeric)('qty', { precision: 12, scale: 3 }).notNull(),
     created_at: (0, pg_core_1.timestamp)('created_at', { withTimezone: true })
@@ -1375,4 +1697,92 @@ exports.maintenanceWindowsTable = (0, pg_core_1.pgTable)('maintenance_windows', 
     // index: newest-first over the window bounds.
     (0, pg_core_1.index)('maintenance_windows_window_idx').on(t.ends_at, t.starts_at),
     (0, pg_core_1.check)('maintenance_windows_order_ck', (0, drizzle_orm_1.sql) `${t.ends_at} > ${t.starts_at}`),
+]);
+// ============================================================================
+// Product add-ons ("Topping", "Level Pedas", "Ukuran").
+//
+// An add-on is NOT a new kind of entity. The thing being added is an ordinary
+// product — with its own stock, recipe, buying_price and avg_cost — and the
+// sale of it is an ordinary order line, pointed at its parent by
+// orderDetails.parent_detail_id. Everything the cost ledger already does for a
+// line therefore happens for an add-on with no new code: see migration 0069.
+//
+// These three tables are only the CATALOGUE: which questions get asked about
+// which dish, and what the answers cost the customer.
+//
+// Nothing here is ever consulted to settle a sale. The rules govern what a
+// cashier may COMPOSE in the picker; checkout honours whatever a tab already
+// holds. That split is why every table below soft-deletes — a held tab lives in
+// a cashier's localStorage for days, and removing an option from the menu must
+// never leave a parked cart unpayable.
+// ============================================================================
+// One question put to the cashier. Per OUTLET rather than per product, so
+// "Topping" is defined once and attached to twenty dishes via
+// productAddonGroupsTable — a rename is then one row, not twenty.
+exports.addonGroupsTable = (0, pg_core_1.pgTable)('addon_groups', {
+    id: (0, pg_core_1.integer)('id').primaryKey().generatedByDefaultAsIdentity(),
+    outlet_id: (0, pg_core_1.integer)('outlet_id')
+        .notNull()
+        .references(() => exports.outletsTable.id, { onDelete: 'cascade' }),
+    name: (0, pg_core_1.varchar)('name', { length: 60 }).notNull(),
+    // min_select >= 1 IS "wajib pilih" — there is no separate required flag to
+    // fall out of sync with it. max_select null = unlimited.
+    //
+    // Enforced in the picker, never at checkout. Tightening a rule must not
+    // make an already-parked tab unpayable.
+    min_select: (0, pg_core_1.integer)('min_select').default(0).notNull(),
+    max_select: (0, pg_core_1.integer)('max_select'),
+    sort_order: (0, pg_core_1.integer)('sort_order').default(0).notNull(),
+    ...columns_helper_1.timestamps,
+}, (t) => [(0, pg_core_1.index)('addon_groups_outlet_idx').on(t.outlet_id, t.sort_order)]);
+// One pickable answer: a product, and what the customer pays for it here.
+//
+// The price lives on the option rather than on the product because the same
+// telur is 5.000 on one dish and free on another. 0 is a real value, not a
+// missing one — a free add-on that still consumes stock and still costs money
+// is precisely the case a POS ought to be able to state, and the one most of
+// them get wrong.
+exports.addonGroupOptionsTable = (0, pg_core_1.pgTable)('addon_group_options', {
+    id: (0, pg_core_1.integer)('id').primaryKey().generatedByDefaultAsIdentity(),
+    group_id: (0, pg_core_1.integer)('group_id')
+        .notNull()
+        .references(() => exports.addonGroupsTable.id, { onDelete: 'cascade' }),
+    // is_for_sale=false on this product keeps it out of the POS grid on its
+    // own while leaving it a full product everywhere else: stock, recipe, cost.
+    product_id: (0, pg_core_1.text)('product_id')
+        .notNull()
+        .references(() => exports.productsTable.id, { onDelete: 'cascade' }),
+    // numeric, unlike the varchar money on productsTable — matching the newer
+    // columns (unit_cost, tax_amount, opening_float) rather than the legacy
+    // ones, so it needs no money() guard when read.
+    price: (0, pg_core_1.numeric)('price', { precision: 14, scale: 2 }).default('0').notNull(),
+    sort_order: (0, pg_core_1.integer)('sort_order').default(0).notNull(),
+    ...columns_helper_1.timestamps,
+}, (t) => [
+    // Partial: archiving an option and later adding it back must be allowed,
+    // which a plain unique index would forbid forever.
+    (0, pg_core_1.uniqueIndex)('addon_group_options_group_product_uq')
+        .on(t.group_id, t.product_id)
+        .where((0, drizzle_orm_1.sql) `${t.deletedAt} is null`),
+    (0, pg_core_1.index)('addon_group_options_group_idx').on(t.group_id, t.sort_order),
+]);
+// Which questions get asked about which dish.
+exports.productAddonGroupsTable = (0, pg_core_1.pgTable)('product_addon_groups', {
+    id: (0, pg_core_1.integer)('id').primaryKey().generatedByDefaultAsIdentity(),
+    product_id: (0, pg_core_1.text)('product_id')
+        .notNull()
+        .references(() => exports.productsTable.id, { onDelete: 'cascade' }),
+    group_id: (0, pg_core_1.integer)('group_id')
+        .notNull()
+        .references(() => exports.addonGroupsTable.id, { onDelete: 'cascade' }),
+    sort_order: (0, pg_core_1.integer)('sort_order').default(0).notNull(),
+    created_at: (0, pg_core_1.timestamp)('created_at', { withTimezone: true })
+        .defaultNow()
+        .notNull(),
+    deleted_at: (0, pg_core_1.timestamp)('deleted_at', { withTimezone: true }),
+}, (t) => [
+    (0, pg_core_1.uniqueIndex)('product_addon_groups_uq')
+        .on(t.product_id, t.group_id)
+        .where((0, drizzle_orm_1.sql) `${t.deleted_at} is null`),
+    (0, pg_core_1.index)('product_addon_groups_product_idx').on(t.product_id, t.sort_order),
 ]);
