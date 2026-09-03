@@ -29,11 +29,16 @@ import {
   Barcode,
   Truck,
   HelpCircle,
+  Ruler,
+  Workflow,
+  SlidersHorizontal,
+  type LucideIcon,
 } from 'lucide-react';
 import { driver, type DriveStep } from 'driver.js';
 import 'driver.js/dist/driver.css';
 import QRCode from 'react-qr-code';
 import { Button } from '@/components/ui/button';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   addProductAction,
   AddProductInput,
@@ -48,6 +53,8 @@ import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { DashboardHeader } from '@/components/dashboard-header';
 import { RecipeEditor } from './recipe-editor';
+import { AddonEditor } from './addon-editor';
+import { VariantEditor } from './variant-editor';
 import { ORDER_FEATURES } from '@/lib/order-features';
 import { resolveProductImage, isBackendImage } from '@/lib/image-src';
 import { API_URL } from '@/lib/api-url';
@@ -77,6 +84,16 @@ type Product = {
   highest_price?: string | null;
   barcode?: string | null;
   menu_group_id?: number | null;
+  /**
+   * Variants (migration 0071). Set = this row IS a variant of another product,
+   * so it has no tile of its own at the counter — it is reached by tapping its
+   * base and answering "Ukuran?". It stays a fully editable product here,
+   * because that is where its own stock, recipe and cost live.
+   */
+  variant_of?: string | null;
+  variant_name?: string | null;
+  variant_label?: string | null;
+  variant_sort?: number;
 };
 
 const rupiah = (v: number | string) =>
@@ -89,6 +106,7 @@ const rupiah = (v: number | string) =>
 type ProductsManagerProps = {
   outletId: number;
   initialProducts: Product[];
+  gate?: { features: Record<string, unknown> } | null;
 };
 
 const CATEGORIES = ORDER_FEATURES.map((feature) => ({
@@ -110,12 +128,75 @@ const INGREDIENT_CATEGORY = {
   isAvailable: true,
 };
 
+// The other internal one. An add-on option ("Extra Keju", "Upsize Large") is a
+// real product — it has to be, so it can carry its own stock, recipe and cost —
+// but it only ever reaches an order attached to a dish, never on its own. Before
+// this existed the owner had to file a topping under the category of the thing
+// it attaches to, which put toppings in the drinks list and left nothing but
+// is_for_sale standing between "Extra Es Batu" and the customer's menu.
+// Internal on the backend too (INTERNAL_CATEGORIES), and no POS tab.
+const ADDON_CATEGORY = {
+  id: 'addon',
+  label: 'Tambahan (Add-on)',
+  category: 'tambahan',
+  icon: Layers,
+  isAvailable: true,
+};
+
+/** The two internal categories, in picker order after the browsable ones. */
+const INTERNAL_CATEGORIES = [INGREDIENT_CATEGORY, ADDON_CATEGORY];
+
+/**
+ * Categories with nothing to scan.
+ *
+ * A barcode is a number the MANUFACTURER printed on a package. A warung's nasi
+ * goreng arrives on a plate and a service arrives as somebody's afternoon —
+ * neither has ever had one, so the field was pure noise on the two categories
+ * most outlets here use most. It stays for mart, bahan bangunan and bahan,
+ * where the goods really do come out of a box with a code on it.
+ */
+const NO_BARCODE_CATEGORIES = new Set(['makanan', 'minuman', 'jasa']);
+
+/**
+ * One catalogue, three audiences — so one table was always answering three
+ * different questions at once.
+ *
+ *   produk     what a customer can buy. Priced to sell, grouped into menu
+ *              sections, switched on and off for the storefront.
+ *   bahan      what the kitchen consumes. Never sold, so its selling price is
+ *              a column of Rp0 and its menu group is a column of dashes; what
+ *              the owner actually wants to see is what it COST and how much is
+ *              left.
+ *   tambahan   what hangs off a dish at the counter. Sold, but never on its
+ *              own and never through a menu section.
+ *
+ * Splitting them is not cosmetic: a fifty-item menu with thirty ingredients and
+ * twenty toppings mixed in is a list you scroll past rather than read, and the
+ * two internal kinds were being judged by columns that mean nothing to them.
+ */
+type TableKind = 'produk' | 'bahan' | 'tambahan';
+
+const TABLE_TABS: { id: TableKind; label: string; icon: LucideIcon }[] = [
+  { id: 'produk', label: 'Produk', icon: Handbag },
+  { id: 'bahan', label: 'Bahan', icon: Package },
+  { id: 'tambahan', label: 'Tambahan', icon: Layers },
+];
+
+// Lowercased because category is free text on the backend and older rows were
+// typed by hand — "Bahan" and "bahan" are the same shelf.
+const kindOf = (category: string): TableKind => {
+  const c = (category ?? '').trim().toLowerCase();
+  if (c === INGREDIENT_CATEGORY.category) return 'bahan';
+  if (c === ADDON_CATEGORY.category) return 'tambahan';
+  return 'produk';
+};
+
 // Distinct available categories for the in-form "Kategori" dropdown, so an
 // existing product can be re-categorized while editing (several features can
 // share one category value — dedupe on it).
 const categoryOptions = (() => {
   const seen = new Set<string>();
-  return [...CATEGORIES, INGREDIENT_CATEGORY].filter((c) => {
+  return [...CATEGORIES, ...INTERNAL_CATEGORIES].filter((c) => {
     if (!c.isAvailable || seen.has(c.category)) return false;
     seen.add(c.category);
     return true;
@@ -125,6 +206,7 @@ const categoryOptions = (() => {
 export const ProductsManager = ({
   outletId,
   initialProducts,
+  gate,
 }: ProductsManagerProps) => {
   const router = useRouter();
   const [view, setView] = useState<'list' | 'category' | 'form'>('list');
@@ -144,6 +226,15 @@ export const ProductsManager = ({
   // Inventory list filters
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
+  // 'has' = a base with at least one variant; 'is' = a row that is somebody's
+  // variant. Both are "the variant-shaped rows", asked from either end.
+  const [variantFilter, setVariantFilter] = useState<'all' | 'has' | 'is'>('all');
+  const [filterOpen, setFilterOpen] = useState(false);
+  // How many filters are narrowing the list — shown on the Filter button so a
+  // half-empty table always explains itself even with the popup closed.
+  const activeFilterCount =
+    (categoryFilter !== 'all' ? 1 : 0) + (variantFilter !== 'all' ? 1 : 0);
+  const [tab, setTab] = useState<TableKind>('produk');
 
   // ── Purchasable toggle ────────────────────────────────────────────────────
   // `isAvailable` is the owner's "customers may buy this right now" switch: the
@@ -274,12 +365,41 @@ export const ProductsManager = ({
     await loadMenuGroups();
   };
 
+  // Variant wiring for the table. A variant is a real product row, so it keeps
+  // its place in this list — it has its own stock, recipe and cost to edit, and
+  // hiding it would leave those unreachable. What it gets instead is a line
+  // saying whose variant it is, so the row that looks like a near-duplicate of
+  // another explains itself. Its base gets the count.
+  const productNameById = useMemo(
+    () => new Map(initialProducts.map((p) => [p.id, p.product_name])),
+    [initialProducts],
+  );
+  const variantCountByBase = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const p of initialProducts) {
+      if (!p.variant_of) continue;
+      counts.set(p.variant_of, (counts.get(p.variant_of) ?? 0) + 1);
+    }
+    return counts;
+  }, [initialProducts]);
+
+  const byKind = useMemo(() => {
+    const acc: Record<TableKind, Product[]> = {
+      produk: [],
+      bahan: [],
+      tambahan: [],
+    };
+    for (const p of initialProducts) acc[kindOf(p.category)].push(p);
+    return acc;
+  }, [initialProducts]);
+
+  // The dropdown now only refines the Produk table — "bahan" and "tambahan" are
+  // whole tabs, so offering them here as well would be two controls fighting
+  // over the same question.
   const productCategories = useMemo(
     () =>
-      Array.from(
-        new Set(initialProducts.map((p) => p.category).filter(Boolean)),
-      ),
-    [initialProducts],
+      Array.from(new Set(byKind.produk.map((p) => p.category).filter(Boolean))),
+    [byKind],
   );
   // Column sorting for the inventory table. Click a header to sort, click again
   // to flip direction. Applied after search/category filtering.
@@ -313,18 +433,61 @@ export const ProductsManager = ({
 
   // A service product's headline figure is its range floor, not `price` — the
   // backend mirrors price = lowest_price, but read it explicitly so sorting
-  // stays correct if that ever changes.
+  // stays correct if that ever changes. The Bahan table shows what the stock
+  // cost instead of what it sells for, so it has to sort on that column too —
+  // otherwise clicking "Harga Beli" reorders the rows by an invisible number.
   const sortPrice = (p: Product) =>
-    Number(p.lowest_price && p.lowest_price !== '0' ? p.lowest_price : p.price) || 0;
+    tab === 'bahan'
+      ? Number(p.buying_price) || 0
+      : Number(p.lowest_price && p.lowest_price !== '0' ? p.lowest_price : p.price) || 0;
+
+  // What each table shows. Menu groups only order the public menu, so they mean
+  // nothing to an ingredient or a topping; the Dijual switch is the storefront
+  // control, and an ingredient has no storefront — but an add-on does need it,
+  // because a sold-out topping stays listed in the cashier's picker and greys
+  // out rather than vanishing.
+  const showsGroup = tab === 'produk';
+  const showsStatus = tab !== 'bahan';
+  const columnCount = 3 + (showsGroup ? 1 : 0) + (showsStatus ? 1 : 0);
+
+  // Same `isAvailable` column, two different sentences. Turning a dish off
+  // removes it from the customer's menu; turning an add-on off leaves it listed
+  // in the cashier's picker but unpickable, so the cashier can say "habis"
+  // instead of hunting for something that silently vanished (see lib/addons.ts).
+  const statusWords =
+    tab === 'tambahan'
+      ? {
+          on: 'Aktif',
+          off: 'Habis',
+          onTitle: 'Bisa dipilih di kasir — klik kalau lagi habis',
+          offTitle: 'Lagi habis, tidak bisa dipilih — klik untuk mengaktifkan',
+          onAria: 'Tandai habis',
+          offAria: 'Aktifkan',
+        }
+      : {
+          on: 'Dijual',
+          off: 'Disembunyikan',
+          onTitle: 'Bisa dibeli pelanggan — klik untuk menyembunyikan',
+          offTitle: 'Disembunyikan dari pelanggan — klik untuk menjual lagi',
+          onAria: 'Sembunyikan',
+          offAria: 'Tampilkan',
+        };
 
   const filteredProducts = useMemo(() => {
-    const rows = initialProducts.filter((p) => {
+    const rows = byKind[tab].filter((p) => {
       const matchesSearch = p.product_name
         .toLowerCase()
         .includes(search.toLowerCase());
+      // Only the Produk tab renders the dropdown, and only it is refined by it:
+      // a leftover "minuman" would otherwise empty the other two tables with no
+      // visible control explaining why.
       const matchesCategory =
-        categoryFilter === 'all' || p.category === categoryFilter;
-      return matchesSearch && matchesCategory;
+        tab !== 'produk' || categoryFilter === 'all' || p.category === categoryFilter;
+      const matchesVariant =
+        tab !== 'produk' ||
+        variantFilter === 'all' ||
+        (variantFilter === 'has' ? variantCountByBase.has(p.id) : !!p.variant_of);
+      return matchesSearch && matchesCategory && matchesVariant;
     });
 
     const dir = sortDir === 'asc' ? 1 : -1;
@@ -348,7 +511,17 @@ export const ProductsManager = ({
       if (sortBy === 'price') return (sortPrice(a) - sortPrice(b)) * dir;
       return ((Number(a.stock) || 0) - (Number(b.stock) || 0)) * dir;
     });
-  }, [initialProducts, search, categoryFilter, sortBy, sortDir, groupById]);
+  }, [
+    byKind,
+    tab,
+    search,
+    categoryFilter,
+    variantFilter,
+    variantCountByBase,
+    sortBy,
+    sortDir,
+    groupById,
+  ]);
 
   // Source candidates for the composition editor: every other product in the
   // outlet. NOT just stock-tracked ones — a composition may draw on another
@@ -364,10 +537,19 @@ export const ProductsManager = ({
         .map((p) => ({
           id: p.id,
           product_name: p.product_name,
+          category: p.category,
           unit: p.unit,
           stock: p.stock,
           track_stock: p.track_stock,
         })),
+    [initialProducts, editingProductId],
+  );
+
+  // The row being edited, for the parts of the form that need more than the
+  // draft values — chiefly whether this product is itself somebody's variant,
+  // which decides if it may have variants of its own (one level deep).
+  const editingProduct = useMemo(
+    () => initialProducts.find((p) => p.id === editingProductId) ?? null,
     [initialProducts, editingProductId],
   );
 
@@ -422,6 +604,10 @@ export const ProductsManager = ({
   const startTour = () => {
     window.scrollTo({ top: 0, behavior: 'instant' });
 
+    // Steps are gated on what the ACTIVE table renders, not just on having
+    // rows: Grup and the Dijual switch are columns the Bahan and Tambahan
+    // tables deliberately drop, and a step pointing at a column that is not on
+    // screen is the floating-popover failure this function exists to avoid.
     const hasRows = filteredProducts.length > 0;
     const steps: DriveStep[] = [
       {
@@ -457,23 +643,26 @@ export const ProductsManager = ({
         popover: {
           title: 'Cari &amp; Saring',
           description:
-            'Ketik nama produk untuk mencari, atau pilih kategori kalau produk pian sudah banyak.',
+            'Ketik nama produk untuk mencari, atau tekan Filter untuk menyaring per kategori dan varian kalau produk pian sudah banyak.',
           side: 'bottom',
         },
       },
     ];
 
+    if (hasRows && showsGroup) {
+      steps.push({
+        element: '[data-tour="col-group"]',
+        popover: {
+          title: 'Kolom Grup',
+          description:
+            'Daftar ini diurutkan mengikuti urutan Grup Menu pian, jadi tampilannya sama seperti yang dilihat pelanggan. Produk tanpa grup selalu di paling bawah. Klik judul kolom mana saja untuk mengubah urutan.',
+          side: 'bottom',
+        },
+      });
+    }
+
     if (hasRows) {
       steps.push(
-        {
-          element: '[data-tour="col-group"]',
-          popover: {
-            title: 'Kolom Grup',
-            description:
-              'Daftar ini diurutkan mengikuti urutan Grup Menu pian, jadi tampilannya sama seperti yang dilihat pelanggan. Produk tanpa grup selalu di paling bawah. Klik judul kolom mana saja untuk mengubah urutan.',
-            side: 'bottom',
-          },
-        },
         {
           element: '[data-tour="col-stock"]',
           popover: {
@@ -481,15 +670,6 @@ export const ProductsManager = ({
             description:
               'Angka merah artinya habis, kuning artinya tinggal sedikit (5 atau kurang). Tanda "—" artinya produk ini memang tidak dihitung stoknya.',
             side: 'bottom',
-          },
-        },
-        {
-          element: '[data-tour="row-status"]',
-          popover: {
-            title: 'Tombol Dijual / Disembunyikan',
-            description:
-              'Ini saklar "boleh dibeli sekarang". Kalau dimatikan, produk <b>langsung hilang dari menu, pencarian, dan halaman pelanggan</b> — tapi tetap ada di sini, stok dan riwayat penjualannya aman. Pas buat barang yang lagi habis: matikan dulu, nyalakan lagi kalau sudah ada.',
-            side: 'left',
           },
         },
         {
@@ -502,6 +682,22 @@ export const ProductsManager = ({
           },
         },
       );
+    }
+
+    if (hasRows && showsStatus) {
+      // Second-to-last, where it used to sit: the row actions are the natural
+      // last word.
+      steps.splice(steps.length - 1, 0, {
+        element: '[data-tour="row-status"]',
+        popover: {
+          title: 'Tombol Dijual / Disembunyikan',
+          description:
+            tab === 'tambahan'
+              ? 'Saklar "boleh dipilih sekarang". Kalau dimatikan, tambahan ini <b>tetap terlihat di kasir tapi tidak bisa dipilih</b> — jadi pian bisa bilang ke pelanggan bahwa memang lagi habis, bukan hilang begitu saja.'
+              : 'Ini saklar "boleh dibeli sekarang". Kalau dimatikan, produk <b>langsung hilang dari menu, pencarian, dan halaman pelanggan</b> — tapi tetap ada di sini, stok dan riwayat penjualannya aman. Pas buat barang yang lagi habis: matikan dulu, nyalakan lagi kalau sudah ada.',
+          side: 'left',
+        },
+      });
     }
 
     driver({
@@ -627,6 +823,13 @@ export const ProductsManager = ({
   const asksCourierQuestion =
     selectedCategory === 'mart' || selectedCategory === 'bahan bangunan';
 
+  // "bahan" and "tambahan" are internal (INTERNAL_CATEGORIES on the backend
+  // too): a public listing excludes them whatever is_for_sale says, so the
+  // toggle below is not the thing keeping them off the customer's menu.
+  const isInternalCategory = INTERNAL_CATEGORIES.some(
+    (c) => c.category === selectedCategory,
+  );
+
   // Bulky goods the outlet hauls itself are priced as a band, not a single
   // number: the floor is the goods, and the room above it is what the owner may
   // charge for the haul once they've seen the address. Same two inputs as jasa,
@@ -636,6 +839,35 @@ export const ProductsManager = ({
 
   // Both range-priced kinds share the two price inputs below.
   const usesPriceRange = isServiceCategory || isMaterialsProduct;
+
+  // ── What this category is worth asking about ───────────────────────────
+  // Every field below that isn't universal is gated on one of these. The form
+  // was asking every product every question, so an owner adding a drink waded
+  // past a barcode scanner and a photo uploader to reach the price.
+
+  // See NO_BARCODE_CATEGORIES.
+  const asksBarcode = !NO_BARCODE_CATEGORIES.has(selectedCategory);
+
+  // "Punya stok sendiri?" has no answer for a service: there is nothing to
+  // count. The backend already forces track_stock off for a range-priced jasa
+  // (rangePricedFields), so hiding the toggle agrees with what actually gets
+  // saved rather than concealing a contradiction.
+  const asksStockQuestion = !isServiceCategory;
+
+  // An ingredient is never sold. It comes in on a purchase invoice and leaves
+  // through a recipe, and it is excluded from every public listing and from the
+  // POS grid by category alone — so a selling price is a number with nowhere to
+  // go. The Bahan table already substitutes Harga Beli for its Harga column
+  // because this one is a column of zeroes; the form was the last place still
+  // asking. What an ingredient COSTS comes from the stock ledger (avg_cost),
+  // never from here. The backend pins price to 0 for this category too.
+  const asksSellingPrice = selectedCategory !== INGREDIENT_CATEGORY.category;
+
+  // A picture is for the customer, and an ingredient or an add-on option never
+  // reaches one: both are excluded from every public listing whatever
+  // is_for_sale says (INTERNAL_CATEGORIES on the backend). Uploading a photo of
+  // a sack of flour costs the owner a step and buys nothing.
+  const asksImage = !isInternalCategory;
 
   const handleCategorySelect = (category: string) => {
     setSelectedCategory(category);
@@ -677,6 +909,18 @@ export const ProductsManager = ({
     // no-courier flow with nothing on screen explaining why.
     const courierDeliverableToSave = asksCourierQuestion ? courierDeliverable : true;
 
+    // Same hazard, and this one bites harder: a barcode typed while the category
+    // was mart stays in formData after a switch to makanan, where the field is
+    // gone. Barcodes are unique per outlet, so the invisible leftover would
+    // collide with the retail product it actually belongs to — and the owner
+    // would be reading an error about a field they cannot see.
+    const barcodeToSave = asksBarcode ? formData.barcode : '';
+
+    // A service has nothing to count. The backend forces this off for jasa, but
+    // only once a price range has actually been typed, so send the honest value
+    // rather than leaning on that.
+    const trackStockToSave = isServiceCategory ? false : trackStock;
+
     // Same hazard on the price fields: type a band on a bulky product, flip it
     // back to courier-deliverable, and the inputs disappear while formData still
     // holds the numbers. The backend treats any non-empty lowest_price as
@@ -686,30 +930,44 @@ export const ProductsManager = ({
       ? { lowest_price: formData.lowest_price, highest_price: formData.highest_price }
       : { lowest_price: '', highest_price: '' };
 
+    // And once more for the selling price: a number typed under makanan is still
+    // in formData after a switch to bahan, where the input is gone. The backend
+    // pins this category to 0 regardless, so sending anything else would only
+    // make the two disagree about what the owner was shown.
+    const sellingPriceToSave = asksSellingPrice
+      ? { price: formData.price, price_mark_down: formData.price_mark_down }
+      : { price: '0', price_mark_down: '0' };
+
     let result;
     if (editingProductId) {
       result = await updateProductAction(editingProductId, {
         ...formData,
         ...priceRangeToSave,
+        ...sellingPriceToSave,
+        barcode: barcodeToSave,
         category: selectedCategory,
         menu_group_id: selectedMenuGroupId,
+        // NOT cleared for an internal category: the uploader is hidden there,
+        // but a picture the product already has is still its picture.
         image: imageUrl,
         features: selectedFeatures,
         is_for_sale: isForSale,
-        track_stock: trackStock,
+        track_stock: trackStockToSave,
         courier_deliverable: courierDeliverableToSave,
       });
     } else {
       result = await addProductAction({
         ...formData,
         ...priceRangeToSave,
+        ...sellingPriceToSave,
+        barcode: barcodeToSave,
         category: selectedCategory,
         menu_group_id: selectedMenuGroupId,
         outlet_id: outletId,
         image: imageUrl,
         features: selectedFeatures,
         is_for_sale: isForSale,
-        track_stock: trackStock,
+        track_stock: trackStockToSave,
         courier_deliverable: courierDeliverableToSave,
       });
     }
@@ -867,7 +1125,11 @@ export const ProductsManager = ({
                 Menajemen Produk
               </h2>
               <p className="text-sm text-muted-foreground mt-1">
-                {initialProducts.length} produk · kelola harga, stok, &amp; ketersediaan.
+                {/* Explicit space: the transform swallows the one between an
+                    expression and the text after it, and this rendered as
+                    "69produk". */}
+                {initialProducts.length}
+                {' produk · kelola harga, stok, & ketersediaan.'}
               </p>
               {/* Same affordance as the Promosi page: several controls here
                   change what CUSTOMERS see, which no button face can say. */}
@@ -974,7 +1236,82 @@ export const ProductsManager = ({
             </div>
           ) : (
             <>
-              {/* Toolbar: search + category filter */}
+              {/* The three tables. One at a time rather than stacked: an
+                  owner looking at their menu is not also reading their
+                  ingredient list, and stacking would push Tambahan a full
+                  screen below the fold on any real catalogue. Counts sit on the
+                  tabs so nothing is hidden — you can see a shelf is not empty
+                  without opening it. */}
+              <div
+                role="tablist"
+                aria-label="Jenis produk"
+                // overflow-x-auto is the safety net, not the plan: the three
+                // labels fit down to a 320px phone, and if a longer one ever
+                // stops fitting the bar scrolls rather than clipping a tab off
+                // the right edge the way it did before.
+                className="mb-4 flex gap-1 overflow-x-auto rounded-2xl border bg-muted/30 p-1"
+              >
+                {TABLE_TABS.map((t) => {
+                  const active = tab === t.id;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={active}
+                      onClick={() => setTab(t.id)}
+                      // min-w-0 is what actually lets these shrink: a flex item
+                      // refuses to go below its content width without it, so at
+                      // 390px the three tabs overran the bar and clipped
+                      // "Tambahan" and its count off the right edge. The icon
+                      // goes first when space is short — the word is the part
+                      // that identifies the tab.
+                      className={`flex min-w-0 flex-auto items-center justify-center gap-1 rounded-xl px-2 py-2 text-xs font-bold transition-colors sm:gap-1.5 sm:px-3 sm:text-sm ${
+                        active
+                          ? 'bg-background text-foreground shadow-sm'
+                          : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      <t.icon className="hidden h-4 w-4 shrink-0 sm:block" />
+                      {/* shrink-0: flex was shaving a sub-pixel off each label
+                          and `truncate` turned that 1px into "Prod…". The word
+                          is the tab's identity — it is the last thing that
+                          should give way. */}
+                      <span className="shrink-0 whitespace-nowrap">
+                        {t.label}
+                      </span>
+                      <span
+                        className={`shrink-0 rounded-full px-1 py-0.5 text-[11px] tabular-nums sm:px-1.5 ${
+                          active
+                            ? 'bg-blue-50 text-blue-600 dark:bg-blue-950/50'
+                            : 'bg-muted text-muted-foreground'
+                        }`}
+                      >
+                        {byKind[t.id].length}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* What the two internal shelves are, said once. Both are easy to
+                  mistake for a menu the customer can see. */}
+              {tab === 'bahan' && (
+                <p className="mb-3 text-xs text-muted-foreground">
+                  Stok dapur: dipakai lewat resep, tidak pernah muncul di menu
+                  pelanggan. Harga di sini harga <b>beli</b> (modal).
+                </p>
+              )}
+              {tab === 'tambahan' && (
+                <p className="mb-3 text-xs text-muted-foreground">
+                  Pilihan add-on: selalu menempel pada produk lain, tidak pernah
+                  dijual sendiri. Harga yang ditagih ke pelanggan diatur per grup
+                  di form produk yang menawarkannya — angka di sini harga dasar
+                  produknya.
+                </p>
+              )}
+
+              {/* Toolbar: search + a Filter button that pops the category/variant choices */}
               <div
                 className="flex flex-col sm:flex-row gap-2 sm:items-center mb-4"
                 data-tour="filters"
@@ -988,21 +1325,138 @@ export const ProductsManager = ({
                     className="h-11 w-full rounded-xl border border-input bg-transparent pl-10 pr-4 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                   />
                 </div>
-                <select
-                  value={categoryFilter}
-                  onChange={(e) => setCategoryFilter(e.target.value)}
-                  className="h-11 rounded-xl border border-input bg-background px-3 text-sm shadow-sm capitalize focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-                >
-                  <option value="all">Semua kategori</option>
-                  {productCategories.map((c) => (
-                    <option key={c} value={c} className="capitalize">
-                      {c}
-                    </option>
-                  ))}
-                </select>
+                {tab === 'produk' && (
+                  <Popover open={filterOpen} onOpenChange={setFilterOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-11 rounded-xl px-4 shadow-sm"
+                      >
+                        <SlidersHorizontal className="h-4 w-4" />
+                        Filter
+                        {activeFilterCount > 0 && (
+                          <span className="ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-blue-600 px-1.5 text-xs font-semibold text-white">
+                            {activeFilterCount}
+                          </span>
+                        )}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent align="end" className="w-80 gap-4 p-4">
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm font-semibold">Saring produk</p>
+                        {activeFilterCount > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCategoryFilter('all');
+                              setVariantFilter('all');
+                            }}
+                            className="text-xs font-medium text-blue-600 hover:underline"
+                          >
+                            Reset
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <p className="text-xs font-medium text-muted-foreground">
+                          Kategori
+                        </p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {['all', ...productCategories].map((c) => {
+                            const active = categoryFilter === c;
+                            return (
+                              <button
+                                key={c}
+                                type="button"
+                                onClick={() => setCategoryFilter(c)}
+                                className={`rounded-full border px-3 py-1 text-xs capitalize transition-colors ${
+                                  active
+                                    ? 'border-blue-600 bg-blue-600 text-white'
+                                    : 'border-input bg-background hover:bg-muted'
+                                }`}
+                              >
+                                {c === 'all' ? 'Semua kategori' : c}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <p className="text-xs font-medium text-muted-foreground">
+                          Varian
+                        </p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {(
+                            [
+                              ['all', 'Semua produk'],
+                              ['has', 'Punya varian'],
+                              ['is', 'Merupakan varian'],
+                            ] as const
+                          ).map(([value, label]) => {
+                            const active = variantFilter === value;
+                            return (
+                              <button
+                                key={value}
+                                type="button"
+                                onClick={() => setVariantFilter(value)}
+                                className={`rounded-full border px-3 py-1 text-xs transition-colors ${
+                                  active
+                                    ? 'border-blue-600 bg-blue-600 text-white'
+                                    : 'border-input bg-background hover:bg-muted'
+                                }`}
+                              >
+                                {label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                )}
               </div>
 
-              {/* Inventory table */}
+              {/* An empty shelf is not the same as an empty catalogue — the
+                  owner has products, just none of THIS kind, and the way to get
+                  one is a category they have probably never opened. Say which. */}
+              {byKind[tab].length === 0 ? (
+                <div className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed bg-muted/10 p-10 text-center">
+                  <div className="mb-3 rounded-full bg-muted p-3 text-muted-foreground">
+                    {tab === 'bahan' ? (
+                      <Package className="h-6 w-6" />
+                    ) : tab === 'tambahan' ? (
+                      <Layers className="h-6 w-6" />
+                    ) : (
+                      <Handbag className="h-6 w-6" />
+                    )}
+                  </div>
+                  <h3 className="font-bold">
+                    {tab === 'bahan'
+                      ? 'Belum ada bahan'
+                      : tab === 'tambahan'
+                        ? 'Belum ada tambahan'
+                        : 'Belum ada produk jualan'}
+                  </h3>
+                  <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+                    {tab === 'bahan'
+                      ? 'Catat beras, minyak, gas dan kawan-kawannya lewat kategori "Bahan (Stok Dapur)" — stoknya nanti berkurang sendiri lewat resep.'
+                      : tab === 'tambahan'
+                        ? 'Buat dulu produknya di kategori "Tambahan (Add-on)" — misal Telur Ceplok atau Extra Keju — lalu susun grupnya dari form produk yang mau menawarkannya.'
+                        : 'Semua isi etalase pian masih berupa bahan atau tambahan. Tambah satu produk yang bisa dibeli pelanggan.'}
+                  </p>
+                  <Button
+                    onClick={() => setView('category')}
+                    variant="outline"
+                    className="mt-4 rounded-xl border-dashed hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600"
+                  >
+                    <Plus className="mr-1.5 h-4 w-4" />
+                    Tambah
+                  </Button>
+                </div>
+              ) : (
               <div className="rounded-2xl border bg-background overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
@@ -1011,11 +1465,20 @@ export const ProductsManager = ({
                         <th className="px-3 py-2.5 font-semibold">
                           <SortHeader label="Produk" sortKey="name" />
                         </th>
-                        <th className="px-3 py-2.5 font-semibold" data-tour="col-group">
-                          <SortHeader label="Grup" sortKey="group" />
-                        </th>
+                        {showsGroup && (
+                          <th
+                            className="px-3 py-2.5 font-semibold"
+                            data-tour="col-group"
+                          >
+                            <SortHeader label="Grup" sortKey="group" />
+                          </th>
+                        )}
                         <th className="px-3 py-2.5 text-right font-semibold">
-                          <SortHeader label="Harga" sortKey="price" align="right" />
+                          <SortHeader
+                            label={tab === 'bahan' ? 'Harga Beli' : 'Harga'}
+                            sortKey="price"
+                            align="right"
+                          />
                         </th>
                         <th
                           className="px-3 py-2.5 text-right font-semibold"
@@ -1023,7 +1486,9 @@ export const ProductsManager = ({
                         >
                           <SortHeader label="Stok" sortKey="stock" align="right" />
                         </th>
-                        <th className="px-3 py-2.5 font-semibold">Status</th>
+                        {showsStatus && (
+                          <th className="px-3 py-2.5 font-semibold">Status</th>
+                        )}
                         <th className="px-3 py-2.5 text-right font-semibold">Aksi</th>
                       </tr>
                     </thead>
@@ -1068,10 +1533,32 @@ export const ProductsManager = ({
                                   <p className="font-semibold truncate">
                                     {product.product_name}
                                   </p>
-                                  <span className="text-[11px] text-muted-foreground capitalize">
-                                    {product.category || '—'}
-                                    {!product.is_for_sale && ' · inventaris'}
-                                  </span>
+                                  {product.variant_of ? (
+                                    <span className="flex items-center gap-1 text-[11px] text-violet-600 dark:text-violet-400 truncate">
+                                      <Ruler className="h-3 w-3 shrink-0" />
+                                      {product.variant_name || 'Varian'} ·{' '}
+                                      {productNameById.get(product.variant_of) ??
+                                        'produk lain'}
+                                    </span>
+                                  ) : (
+                                    variantCountByBase.has(product.id) && (
+                                      <span className="flex items-center gap-1 text-[11px] text-violet-600 dark:text-violet-400">
+                                        <Ruler className="h-3 w-3 shrink-0" />
+                                        {(variantCountByBase.get(product.id) ?? 0) + 1}{' '}
+                                        {product.variant_label?.trim() || 'varian'}
+                                      </span>
+                                    )
+                                  )}
+                                  {/* Only on Produk: on the other two tabs
+                                      this said "Bahan · inventaris" on every
+                                      single row, under a tab already labelled
+                                      Bahan. */}
+                                  {tab === 'produk' && (
+                                    <span className="text-[11px] text-muted-foreground capitalize">
+                                      {product.category || '—'}
+                                      {!product.is_for_sale && ' · inventaris'}
+                                    </span>
+                                  )}
                                   {product.is_for_sale &&
                                     product.courier_deliverable === false && (
                                       <span className="flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-500 mt-0.5">
@@ -1090,20 +1577,29 @@ export const ProductsManager = ({
                             </td>
                             {/* Grup menu — shown at every width: it's the column
                                 the table now sorts by, so hiding it on a phone
-                                hid the reason for the row order. */}
-                            <td className="px-3 py-2.5">
-                              {groupName ? (
-                                <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold">
-                                  <Layers className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                  {groupName}
-                                </span>
-                              ) : (
-                                <span className="text-muted-foreground">—</span>
-                              )}
-                            </td>
-                            {/* Harga */}
+                                hid the reason for the row order. Produk only;
+                                see showsGroup. */}
+                            {showsGroup && (
+                              <td className="px-3 py-2.5">
+                                {groupName ? (
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold">
+                                    <Layers className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                    {groupName}
+                                  </span>
+                                ) : (
+                                  <span className="text-muted-foreground">—</span>
+                                )}
+                              </td>
+                            )}
+                            {/* Harga — what it COST for an ingredient (it is
+                                never sold, so its selling price is a column of
+                                zeroes), what it SELLS for otherwise. */}
                             <td className="px-3 py-2.5 text-right tabular-nums whitespace-nowrap">
-                              {isService ? (
+                              {tab === 'bahan' ? (
+                                <span className="font-semibold">
+                                  {rupiah(product.buying_price)}
+                                </span>
+                              ) : isService ? (
                                 <span className="font-semibold">
                                   {rupiah(product.lowest_price!)}
                                   {product.highest_price &&
@@ -1142,6 +1638,11 @@ export const ProductsManager = ({
                                     <AlertTriangle className="h-3.5 w-3.5" />
                                   )}
                                   {stockNum}
+                                  {tab === 'bahan' && product.unit && (
+                                    <span className="font-normal text-muted-foreground">
+                                      {product.unit}
+                                    </span>
+                                  )}
                                 </span>
                               ) : (
                                 <span
@@ -1158,16 +1659,17 @@ export const ProductsManager = ({
                                 hidden from customers. */}
                             {/* Every row carries the anchor; driver.js targets
                                 the first match, i.e. the top row. */}
+                            {showsStatus && (
                             <td className="px-3 py-2.5" data-tour="row-status">
                               <button
                                 type="button"
                                 role="switch"
                                 aria-checked={purchasable}
-                                aria-label={`${purchasable ? 'Sembunyikan' : 'Tampilkan'} ${product.product_name} dari pelanggan`}
+                                aria-label={`${purchasable ? statusWords.onAria : statusWords.offAria} ${product.product_name}`}
                                 title={
                                   purchasable
-                                    ? 'Bisa dibeli pelanggan — klik untuk menyembunyikan'
-                                    : 'Disembunyikan dari pelanggan — klik untuk menjual lagi'
+                                    ? statusWords.onTitle
+                                    : statusWords.offTitle
                                 }
                                 disabled={togglingId === product.id}
                                 onClick={() => toggleAvailability(product)}
@@ -1193,13 +1695,35 @@ export const ProductsManager = ({
                                       : 'text-muted-foreground'
                                   }`}
                                 >
-                                  {purchasable ? 'Dijual' : 'Disembunyikan'}
+                                  {purchasable ? statusWords.on : statusWords.off}
                                 </span>
                               </button>
                             </td>
+                            )}
                             {/* Aksi */}
                             <td className="px-3 py-2.5" data-tour="row-actions">
                               <div className="flex items-center justify-end gap-1">
+                                {/* Recipe Explorer: this product's real HPP
+                                    tree. Shown on every row on purpose — a
+                                    bahan is a legitimate thing to open (it is
+                                    a leaf, and the page says what its stock
+                                    and cover look like), and a product with no
+                                    recipe gets an empty state pointing at the
+                                    recipe form rather than a dead end. */}
+                                {(gate?.features?.recipeExplorer as boolean) && (
+                                  <button
+                                    onClick={() =>
+                                      router.push(
+                                        `/dashboard/addproducts/recipe-explorer/${product.id}?name=${encodeURIComponent(product.product_name)}`,
+                                      )
+                                    }
+                                    className="p-1.5 rounded-lg bg-muted/60 text-muted-foreground hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 transition-colors"
+                                    aria-label="Jelajah resep"
+                                    title="Jelajah resep"
+                                  >
+                                    <Workflow className="h-4 w-4" />
+                                  </button>
+                                )}
                                 <button
                                   onClick={() => handleEdit(product)}
                                   className="p-1.5 rounded-lg bg-muted/60 text-muted-foreground hover:text-blue-600 hover:bg-blue-50 transition-colors"
@@ -1223,10 +1747,10 @@ export const ProductsManager = ({
                       {filteredProducts.length === 0 && (
                         <tr>
                           <td
-                            colSpan={6}
+                            colSpan={columnCount}
                             className="px-3 py-10 text-center text-sm text-muted-foreground"
                           >
-                            Tidak ada produk yang cocok dengan pencarian.
+                            Tidak ada yang cocok dengan pencarian.
                           </td>
                         </tr>
                       )}
@@ -1234,6 +1758,7 @@ export const ProductsManager = ({
                   </table>
                 </div>
               </div>
+              )}
             </>
           )}
         </>
@@ -1260,7 +1785,7 @@ export const ProductsManager = ({
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-6">
-            {[...CATEGORIES, INGREDIENT_CATEGORY].map((cat) => (
+            {[...CATEGORIES, ...INTERNAL_CATEGORIES].map((cat) => (
               <button
                 key={cat.id}
                 disabled={!cat.isAvailable}
@@ -1448,6 +1973,13 @@ export const ProductsManager = ({
                     />
                   </span>
                 </button>
+                {isForSale && isInternalCategory && (
+                  <p className="text-xs text-amber-700 dark:text-amber-500">
+                    Kategori ini internal, jadi produknya tetap tidak muncul di
+                    menu pelanggan. Sakelar ini cuma membukanya untuk faktur dan
+                    laporan.
+                  </p>
+                )}
               </div>
 
               {/* Asked only for mart & bahan bangunan — see asksCourierQuestion. */}
@@ -1555,7 +2087,7 @@ export const ProductsManager = ({
                       )}
                     </p>
                   </>
-                ) : (
+                ) : asksSellingPrice ? (
                   <div className="space-y-2">
                     <label className="text-sm font-bold flex items-center gap-2">
                       <DollarSign className="h-4 w-4 text-muted-foreground" />
@@ -1576,7 +2108,7 @@ export const ProductsManager = ({
                       />
                     </div>
                   </div>
-                )}
+                ) : null}
                 <div className="space-y-2">
                   <label className="text-sm font-bold flex items-center gap-2 text-amber-600">
                     <DollarSign className="h-4 w-4" />
@@ -1599,8 +2131,11 @@ export const ProductsManager = ({
                 <div
                   // Hidden for both range-priced kinds: the backend mirrors
                   // price_mark_down to the range floor, so a discount entered
-                  // here would be silently discarded.
-                  className={`col-span-2 space-y-3 ${usesPriceRange ? 'hidden' : ''}`}
+                  // here would be silently discarded. Hidden for ingredients for
+                  // the plainer reason that there is no price to discount.
+                  className={`col-span-2 space-y-3 ${
+                    usesPriceRange || !asksSellingPrice ? 'hidden' : ''
+                  }`}
                 >
                   <label className="flex items-center justify-between cursor-pointer">
                     <span className="text-sm font-bold text-muted-foreground">
@@ -1668,31 +2203,33 @@ export const ProductsManager = ({
                 </p>
               </div>
 
-              <div className="space-y-2">
-                <label className="text-sm font-bold flex items-center gap-2">
-                  <Barcode className="h-4 w-4 text-muted-foreground" />
-                  Barcode
-                  <span className="font-normal text-xs text-muted-foreground">(opsional)</span>
-                </label>
-                <input
-                  name="barcode"
-                  value={formData.barcode}
-                  onChange={handleInputChange}
-                  // USB barcode scanners emulate typing + an Enter keystroke —
-                  // without this, scanning into this field would submit the
-                  // whole product form early instead of just filling it in.
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') e.preventDefault();
-                  }}
-                  maxLength={64}
-                  className="flex h-12 w-full rounded-xl border border-input bg-transparent px-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 font-mono"
-                  placeholder="Scan atau ketik kode barcode…"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Cocok untuk produk mart/ritel. Harus unik per outlet — dua produk tidak
-                  boleh berbagi barcode yang sama.
-                </p>
-              </div>
+              {asksBarcode && (
+                <div className="space-y-2">
+                  <label className="text-sm font-bold flex items-center gap-2">
+                    <Barcode className="h-4 w-4 text-muted-foreground" />
+                    Barcode
+                    <span className="font-normal text-xs text-muted-foreground">(opsional)</span>
+                  </label>
+                  <input
+                    name="barcode"
+                    value={formData.barcode}
+                    onChange={handleInputChange}
+                    // USB barcode scanners emulate typing + an Enter keystroke —
+                    // without this, scanning into this field would submit the
+                    // whole product form early instead of just filling it in.
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') e.preventDefault();
+                    }}
+                    maxLength={64}
+                    className="flex h-12 w-full rounded-xl border border-input bg-transparent px-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 font-mono"
+                    placeholder="Scan atau ketik kode barcode…"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Cocok untuk produk mart/ritel. Harus unik per outlet — dua produk tidak
+                    boleh berbagi barcode yang sama.
+                  </p>
+                </div>
+              )}
 
               <div className="space-y-2">
                 <label className="text-sm font-bold flex items-center gap-2">
@@ -1708,7 +2245,7 @@ export const ProductsManager = ({
                 />
               </div>
 
-              {isForSale && (
+              {isForSale && !isInternalCategory && (
                 <div className="space-y-3">
                   <label className="text-sm font-bold flex items-center gap-2">
                     <Tag className="h-4 w-4 text-muted-foreground" />
@@ -1755,6 +2292,7 @@ export const ProductsManager = ({
               )}
 
 
+              {asksStockQuestion && (
               <div className="space-y-2">
                 <label className="text-sm font-bold flex items-center gap-2">
                   <Layers className="h-4 w-4 text-muted-foreground" />
@@ -1796,6 +2334,7 @@ export const ProductsManager = ({
                   </span>
                 </button>
               </div>
+              )}
 
               {/* Composition editor: any saved product may have one, with or
                   without stock of its own. Without = a menu item or a
@@ -1815,6 +2354,42 @@ export const ProductsManager = ({
                   />
                 )}
 
+              {/* Variants — the OTHER question a product can ask, and the one
+                  that is constantly mistaken for the first. An add-on adds a
+                  line to the order; a variant decides which product the line
+                  is. Sized as an add-on, a Large reports a Reguler plus an
+                  abstract "upsize" and takes its extra milk out of nobody's
+                  stock. Placed above the add-on editor so the owner meets the
+                  right tool first when what they want is a size.
+
+                  Not offered for an internal category (a topping has no sizes
+                  of its own — the dish it hangs off does) nor for a product
+                  that is already somebody's variant: one level deep. */}
+              {editingProductId &&
+                !isInternalCategory &&
+                !editingProduct?.variant_of && (
+                  <VariantEditor
+                    productId={editingProductId}
+                    productName={
+                      formData.product_name ||
+                      editingProduct?.product_name ||
+                      ''
+                    }
+                  />
+                )}
+
+              {/* Add-on groups. Saved independently of the product form, like
+                  the composition above: attaching a group is a single PUT, so
+                  the owner is never made to re-save the whole product to change
+                  what toppings it offers. */}
+              {editingProductId && (
+                <AddonEditor
+                  productId={editingProductId}
+                  products={recipeIngredientOptions}
+                />
+              )}
+
+              {asksImage && (
               <div className="space-y-2">
                 <label className="text-sm font-bold flex items-center gap-2">
                   <ImageIcon className="h-4 w-4 text-muted-foreground" />
@@ -1853,6 +2428,7 @@ export const ProductsManager = ({
                   />
                 )}
               </div>
+              )}
 
               <div className="pt-4 flex justify-end">
                 <Button

@@ -4,7 +4,7 @@ import { ProductsManager } from "./products-manager";
 const Page = async () => {
     // Outlet + its products in one backend call.
     const res = await serverFetch("/api/products/mine");
-    const { outlet, products } = res.ok ? await res.json() : { outlet: null, products: [] };
+    const { outlet, products, gate } = res.ok ? await res.json() : { outlet: null, products: [], gate: null };
 
     if (!outlet) {
         return (
@@ -19,7 +19,7 @@ const Page = async () => {
 
     return (
         <main className="px-4 mx-2 md:mx-6 pb-12">
-            <ProductsManager outletId={outlet.id} initialProducts={products} />
+            <ProductsManager outletId={outlet.id} initialProducts={products} gate={gate} />
         </main>
     );
 };

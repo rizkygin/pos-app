@@ -118,6 +118,7 @@ const TRIAL_FEATURES: Record<string, unknown> = {
   cashflow: true,
   report: true,
   reportInvoice: true,
+  recipeExplorer: true,
 };
 const NO_FEATURES: Record<string, unknown> = {};
 

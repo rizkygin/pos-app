@@ -23,6 +23,8 @@ export type PostMovementArgs = {
   // Pass it explicitly only to REVERSE a specific earlier movement at the cost
   // it actually carried (see the void paths), so a reversal returns the value it
   // took rather than today's average.
+  //
+  // With qtyChange 0 it is a REVALUATION — see the branch below.
   unitCost?: number | null;
   invoiceId?: number | null;
   orderId?: string | null;
@@ -81,6 +83,7 @@ export async function postMovement(
 
   let newAvg = oldAvg;
   let reblend = false;
+  let revalue = false;
   if (qtyChange > 0) {
     // Stock coming in blends into the average. Weight by on-hand quantity,
     // floored at zero: a product oversold into negative stock has no value on
@@ -105,9 +108,30 @@ export async function postMovement(
     newAvg = remaining > 0 ? (onHand * oldAvg + qtyChange * effUnit) / remaining : 0;
     if (newAvg < 0) newAvg = 0; // never let rounding drive the shelf negative
     reblend = true;
+  } else if (qtyChange === 0 && args.unitCost != null) {
+    // REVALUATION: no quantity moves, the shelf is simply told what it is
+    // worth. Reached only for stock that arrived carrying no cost at all — an
+    // opname surplus on a product that has never been bought through an
+    // invoice, where the running average has nothing to average and stays 0
+    // forever. Without this the Stok page has to fall back to the hand-typed
+    // buying_price to show any value at all, which is how a price entered per
+    // package against a per-litre unit turns into millions of rupiah of
+    // imaginary inventory.
+    //
+    // The whole difference is booked on the money side below, so cost_change
+    // keeps summing to what the shelf is worth. The caller decides when this is
+    // allowed; this only refuses to invent a number it was not given.
+    newAvg = effUnit;
+    revalue = true;
+    reblend = true;
   }
 
-  const costChange = Number((qtyChange * effUnit).toFixed(2));
+  // Normally the money side is just the quantity that moved, priced. A
+  // revaluation moves no quantity: what changes is what the stock already on the
+  // shelf is worth.
+  const costChange = revalue
+    ? Number((Math.max(onHand, 0) * (effUnit - oldAvg)).toFixed(2))
+    : Number((qtyChange * effUnit).toFixed(2));
 
   await tx.insert(stockMovementsTable).values({
     outlet_id: outletId,

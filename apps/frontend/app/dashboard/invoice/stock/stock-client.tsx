@@ -69,11 +69,20 @@ export function StockClient() {
   const [rows, setRows] = useState<StockRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  // Habis/Tersedia mirror the Status column exactly — the badge only ever says
+  // those two, so the filter invents nothing. "wip" is the other question this
+  // page gets asked: which rows can actually be produced, i.e. the ones wearing
+  // the Produksi button (track_stock AND a recipe of their own).
+  const [status, setStatus] = useState<"all" | "ready" | "out" | "wip">("all");
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(10);
 
   // opname state
   const [counts, setCounts] = useState<Record<string, string>>({});
+  // Unit costs typed during an opname, only for rows the ledger cannot price.
+  // Left empty on purpose: an untouched field changes nothing, so confirming a
+  // count never quietly promotes a guessed price into ledger truth.
+  const [costs, setCosts] = useState<Record<string, string>>({});
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -123,6 +132,7 @@ export function StockClient() {
               value: stock * buying_price,
               has_recipe: !!p.has_recipe,
               yield_qty: Number(p.yield_qty || 1),
+              needs_cost: !(ledgerCost > 0),
             };
           }),
       );
@@ -137,20 +147,76 @@ export function StockClient() {
 
   useEffect(() => {
     setPage(1);
-  }, [search]);
+  }, [search, status]);
 
-  const filtered = useMemo(
+  // Name first, status second, so the tab counts describe the search result the
+  // owner is actually looking at instead of the whole catalogue.
+  const searched = useMemo(
     () => rows.filter((r) => r.product_name.toLowerCase().includes(search.toLowerCase())),
     [rows, search],
   );
+  const searchedOut = useMemo(() => searched.filter((r) => r.stock <= 0).length, [searched]);
+  const searchedWip = useMemo(() => searched.filter((r) => r.has_recipe).length, [searched]);
+
+  // Which tabs this outlet is entitled to at all. Deliberately measured against
+  // the WHOLE catalogue, not the search result: a tab that vanished because you
+  // typed three letters is a tab that makes the owner wonder what they broke. A
+  // shop that produces nothing in-house simply never sees "Bahan setengah jadi"
+  // and is spared the question of what it would have meant.
+  const tabsAvailable = useMemo(
+    () => ({
+      ready: rows.some((r) => r.stock > 0),
+      out: rows.some((r) => r.stock <= 0),
+      wip: rows.some((r) => r.has_recipe),
+    }),
+    [rows],
+  );
+
+  // The catalogue can change under a chosen tab — an opname refills the last
+  // empty product, a produced batch is the outlet's only recipe. Fall back to
+  // "Semua" rather than leaving the owner on a tab that is no longer offered
+  // and an empty table with no obvious way out.
+  useEffect(() => {
+    if (status !== "all" && !tabsAvailable[status]) setStatus("all");
+  }, [status, tabsAvailable]);
+
+  // Counts still follow the search, so they describe the list in front of the
+  // owner; only membership is decided by the catalogue above.
+  const statusTabs = useMemo(
+    () =>
+      (
+        [
+          { id: "all", label: "Semua", count: searched.length, show: true },
+          { id: "ready", label: "Tersedia", count: searched.length - searchedOut, show: tabsAvailable.ready },
+          { id: "out", label: "Habis", count: searchedOut, show: tabsAvailable.out },
+          { id: "wip", label: "Bahan setengah jadi", count: searchedWip, show: tabsAvailable.wip },
+        ] as const
+      ).filter((t) => t.show),
+    [searched.length, searchedOut, searchedWip, tabsAvailable],
+  );
+
+  const filtered = useMemo(() => {
+    if (status === "all") return searched;
+    if (status === "out") return searched.filter((r) => r.stock <= 0);
+    if (status === "wip") return searched.filter((r) => r.has_recipe);
+    return searched.filter((r) => r.stock > 0);
+  }, [searched, status]);
   const totalValue = useMemo(() => rows.reduce((s, r) => s + r.value, 0), [rows]);
   const outOfStock = useMemo(() => rows.filter((r) => r.stock <= 0).length, [rows]);
+  // How much of the headline value rests on a hand-typed price rather than on
+  // anything the ledger computed.
+  const needCostCount = useMemo(() => rows.filter((r) => r.needs_cost).length, [rows]);
+  const estimatedValue = useMemo(
+    () => rows.filter((r) => r.needs_cost).reduce((s, r) => s + r.value, 0),
+    [rows],
+  );
   const pageData = useMemo(() => filtered.slice((page - 1) * limit, page * limit), [filtered, page, limit]);
 
   const openOpname = () => {
     // Pre-fill each count with the current system stock; the owner edits the
     // ones they physically counted differently.
     setCounts(Object.fromEntries(rows.map((r) => [r.id, String(r.stock)])));
+    setCosts({});
     setNote("");
     setView("opname");
   };
@@ -226,7 +292,16 @@ export function StockClient() {
   const saveOpname = async () => {
     setSaving(true);
     try {
-      const items = rows.map((r) => ({ product_id: r.id, counted: Number(counts[r.id] ?? r.stock) }));
+      const items = rows.map((r) => {
+        const typed = Number(costs[r.id]);
+        return {
+          product_id: r.id,
+          counted: Number(counts[r.id] ?? r.stock),
+          // Only sent where it means something. The server refuses it anyway
+          // for a product the ledger has already priced.
+          ...(r.needs_cost && Number.isFinite(typed) && typed > 0 ? { unit_cost: typed } : {}),
+        };
+      });
       await fetch(`${API_URL}/api/stock/opname`, {
         method: "POST",
         credentials: "include",
@@ -478,6 +553,14 @@ export function StockClient() {
           Masukkan jumlah hasil hitung fisik. Selisih akan dicatat sebagai penyesuaian stok
           (tidak memengaruhi kas).
         </p>
+        {needCostCount > 0 && (
+          <p className="rounded-lg border border-dashed border-amber-300 bg-amber-50 px-3 py-2 text-[13px] leading-relaxed text-amber-800 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-200">
+            <span className="font-semibold">{needCostCount} produk belum punya HPP dari sistem.</span>{" "}
+            Stoknya tidak pernah masuk lewat faktur pembelian, jadi nilainya sekarang cuma tebakan dari
+            form produk. Isi <span className="font-medium">HPP / unit</span> di bawah kalau kamu tahu
+            harga aslinya — kosongkan saja kalau belum yakin, tidak ada yang berubah.
+          </p>
+        )}
 
         <label className="block max-w-md space-y-1">
           <span className="text-xs font-medium text-muted-foreground">Catatan opname</span>
@@ -496,6 +579,7 @@ export function StockClient() {
                 <th className="px-3 py-2 text-right font-medium">Stok Sistem</th>
                 <th className="px-3 py-2 text-right font-medium">Hitung Fisik</th>
                 <th className="px-3 py-2 text-right font-medium">Selisih</th>
+                <th className="px-3 py-2 text-right font-medium">HPP / Unit</th>
               </tr>
             </thead>
             <tbody>
@@ -524,12 +608,28 @@ export function StockClient() {
                       {delta > 0 ? "+" : ""}
                       {delta} {r.unit}
                     </td>
+                    <td className="px-3 py-2">
+                      {r.needs_cost ? (
+                        <Input
+                          type="number"
+                          min="0"
+                          placeholder={String(r.buying_price || 0)}
+                          value={costs[r.id] ?? ""}
+                          onChange={(e) => setCosts((c) => ({ ...c, [r.id]: e.target.value }))}
+                          className="ml-auto h-8 w-28 text-right"
+                        />
+                      ) : (
+                        <div className="text-right tabular-nums text-muted-foreground">
+                          {fmtIDR(r.buying_price)}
+                        </div>
+                      )}
+                    </td>
                   </tr>
                 );
               })}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-3 py-10 text-center text-sm text-muted-foreground">
+                  <td colSpan={5} className="px-3 py-10 text-center text-sm text-muted-foreground">
                     Tidak ada produk yang dikelola stoknya.
                   </td>
                 </tr>
@@ -591,15 +691,58 @@ export function StockClient() {
         />
       </div>
 
+      {/* Never let the headline value pass as fact when part of it is a guess:
+          a product the ledger has never priced is valued from whatever was
+          typed into the product form, unit mismatches and all. */}
+      {estimatedValue > 0 && (
+        <p className="-mt-2 text-[13px] leading-relaxed text-muted-foreground">
+          <span className="font-medium text-amber-700 dark:text-amber-400">
+            {fmtIDR(estimatedValue)}
+          </span>{" "}
+          dari nilai di atas masih estimasi — {needCostCount} produk belum pernah dihargai sistem, jadi
+          dipakai harga dari form produk.{" "}
+          <button
+            type="button"
+            onClick={openOpname}
+            className="font-medium text-teal-700 underline underline-offset-2 hover:text-teal-800 dark:text-teal-400"
+          >
+            Isi HPP lewat opname
+          </button>
+          .
+        </p>
+      )}
+
       {/* toolbar */}
-      <div className="relative max-w-xs">
-        <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          placeholder="Cari produk…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="pl-8"
-        />
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="relative w-full max-w-xs">
+          <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="Cari produk…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-8"
+          />
+        </div>
+        {/* Only the tabs this outlet has rows for, and nothing at all when
+            there is only "Semua" left to press. */}
+        {statusTabs.length > 1 && (
+          <div className="flex w-fit max-w-full gap-0.5 overflow-x-auto rounded-lg bg-muted p-0.75 sm:ml-auto">
+            {statusTabs.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setStatus(t.id)}
+                aria-pressed={status === t.id}
+                className={`whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
+                  status === t.id ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {t.label}
+                <span className="ml-1.5 tabular-nums opacity-60">{t.count}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {loading ? (

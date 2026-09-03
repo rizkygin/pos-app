@@ -48,10 +48,21 @@ export const productsRelations = relations(schema.productsTable, ({ one, many })
         fields: [schema.productsTable.outlet_id],
         references: [schema.outletsTable.id]
     }),
-    orderDetails: many(schema.orderDetailsTable)
+    orderDetails: many(schema.orderDetailsTable),
+    // A variant and the product it varies (migration 0071). Self-referencing,
+    // so both ends carry the same relationName — without it drizzle cannot tell
+    // which side of the same table it is looking at. Same shape as the add-on
+    // self-relation on orderDetails below, and for a related reason: both model
+    // "this row belongs under that one", one level deep.
+    variantOf: one(schema.productsTable, {
+        fields: [schema.productsTable.variant_of],
+        references: [schema.productsTable.id],
+        relationName: "productVariants"
+    }),
+    variants: many(schema.productsTable, { relationName: "productVariants" })
 }));
 
-export const orderDetailsRelations = relations(schema.orderDetailsTable, ({ one }) => ({
+export const orderDetailsRelations = relations(schema.orderDetailsTable, ({ one, many }) => ({
     hasProduct: one(schema.productsTable, {
         fields: [schema.orderDetailsTable.product_id],
         references: [schema.productsTable.id]
@@ -59,7 +70,16 @@ export const orderDetailsRelations = relations(schema.orderDetailsTable, ({ one 
     hasOrder: one(schema.ordersTable, {
         fields: [schema.orderDetailsTable.order_id],
         references: [schema.ordersTable.id]
-    })
+    }),
+    // Add-on lines and the line they were added to. Self-referencing, so both
+    // ends carry the same relationName — without it drizzle cannot tell which
+    // side of the same table it is looking at.
+    parentLine: one(schema.orderDetailsTable, {
+        fields: [schema.orderDetailsTable.parent_detail_id],
+        references: [schema.orderDetailsTable.id],
+        relationName: "lineAddons"
+    }),
+    addons: many(schema.orderDetailsTable, { relationName: "lineAddons" })
 }));
 
 export const ratingsRelations = relations(schema.ratingsTable, ({ one }) => ({
@@ -145,3 +165,36 @@ export const accountRelations = relations(schema.account, ({ one }) => ({
 }));
 
 // promosTable has no FK relations — platform admin creates promos independently
+// ── Add-on catalogue (see db/schema.ts) ─────────────────────────────────────
+export const addonGroupsRelations = relations(schema.addonGroupsTable, ({ one, many }) => ({
+    hasOutlet: one(schema.outletsTable, {
+        fields: [schema.addonGroupsTable.outlet_id],
+        references: [schema.outletsTable.id]
+    }),
+    options: many(schema.addonGroupOptionsTable),
+    attachedTo: many(schema.productAddonGroupsTable)
+}));
+
+export const addonGroupOptionsRelations = relations(schema.addonGroupOptionsTable, ({ one }) => ({
+    hasGroup: one(schema.addonGroupsTable, {
+        fields: [schema.addonGroupOptionsTable.group_id],
+        references: [schema.addonGroupsTable.id]
+    }),
+    // The product actually sold when this option is picked — where its stock,
+    // recipe and cost come from.
+    hasProduct: one(schema.productsTable, {
+        fields: [schema.addonGroupOptionsTable.product_id],
+        references: [schema.productsTable.id]
+    })
+}));
+
+export const productAddonGroupsRelations = relations(schema.productAddonGroupsTable, ({ one }) => ({
+    hasProduct: one(schema.productsTable, {
+        fields: [schema.productAddonGroupsTable.product_id],
+        references: [schema.productsTable.id]
+    }),
+    hasGroup: one(schema.addonGroupsTable, {
+        fields: [schema.productAddonGroupsTable.group_id],
+        references: [schema.addonGroupsTable.id]
+    })
+}));

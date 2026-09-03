@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { ShoppingBag, Plus, Trash2, Loader2, ArrowLeft, CheckCircle2, Wallet, Ban, Printer } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { ShoppingBag, Plus, Trash2, Loader2, ArrowLeft, CheckCircle2, Wallet, Ban, Printer, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DataTable } from "@/app/dashboard/reports/data-table";
@@ -30,7 +31,16 @@ import {
 
 type Supplier = { id: number; name: string };
 type Product = { id: string; product_name: string; price: string; buying_price: string; unit: string };
-type LineItem = { product_id: string; description: string; quantity: string; unit_price: string };
+type LineItem = {
+  product_id: string;
+  description: string;
+  quantity: string;
+  unit_price: string;
+  // Percentage (0-100), mirrors invoiceItems.discount_pct — the only discount
+  // shape the backend stores for a line. Reduces this line before the
+  // invoice-level Rp discount and tax.
+  discount_pct: string;
+};
 // `unit` is joined from the product, so it's null on product-less lines.
 type DetailItem = {
   id: number;
@@ -38,6 +48,7 @@ type DetailItem = {
   quantity: string;
   unit: string | null;
   unit_price: string;
+  discount_pct: string;
   line_total: string;
 };
 type DetailInvoice = PurchaseRow & {
@@ -65,7 +76,13 @@ const rupiah = (v: number | string) =>
     Number(v) || 0,
   );
 
-const emptyItem: LineItem = { product_id: "", description: "", quantity: "1", unit_price: "0" };
+const emptyItem: LineItem = {
+  product_id: "",
+  description: "",
+  quantity: "1",
+  unit_price: "0",
+  discount_pct: "0",
+};
 
 export function PurchaseClient() {
   const [view, setView] = useState<"list" | "create" | "detail">("list");
@@ -84,6 +101,9 @@ export function PurchaseClient() {
     supplier_id: "",
     due_date: "",
     tax_rate: "0",
+    // Invoice-level Rp discount, subtracted after the per-line discounts —
+    // same shape and same order of operations as the sales invoice form.
+    discount: "0",
     down_payment: "0",
     down_payment_method: "cash" as PaymentMethod,
     notes: "",
@@ -129,6 +149,7 @@ export function PurchaseClient() {
       supplier_id: "",
       due_date: "",
       tax_rate: "0",
+      discount: "0",
       down_payment: "0",
       down_payment_method: "cash",
       notes: "",
@@ -153,16 +174,27 @@ export function PurchaseClient() {
       unit_price: p ? p.buying_price || "0" : "0",
     });
   };
+  // Clamped to 0-100 on the way in, same as the sales form: a discount can't
+  // exceed the line, and the backend clamps again regardless.
+  const setDiscPct = (i: number, raw: string) => {
+    const cleaned = raw.replace(/[^\d.]/g, "");
+    setItem(i, { discount_pct: cleaned === "" ? "" : String(Math.min(100, Math.max(0, Number(cleaned) || 0))) });
+  };
 
   // ----- totals preview (mirrors backend computeTotals, non-inclusive) -----
   const totals = useMemo(() => {
-    const subtotal = form.items.reduce(
-      (s, it) => s + Number(it.quantity || 0) * Number(it.unit_price || 0),
-      0,
-    );
-    const taxAmount = (subtotal * Number(form.tax_rate || 0)) / 100;
-    return { subtotal, taxAmount, total: subtotal + taxAmount };
-  }, [form.items, form.tax_rate]);
+    const lineTotals = form.items.map((it) => {
+      const qty = Number(it.quantity || 0);
+      const price = Number(it.unit_price || 0);
+      const discPct = Math.min(100, Math.max(0, Number(it.discount_pct || 0)));
+      return qty * price * (1 - discPct / 100);
+    });
+    const subtotal = lineTotals.reduce((s, v) => s + v, 0);
+    const discount = Math.min(Number(form.discount || 0), subtotal);
+    const base = Math.max(0, subtotal - discount);
+    const taxAmount = (base * Number(form.tax_rate || 0)) / 100;
+    return { subtotal, discount, taxAmount, total: base + taxAmount };
+  }, [form.items, form.tax_rate, form.discount]);
 
   // DP clamped to [0, total] — mirrors the backend clamp so the preview matches.
   const dpAmount = Math.max(0, Math.min(Number(form.down_payment || 0), totals.total));
@@ -184,6 +216,7 @@ export function PurchaseClient() {
           supplier_id: form.supplier_id ? Number(form.supplier_id) : null,
           due_date: form.due_date || null,
           tax_rate: Number(form.tax_rate || 0),
+          discount: Number(form.discount || 0),
           down_payment: Number(form.down_payment || 0),
           down_payment_method: form.down_payment_method,
           notes: form.notes,
@@ -192,6 +225,7 @@ export function PurchaseClient() {
             description: it.description,
             quantity: Number(it.quantity),
             unit_price: Number(it.unit_price),
+            discount_pct: Number(it.discount_pct || 0),
           })),
         }),
       });
@@ -282,16 +316,26 @@ export function PurchaseClient() {
         <SheetHeader className="border-b">
           <SheetTitle>Catat Pembayaran</SheetTitle>
           <SheetDescription>
-            Faktur {payTarget?.number} — melunasi sisa tagihan{" "}
-            {payTarget ? rupiah(payTarget.remaining) : ""}.
+            {payTarget && payTarget.remaining <= 0
+              ? `Faktur ${payTarget.number} — tidak ada sisa tagihan.`
+              : `Faktur ${payTarget?.number} — melunasi sisa tagihan ${payTarget ? rupiah(payTarget.remaining) : ""}.`}
           </SheetDescription>
         </SheetHeader>
         {payTarget && (
           <div className="flex-1 space-y-4 overflow-y-auto p-4">
-            <PaymentMethodPicker value={payMethod} onChange={setPayMethod} />
-            <p className="text-[11px] text-muted-foreground">
-              Selain tunai, pembayaran dicatat sebagai transaksi non-tunai di arus kas.
-            </p>
+            {payTarget.remaining <= 0 ? (
+              <p className="rounded-lg border border-dashed border-emerald-300 bg-emerald-50 px-3 py-2 text-[13px] leading-relaxed text-emerald-800 dark:border-emerald-800/60 dark:bg-emerald-950/30 dark:text-emerald-200">
+                Tidak ada tagihan tersisa — faktur ini akan langsung ditandai{" "}
+                <span className="font-semibold">Lunas</span>, tanpa mencatat kas keluar.
+              </p>
+            ) : (
+              <>
+                <PaymentMethodPicker value={payMethod} onChange={setPayMethod} />
+                <p className="text-[11px] text-muted-foreground">
+                  Selain tunai, pembayaran dicatat sebagai transaksi non-tunai di arus kas.
+                </p>
+              </>
+            )}
           </div>
         )}
         <SheetFooter className="border-t">
@@ -301,7 +345,7 @@ export function PurchaseClient() {
             className="w-full bg-green-600 text-white hover:bg-green-700"
           >
             {paying && <Loader2 className="size-4 animate-spin" />}
-            Catat Pembayaran
+            {payTarget && payTarget.remaining <= 0 ? "Tandai Lunas" : "Catat Pembayaran"}
           </Button>
         </SheetFooter>
       </SheetContent>
@@ -360,6 +404,7 @@ export function PurchaseClient() {
                     <th className="px-3 py-2 text-right font-medium">Qty</th>
                     <th className="px-3 py-2 font-medium">UoM</th>
                     <th className="px-3 py-2 text-right font-medium">Harga</th>
+                    <th className="px-3 py-2 text-right font-medium">Diskon</th>
                     <th className="px-3 py-2 text-right font-medium">Jumlah</th>
                   </tr>
                 </thead>
@@ -370,6 +415,9 @@ export function PurchaseClient() {
                       <td className="px-3 py-2 text-right tabular-nums">{Number(it.quantity)}</td>
                       <td className="px-3 py-2 text-muted-foreground">{it.unit || "—"}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{rupiah(it.unit_price)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
+                        {Number(it.discount_pct) > 0 ? `${Number(it.discount_pct)}%` : "—"}
+                      </td>
                       <td className="px-3 py-2 text-right tabular-nums">{rupiah(it.line_total)}</td>
                     </tr>
                   ))}
@@ -382,6 +430,12 @@ export function PurchaseClient() {
                 <span>Subtotal</span>
                 <span className="tabular-nums">{rupiah(detail.subtotal)}</span>
               </div>
+              {Number(detail.discount) > 0 && (
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Diskon</span>
+                  <span className="tabular-nums">-{rupiah(detail.discount)}</span>
+                </div>
+              )}
               <div className="flex justify-between text-muted-foreground">
                 <span>Pajak ({Number(detail.tax_rate)}%)</span>
                 <span className="tabular-nums">{rupiah(detail.tax_amount)}</span>
@@ -553,58 +607,61 @@ export function PurchaseClient() {
           </label>
         </div>
 
-        <div className="rounded-xl border">
-          <div className="grid grid-cols-12 gap-2 border-b px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-            <div className="col-span-4">Produk</div>
-            <div className="col-span-1">UoM</div>
-            <div className="col-span-2 text-right">Qty</div>
-            <div className="col-span-2 text-right">Harga</div>
-            <div className="col-span-2 text-right">Subtotal</div>
-            <div className="col-span-1" />
+        <div className="overflow-x-auto rounded-xl border">
+          <div className="flex min-w-180 items-center gap-2 border-b px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            <div className="min-w-0 flex-1">Produk</div>
+            <div className="w-12">UoM</div>
+            <div className="w-20 text-right">Qty</div>
+            <div className="w-28 text-right">Harga</div>
+            <div className="w-16 text-right">Disk. %</div>
+            <div className="w-28 text-right">Subtotal</div>
+            <div className="w-8" />
           </div>
-          {form.items.map((it, i) => (
-            <div key={i} className="grid grid-cols-12 items-center gap-2 px-3 py-2">
-              <div className="col-span-4">
-                <select
-                  value={it.product_id}
-                  onChange={(e) => onPickProduct(i, e.target.value)}
-                  className="h-8 w-full rounded-md border bg-background px-2 text-sm"
-                >
-                  <option value="">— Pilih produk —</option>
-                  {products.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.product_name}
-                    </option>
-                  ))}
-                </select>
+          {form.items.map((it, i) => {
+            const discPct = Math.min(100, Math.max(0, Number(it.discount_pct || 0)));
+            const lineTotal = Number(it.quantity || 0) * Number(it.unit_price || 0) * (1 - discPct / 100);
+            return (
+              <div key={i} className="flex min-w-180 items-center gap-2 px-3 py-2">
+                <div className="min-w-0 flex-1">
+                  <ProductAutocomplete
+                    products={products}
+                    value={it.product_id}
+                    onSelect={(id) => onPickProduct(i, id)}
+                  />
+                </div>
+                {/* Read-only: the unit belongs to the product, so picking the
+                    product is what sets it. Blank until one is chosen. */}
+                <div className="w-12 truncate text-sm text-muted-foreground">
+                  {products.find((p) => p.id === it.product_id)?.unit || "—"}
+                </div>
+                <Input
+                  className="w-20 text-right"
+                  type="number"
+                  value={it.quantity}
+                  onChange={(e) => setItem(i, { quantity: e.target.value })}
+                />
+                <Input
+                  className="w-28 text-right"
+                  type="number"
+                  value={it.unit_price}
+                  onChange={(e) => setItem(i, { unit_price: e.target.value })}
+                />
+                <Input
+                  className="w-16 text-right"
+                  inputMode="numeric"
+                  placeholder="0"
+                  value={it.discount_pct}
+                  onChange={(e) => setDiscPct(i, e.target.value)}
+                />
+                <div className="w-28 text-right text-sm tabular-nums">{rupiah(lineTotal)}</div>
+                <div className="w-8 text-right">
+                  <Button variant="ghost" size="icon-sm" onClick={() => removeItem(i)}>
+                    <Trash2 className="size-3.5 text-destructive" />
+                  </Button>
+                </div>
               </div>
-              {/* Read-only: the unit belongs to the product, so picking the
-                  product is what sets it. Blank until one is chosen. */}
-              <div className="col-span-1 truncate text-sm text-muted-foreground">
-                {products.find((p) => p.id === it.product_id)?.unit || "—"}
-              </div>
-              <Input
-                className="col-span-2 text-right"
-                type="number"
-                value={it.quantity}
-                onChange={(e) => setItem(i, { quantity: e.target.value })}
-              />
-              <Input
-                className="col-span-2 text-right"
-                type="number"
-                value={it.unit_price}
-                onChange={(e) => setItem(i, { unit_price: e.target.value })}
-              />
-              <div className="col-span-2 text-right text-sm tabular-nums">
-                {rupiah(Number(it.quantity || 0) * Number(it.unit_price || 0))}
-              </div>
-              <div className="col-span-1 text-right">
-                <Button variant="ghost" size="icon-sm" onClick={() => removeItem(i)}>
-                  <Trash2 className="size-3.5 text-destructive" />
-                </Button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
           <div className="px-3 py-2">
             <Button variant="outline" size="sm" onClick={addItem}>
               <Plus className="size-3.5" /> Tambah Item
@@ -613,6 +670,17 @@ export function PurchaseClient() {
         </div>
 
         <div className="ml-auto w-full max-w-xs space-y-3">
+          <label className="block space-y-1.5 text-xs font-medium text-muted-foreground">
+            <span>Diskon Faktur (Rp)</span>
+            <Input
+              type="number"
+              value={form.discount}
+              onChange={(e) => setForm({ ...form, discount: e.target.value })}
+            />
+            <span className="text-[10px] text-muted-foreground">
+              Diskon keseluruhan dari supplier, di luar diskon per-item.
+            </span>
+          </label>
           <label className="block space-y-1.5 text-xs font-medium text-muted-foreground">
             <span className="flex items-center gap-1.5">
               <Wallet className="size-3.5" /> Uang Muka / DP (Rp)
@@ -636,6 +704,7 @@ export function PurchaseClient() {
 
           <div className="space-y-1 text-sm">
             <Row label="Subtotal" value={rupiah(totals.subtotal)} />
+            {totals.discount > 0 && <Row label="Diskon" value={`-${rupiah(totals.discount)}`} />}
             <Row label={`Pajak (${form.tax_rate || 0}%)`} value={rupiah(totals.taxAmount)} />
             <Row label="Total" value={rupiah(totals.total)} bold />
             {dpAmount > 0 && (
@@ -714,6 +783,153 @@ function Row({ label, value, bold }: { label: string; value: string; bold?: bool
     <div className={`flex justify-between ${bold ? "border-t pt-1 font-semibold" : "text-muted-foreground"}`}>
       <span>{label}</span>
       <span className="tabular-nums">{value}</span>
+    </div>
+  );
+}
+
+// A type-to-filter product field, replacing what used to be a plain <select>.
+// A native dropdown makes an owner scroll a flat, unsorted list of everything
+// in the catalogue to find one item; this narrows as they type and still
+// degrades to "browse everything" when the field is empty.
+function ProductAutocomplete({
+  products,
+  value,
+  onSelect,
+}: {
+  products: Product[];
+  value: string;
+  onSelect: (productId: string) => void;
+}) {
+  const selected = products.find((p) => p.id === value) ?? null;
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  // Rendered through a portal (below), so its own z-index can't help it escape
+  // an ancestor's clip — the row list scrolls horizontally in a box with
+  // overflow-x-auto, and per the CSS spec that silently forces overflow-y to
+  // 'auto' too, so a plain absolutely-positioned dropdown got cut off at the
+  // table's border no matter how high z went. Tracking the input's own
+  // viewport rect and painting the list at document.body sidesteps both the
+  // clipping and any stacking-context ceiling from an ancestor.
+  const [rect, setRect] = useState<{ top: number; left: number; width: number } | null>(null);
+
+  // What's actually shown in the field: the typed filter while open, the
+  // selected product's name while closed. Never both at once — reopening
+  // starts from blank so retyping doesn't fight the old query.
+  const displayValue = open ? query : selected?.product_name ?? "";
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const list = q ? products.filter((p) => p.product_name.toLowerCase().includes(q)) : products;
+    return list.slice(0, 30); // enough to scroll, not enough to jank on a big catalogue
+  }, [products, query]);
+
+  // Reset the highlighted row wherever the list can change out from under it —
+  // set directly at each call site instead of syncing via an effect, since
+  // there is no external system here to synchronize with.
+  const retarget = (next: string) => {
+    setQuery(next);
+    setActiveIndex(0);
+  };
+
+  const measure = () => {
+    const el = inputRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setRect({ top: r.bottom + 4, left: r.left, width: r.width });
+  };
+
+  // The portal is an external system relative to this component (a DOM node
+  // outside React's tree, positioned from the live layout) — an effect
+  // syncing to it while open is exactly what effects are for, unlike the
+  // in-tree state reset above.
+  useEffect(() => {
+    if (!open) return;
+    measure();
+    // Capture phase so this also catches the row list's own horizontal
+    // scroll, not just the window's.
+    window.addEventListener("scroll", measure, true);
+    window.addEventListener("resize", measure);
+    return () => {
+      window.removeEventListener("scroll", measure, true);
+      window.removeEventListener("resize", measure);
+    };
+  }, [open]);
+
+  const pick = (p: Product) => {
+    onSelect(p.id);
+    setQuery("");
+    setOpen(false);
+  };
+
+  return (
+    <div className="relative">
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          ref={inputRef}
+          value={displayValue}
+          placeholder="Cari produk…"
+          onFocus={() => {
+            setOpen(true);
+            retarget("");
+          }}
+          onChange={(e) => {
+            retarget(e.target.value);
+            setOpen(true);
+          }}
+          onKeyDown={(e) => {
+            if (!open) return;
+            if (e.key === "ArrowDown") {
+              e.preventDefault();
+              setActiveIndex((i) => Math.min(i + 1, filtered.length - 1));
+            } else if (e.key === "ArrowUp") {
+              e.preventDefault();
+              setActiveIndex((i) => Math.max(i - 1, 0));
+            } else if (e.key === "Enter") {
+              e.preventDefault();
+              if (filtered[activeIndex]) pick(filtered[activeIndex]);
+            } else if (e.key === "Escape") {
+              setOpen(false);
+              setQuery("");
+              inputRef.current?.blur();
+            }
+          }}
+          onBlur={() => setOpen(false)}
+          className="h-8 w-full pl-7 text-sm"
+        />
+      </div>
+      {open &&
+        rect &&
+        createPortal(
+          <div
+            style={{ position: "fixed", top: rect.top, left: rect.left, width: Math.max(rect.width, 224) }}
+            className="z-50 max-h-56 overflow-y-auto rounded-md border bg-popover shadow-md"
+          >
+            {filtered.length === 0 ? (
+              <div className="px-2.5 py-2 text-xs text-muted-foreground">Tidak ada produk cocok.</div>
+            ) : (
+              filtered.map((p, idx) => (
+                <button
+                  type="button"
+                  key={p.id}
+                  // preventDefault keeps focus on the input, so this fires
+                  // instead of the blur above swallowing the click.
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => pick(p)}
+                  className={`flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left text-sm transition-colors ${
+                    idx === activeIndex ? "bg-muted" : "hover:bg-muted/60"
+                  } ${p.id === value ? "font-semibold" : ""}`}
+                >
+                  <span className="truncate">{p.product_name}</span>
+                  <span className="shrink-0 text-[10px] text-muted-foreground">{p.unit}</span>
+                </button>
+              ))
+            )}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

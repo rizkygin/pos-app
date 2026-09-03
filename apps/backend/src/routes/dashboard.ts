@@ -16,6 +16,7 @@ import {
   sum,
 } from "drizzle-orm";
 import { db } from "../db";
+import { parentLinesOnly } from "../lib/addons";
 import {
   couriersTable,
   courierSessionsTable,
@@ -97,7 +98,10 @@ export async function dashboardRoutes(app: FastifyInstance) {
       .select({
         orderId: ordersTable.id,
         status: ordersTable.status,
-        itemCount: sum(orderDetailsTable.quantity).mapWith(Number),
+        // FILTER, not a join condition: this query counts items and sums money
+        // in one pass, and the two disagree about add-ons (lib/addons.ts).
+        // Narrowing the LEFT JOIN instead would also drop the revenue.
+        itemCount: sql<number>`coalesce(sum(${orderDetailsTable.quantity}) filter (where ${orderDetailsTable.parent_detail_id} is null), 0)`.mapWith(Number),
         totalAmount: sum(
           sql<number>`CAST(${orderDetailsTable.summary_price} AS NUMERIC)`,
         ).mapWith(Number),
@@ -468,7 +472,8 @@ export async function dashboardRoutes(app: FastifyInstance) {
       const [{ itemCount }] = await db
         .select({ itemCount: count(orderDetailsTable.id) })
         .from(orderDetailsTable)
-        .where(eq(orderDetailsTable.order_id, activeOrder.id));
+        // "How many things to hand over" — a topping is not one of them.
+        .where(and(eq(orderDetailsTable.order_id, activeOrder.id), parentLinesOnly));
       currentPickUpItems = itemCount;
     }
 
@@ -545,15 +550,17 @@ export async function dashboardRoutes(app: FastifyInstance) {
             FROM ${orderDetailsTable}
             JOIN ${productsTable} ON ${productsTable.id} = ${orderDetailsTable.product_id}
             WHERE ${orderDetailsTable.order_id} = ${ordersTable.id}
+              AND ${orderDetailsTable.parent_detail_id} IS NULL
             ORDER BY ${orderDetailsTable.id}
             LIMIT 1
           )`,
           outletAvatar: outletsTable.avatar,
-          itemCount: sum(orderDetailsTable.quantity).mapWith(Number),
+          itemCount: sql<number>`coalesce(sum(${orderDetailsTable.quantity}) filter (where ${orderDetailsTable.parent_detail_id} is null), 0)`.mapWith(Number),
           totalAmount: sum(
             sql<number>`CAST(${orderDetailsTable.summary_price} AS NUMERIC)`,
           ).mapWith(Number),
-          itemNames: sql<string[]>`array_agg(${productsTable.product_name})`,
+          // The preview strip names the dishes, not their toppings.
+          itemNames: sql<string[]>`array_agg(${productsTable.product_name}) filter (where ${orderDetailsTable.parent_detail_id} is null)`,
         })
         .from(ordersTable)
         .innerJoin(outletsTable, eq(ordersTable.outlet_id, outletsTable.id))

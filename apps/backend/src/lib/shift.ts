@@ -163,8 +163,14 @@ export async function buildShiftReport(
                   else coalesce(o.tax_amount, 0) end as tax_on_top,
              coalesce((select sum(${money(sql`od.summary_price`)})
                          from "orderDetails" od where od.order_id = o.id), 0) as gross,
+             -- Parents only, unlike gross directly above: an add-on is money
+             -- but it is not a separate thing handed over the counter, so one
+             -- nasi goreng with two toppings is 1 item and 3 rows. See the
+             -- reader rule in lib/addons.ts.
              coalesce((select sum(od.quantity)
-                         from "orderDetails" od where od.order_id = o.id), 0) as items
+                         from "orderDetails" od
+                        where od.order_id = o.id
+                          and od.parent_detail_id is null), 0) as items
         from orders o
        where o.shift_id = ${shiftId}
          and o.deleted_at is null

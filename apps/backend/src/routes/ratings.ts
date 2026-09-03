@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { and, asc, avg, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db";
+import { parentLinesOnly } from "../lib/addons";
 import {
   couriersTable,
   customersTable,
@@ -63,7 +64,10 @@ async function ratingAnchorDetail(orderId: string) {
   const [detail] = await db
     .select({ id: orderDetailsTable.id })
     .from(orderDetailsTable)
-    .where(eq(orderDetailsTable.order_id, orderId))
+    // Parents only. ratings.order_details_id must never point at an add-on:
+    // "3 bintang untuk Telur" is not a review anyone asked for, and the anchor
+    // has to be a row the customer would recognise as what they ordered.
+    .where(and(eq(orderDetailsTable.order_id, orderId), parentLinesOnly))
     .orderBy(asc(orderDetailsTable.id))
     .limit(1);
   return detail ?? null;
@@ -167,7 +171,8 @@ export async function ratingRoutes(app: FastifyInstance) {
       })
       .from(orderDetailsTable)
       .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
-      .where(eq(orderDetailsTable.order_id, orderId));
+      // Add-ons are not rated separately from the dish they came on.
+      .where(and(eq(orderDetailsTable.order_id, orderId), parentLinesOnly));
     if (products.length === 0) return reply.send({ ok: false });
 
     if (await alreadyRatedOrder(session.user.id, orderId)) return reply.send({ ok: false });
@@ -367,7 +372,8 @@ export async function ratingRoutes(app: FastifyInstance) {
       })
       .from(orderDetailsTable)
       .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
-      .where(eq(orderDetailsTable.order_id, orderId));
+      // Add-ons are not rated separately from the dish they came on.
+      .where(and(eq(orderDetailsTable.order_id, orderId), parentLinesOnly));
     if (products.length === 0) return reply.send({ ok: false });
 
     if (await alreadyRatedOrder(session.user.id, orderId)) return reply.send({ ok: false });

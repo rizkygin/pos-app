@@ -228,7 +228,12 @@ const lineAgg = (over: SQL) => sql`
   select od.order_id,
          coalesce(sum(${money(sql`od.summary_price`)}), 0) as revenue,
          ${orderCogsSql(sql`od.order_id`)} as cogs,
-         coalesce(sum(od.quantity), 0) as qty
+         -- FILTER, not a WHERE: revenue above sums EVERY row (an add-on's
+         -- summary_price is real money) while the item count must see only the
+         -- lines the customer ordered, and both come out of this one pass.
+         -- Narrowing the whole query instead would drop add-on revenue from
+         -- every report. See the reader rule in lib/addons.ts.
+         coalesce(sum(od.quantity) filter (where od.parent_detail_id is null), 0) as qty
   from "orderDetails" od
   join products p on p.id = od.product_id
   where od.order_id in (select id from ${over})

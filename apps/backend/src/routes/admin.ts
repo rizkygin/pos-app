@@ -1244,6 +1244,8 @@ export async function adminRoutes(app: FastifyInstance) {
     const items = await db
       .select({
         detail_id: orderDetailsTable.id,
+        // Non-null on an add-on — see orderDetails.parent_detail_id.
+        parent_detail_id: orderDetailsTable.parent_detail_id,
         quantity: orderDetailsTable.quantity,
         note: orderDetailsTable.note_product,
         summary_price: orderDetailsTable.summary_price,
@@ -1254,7 +1256,9 @@ export async function adminRoutes(app: FastifyInstance) {
       })
       .from(orderDetailsTable)
       .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
-      .where(eq(orderDetailsTable.order_id, orderId));
+      .where(eq(orderDetailsTable.order_id, orderId))
+      // Parents before their own add-ons.
+      .orderBy(asc(orderDetailsTable.id));
 
     return reply.send({ success: true, order, items });
   });

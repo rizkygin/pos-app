@@ -18,6 +18,10 @@ export type StockRow = {
   has_recipe: boolean;
   // Default batch size for the production dialog, straight from the product.
   yield_qty: number;
+  // The cost ledger has never priced this product (avg_cost is still 0), so
+  // buying_price above is a hand-typed estimate rather than something the system
+  // computed. Opname offers to fill it in; until then its value is a guess.
+  needs_cost: boolean;
 };
 
 const sortHeader = (label: string) =>

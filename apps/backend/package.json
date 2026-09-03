@@ -15,6 +15,7 @@
     "db:backfill-subs": "tsx src/db/backfill-subscriptions.ts",
     "db:seed-materials": "tsx src/db/seed-building-materials.ts",
     "db:seed-fnb": "tsx src/db/seed-fnb-cafe.ts",
+    "db:seed-addons": "tsx src/db/seed-addons.ts",
     "db:seed-courier": "tsx src/db/seed-courier.ts",
     "db:seed-courier-week": "tsx src/db/seed-courier-week.ts"
   },

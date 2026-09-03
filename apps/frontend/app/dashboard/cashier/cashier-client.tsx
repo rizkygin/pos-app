@@ -2282,12 +2282,13 @@ export const CashierClient = ({
             >
               <Printer className="h-4 w-4" />
             </Button>
+            {/* make this hidden because im not tested it out in the real device of thermal printer. */}
             <Button
               type="button"
               variant="outline"
               onClick={openLabelPreview}
               disabled={cart.length === 0}
-              className="h-10 w-10 shrink-0 rounded-xl border-2 p-0"
+              className="h-10 w-10 shrink-0 rounded-xl border-2 p-0 hidden"
               title="Pratinjau & cetak label produk"
               aria-label="Cetak label produk"
             >

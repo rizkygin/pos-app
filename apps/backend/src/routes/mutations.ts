@@ -24,6 +24,7 @@ import { CATEGORY_POS_SALE, CATEGORY_POS_CANCELLATION } from "../lib/cashflow-ca
 import { parsePosPaymentMethod, posCashflowTypeFor } from "../lib/pos-payment";
 import { getOpenShiftId } from "../lib/shift";
 import { computeTax, taxConfigFrom } from "../lib/tax";
+import { resolveAddons } from "../lib/addons";
 import { normalizeIndonesianPhone } from "../lib/utils/phone";
 import { DEFAULT_COORDS, parseCoordPair } from "../lib/utils/coords";
 import { isWithinServiceArea } from "../lib/service-area";
@@ -223,6 +224,22 @@ export async function mutationRoutes(app: FastifyInstance) {
                   ? parseFloat(item.product.price_mark_down) * qty
                   : parseFloat(item.product.price) * qty;
 
+              // Priced and sized before the parent row is written, so a bad
+              // add-on payload fails before anything has been committed rather
+              // than half way through the line. See lib/addons.ts for why the
+              // price comes from the client and a vanished option is tolerated.
+              const { resolved: addons, dropped } = await resolveAddons(
+                body.outletId,
+                qty,
+                item.addons,
+              );
+              if (dropped.length > 0) {
+                app.log.warn(
+                  { orderId: new_order_id, outletId: body.outletId, dropped },
+                  "POS add-ons dropped: not products of this outlet",
+                );
+              }
+
               // `returning` because the movements written just below have to
               // carry this row's id — see orderDetailId there.
               const [detail] = await tx
@@ -260,6 +277,50 @@ export async function mutationRoutes(app: FastifyInstance) {
                 orderDetailId: detail.id,
                 note: `POS ${new_order_id}`,
               });
+
+              // ── Add-ons: child lines of the one just written ──────────────
+              //
+              // Each is an ordinary order line that happens to point at its
+              // parent, so it takes the SAME two steps the parent just took —
+              // freeze its own unit_cost, then move its own stock — and by
+              // doing so inherits the whole cost ledger for free. Nothing in
+              // lib/cogs.ts or lib/stock.ts knows add-ons exist.
+              //
+              // The two things that must not drift:
+              //   * orderDetailId is the CHILD's id, never the parent's. It is
+              //     what attributes an add-on's ingredients to the add-on
+              //     rather than to the dish.
+              //   * summary_price on this row is the ADD-ON's price alone. The
+              //     parent keeps the base price it was written with; folding
+              //     the add-on into it would count the money twice, because the
+              //     order total is a plain sum over every line.
+              for (const addon of addons) {
+                const [addonDetail] = await tx
+                  .insert(orderDetailsTable)
+                  .values({
+                    order_id: new_order_id,
+                    product_id: addon.product_id,
+                    quantity: addon.quantity,
+                    parent_detail_id: detail.id,
+                    // Deliberately no note: the kitchen instruction belongs to
+                    // the dish, and repeating it per topping would print it
+                    // three times on the ticket.
+                    note_product: "-",
+                    summary_price: addon.summary_price.toString(),
+                    status: "checkout",
+                    unit_cost: lineUnitCostSql(addon.product_id),
+                  })
+                  .returning({ id: orderDetailsTable.id });
+
+                await applySaleStockOut(tx, {
+                  outletId: body.outletId,
+                  productId: addon.product_id,
+                  qty: addon.quantity,
+                  orderId: new_order_id,
+                  orderDetailId: addonDetail.id,
+                  note: `POS ${new_order_id}`,
+                });
+              }
             }
           }
 

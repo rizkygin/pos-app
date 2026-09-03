@@ -98,6 +98,28 @@ function computeTotals(
   return { lines, subtotal, tax_amount, total };
 }
 
+// A sales line priced at 0 is either a forgotten price or a giveaway. Left
+// alone the two are indistinguishable, and the invoice keeps no record of
+// what was actually waived — it just silently books the item as worth
+// nothing. Requiring a 100% line discount instead keeps the real price on the
+// printed invoice with a line through it, and lets anything reading
+// discount_pct tell "given away" from "never priced".
+//
+// Sales only: a purchase line at 0 is a supplier freebie (a promo sample, a
+// bonus unit) — a normal thing for a SUPPLIER to hand over — so it is not
+// gated here, and this is never called from the purchase-invoice routes.
+function rejectZeroPriceLines(items: ItemInput[]): string | null {
+  for (const it of items) {
+    const price = Number(it.unit_price ?? 0);
+    const discPct = Math.min(100, Math.max(0, Number(it.discount_pct ?? 0)));
+    if (!(price > 0) && discPct < 100) {
+      const label = it.description?.trim() || "Salah satu item";
+      return `${label}: harga satuan tidak boleh 0 — isi harga aslinya, lalu beri diskon 100% kalau memang digratiskan.`;
+    }
+  }
+  return null;
+}
+
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 type PaymentMethod = (typeof INVOICE_PAYMENT_METHOD.enumValues)[number];
@@ -597,17 +619,28 @@ export async function invoiceRoutes(app: FastifyInstance) {
           .where(eq(invoicesTable.id, id))
           .returning();
 
-        // Book the agreed down payment as the first cash-out. Status becomes
-        // partial (or paid, if the DP covers the whole invoice).
-        const dp = Math.min(Number(invoice.down_payment), Number(invoice.total));
-        if (dp > 0) {
-          updated = await recordPurchaseCashOut(
-            tx,
-            outlet.id,
-            { id, total: invoice.total, amount_paid: invoice.amount_paid },
-            dp,
-            invoice.down_payment_method,
-          );
+        if (Number(invoice.total) <= 0) {
+          // Fully waived — nothing to pay out, so "posted" would otherwise
+          // wait forever on a Bayar action whose amount can never be > 0.
+          // Settle it the instant it posts; no cashflow row, no cash moved.
+          [updated] = await tx
+            .update(invoicesTable)
+            .set({ status: "paid" })
+            .where(eq(invoicesTable.id, id))
+            .returning();
+        } else {
+          // Book the agreed down payment as the first cash-out. Status becomes
+          // partial (or paid, if the DP covers the whole invoice).
+          const dp = Math.min(Number(invoice.down_payment), Number(invoice.total));
+          if (dp > 0) {
+            updated = await recordPurchaseCashOut(
+              tx,
+              outlet.id,
+              { id, total: invoice.total, amount_paid: invoice.amount_paid },
+              dp,
+              invoice.down_payment_method,
+            );
+          }
         }
         return updated;
       });
@@ -642,6 +675,19 @@ export async function invoiceRoutes(app: FastifyInstance) {
         const total = Number(invoice.total);
         const alreadyPaid = Number(invoice.amount_paid);
         const remaining = +(total - alreadyPaid).toFixed(2);
+
+        // Nothing left to pay out — the /post route now settles a fully
+        // waived invoice immediately, but this still heals any that were
+        // posted before that existed. No cashflow row: no cash moved.
+        if (remaining <= 0.001) {
+          const [paid] = await tx
+            .update(invoicesTable)
+            .set({ status: "paid" })
+            .where(eq(invoicesTable.id, id))
+            .returning();
+          return paid;
+        }
+
         const amount = body.amount != null ? Number(body.amount) : remaining;
         if (!(amount > 0) || amount > remaining + 0.001) throw new Error("BAD_AMOUNT");
 
@@ -860,6 +906,8 @@ export async function invoiceRoutes(app: FastifyInstance) {
 
     const items = Array.isArray(body.items) ? body.items : [];
     if (items.length === 0) return reply.status(400).send({ success: false, error: "Minimal satu item" });
+    const zeroPriceError = rejectZeroPriceLines(items);
+    if (zeroPriceError) return reply.status(400).send({ success: false, error: zeroPriceError });
 
     const taxRate = Number(body.tax_rate ?? 0);
     const discount = Number(body.discount ?? 0);
@@ -937,6 +985,8 @@ export async function invoiceRoutes(app: FastifyInstance) {
 
     const items = Array.isArray(body.items) ? body.items : [];
     if (items.length === 0) return reply.status(400).send({ success: false, error: "Minimal satu item" });
+    const zeroPriceError = rejectZeroPriceLines(items);
+    if (zeroPriceError) return reply.status(400).send({ success: false, error: zeroPriceError });
 
     const taxRate = Number(body.tax_rate ?? 0);
     const discount = Number(body.discount ?? 0);
@@ -1041,17 +1091,30 @@ export async function invoiceRoutes(app: FastifyInstance) {
           .where(eq(invoicesTable.id, id))
           .returning();
 
-        // Book the agreed down payment as the first payment. Status becomes
-        // partial (or paid, if the DP covers the whole invoice).
-        const dp = Math.min(Number(invoice.down_payment), Number(invoice.total));
-        if (dp > 0) {
-          updated = await recordSalesCashIn(
-            tx,
-            outlet.id,
-            { id, total: invoice.total, amount_paid: invoice.amount_paid },
-            dp,
-            invoice.down_payment_method,
-          );
+        if (Number(invoice.total) <= 0) {
+          // Fully waived (every line 100%-discounted, or an invoice-level
+          // discount that ate the whole subtotal): there is nothing to
+          // collect, so "posted" would otherwise wait forever on a Bayar
+          // action whose amount can never be > 0. Settle it the instant it
+          // posts — no cashflow row, because no cash moved.
+          [updated] = await tx
+            .update(invoicesTable)
+            .set({ status: "paid" })
+            .where(eq(invoicesTable.id, id))
+            .returning();
+        } else {
+          // Book the agreed down payment as the first payment. Status becomes
+          // partial (or paid, if the DP covers the whole invoice).
+          const dp = Math.min(Number(invoice.down_payment), Number(invoice.total));
+          if (dp > 0) {
+            updated = await recordSalesCashIn(
+              tx,
+              outlet.id,
+              { id, total: invoice.total, amount_paid: invoice.amount_paid },
+              dp,
+              invoice.down_payment_method,
+            );
+          }
         }
         return { updated, warnings };
       });
@@ -1084,6 +1147,19 @@ export async function invoiceRoutes(app: FastifyInstance) {
         const total = Number(invoice.total);
         const alreadyPaid = Number(invoice.amount_paid);
         const remaining = +(total - alreadyPaid).toFixed(2);
+
+        // Nothing left to collect — the /post route now settles a fully
+        // waived invoice immediately, but this still heals any that were
+        // posted before that existed. No cashflow row: no cash moved.
+        if (remaining <= 0.001) {
+          const [paid] = await tx
+            .update(invoicesTable)
+            .set({ status: "paid" })
+            .where(eq(invoicesTable.id, id))
+            .returning();
+          return paid;
+        }
+
         const amount = body.amount != null ? Number(body.amount) : remaining;
         if (!(amount > 0) || amount > remaining + 0.001) throw new Error("BAD_AMOUNT");
 
@@ -1505,7 +1581,12 @@ export async function invoiceRoutes(app: FastifyInstance) {
     if (!outlet) return;
     const body = request.body as {
       note?: string;
-      items?: { product_id: string; counted: number | string }[];
+      // unit_cost is OPTIONAL and only ever honoured for a product whose running
+      // average is still 0 — stock that has never been bought through an invoice
+      // and therefore carries no cost the ledger could have learned. It can
+      // never overwrite an average the ledger computed itself; that number is
+      // the whole reason the ledger is trusted over the product form.
+      items?: { product_id: string; counted: number | string; unit_cost?: number | string }[];
     };
     const items = Array.isArray(body.items) ? body.items : [];
     if (items.length === 0) return reply.status(400).send({ success: false, error: "Tidak ada item" });
@@ -1521,26 +1602,65 @@ export async function invoiceRoutes(app: FastifyInstance) {
           // Re-read current stock inside the txn so the delta is correct even if
           // stock changed since the page loaded. Scoped to this outlet + tracked.
           const [p] = await tx
-            .select({ stock: productsTable.stock, track_stock: productsTable.track_stock })
+            .select({
+              stock: productsTable.stock,
+              track_stock: productsTable.track_stock,
+              avg_cost: productsTable.avg_cost,
+              unit: productsTable.unit,
+            })
             .from(productsTable)
             .where(and(eq(productsTable.id, it.product_id), eq(productsTable.outlet_id, outlet.id)))
             .limit(1);
           if (!p || !p.track_stock) continue;
-          const delta = +(counted - Number(p.stock)).toFixed(2);
-          if (delta === 0) continue;
+          const onHand = Number(p.stock) || 0;
+          const avg = Number(p.avg_cost) || 0;
+          const delta = +(counted - onHand).toFixed(2);
+
+          // A cost the owner typed for a product the ledger cannot price. Only
+          // when the average really is 0: an established average is the ledger's
+          // own arithmetic and opname does not get to argue with it.
+          const typed = Number(it.unit_cost);
+          const setsCost = avg === 0 && Number.isFinite(typed) && typed > 0;
+
+          let touched = false;
+
+          // Stock already on the shelf, valued at nothing. Say what it is worth
+          // FIRST, so the count difference below is then valued at that same
+          // number instead of at zero.
+          if (setsCost && onHand > 0) {
+            await postMovement(tx, {
+              outletId: outlet.id,
+              productId: it.product_id,
+              qtyChange: 0,
+              unitCost: typed,
+              reason: "adjustment",
+              note: `${note} · HPP awal ${Math.round(typed)}/${p.unit}`,
+            });
+            touched = true;
+          }
+
           // Valued at the running average in both directions: shrinkage is
           // stock worth what the rest of the shelf is worth, and a surplus found
           // during a count is stock that was always there, not a purchase. Note
           // this posts the DELTA rather than setting the count absolutely — same
           // resulting quantity, but it goes through the one ledger writer.
-          await postMovement(tx, {
-            outletId: outlet.id,
-            productId: it.product_id,
-            qtyChange: delta,
-            reason: "adjustment",
-            note,
-          });
-          count++;
+          //
+          // The one exception is a surplus onto an EMPTY shelf priced at 0: the
+          // revaluation above had nothing to revalue, so the incoming quantity
+          // has to carry the cost itself.
+          if (delta !== 0) {
+            await postMovement(tx, {
+              outletId: outlet.id,
+              productId: it.product_id,
+              qtyChange: delta,
+              ...(setsCost && onHand <= 0 && delta > 0 ? { unitCost: typed } : {}),
+              reason: "adjustment",
+              note,
+            });
+            touched = true;
+          }
+
+          if (touched) count++;
         }
         return count;
       });

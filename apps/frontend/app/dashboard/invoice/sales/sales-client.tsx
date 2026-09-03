@@ -310,9 +310,21 @@ export function SalesClient() {
     return { subtotal, discount: disc, tax, total: base + tax };
   }, [cart, taxRate, discount]);
 
+  // A line priced at 0 is either a forgotten price or a giveaway, and printed
+  // that way it looks identical either way. Caught here so the owner sees
+  // which line before the round trip — the server enforces the same rule and
+  // is the actual source of truth.
+  const zeroPriceLine = cart.find((i) => !(Number(i.unit_price) > 0) && lineDiscountPct(i) < 100);
+
   const save = async () => {
     if (cart.length === 0) {
       setError("Pilih minimal satu produk.");
+      return;
+    }
+    if (zeroPriceLine) {
+      setError(
+        `${zeroPriceLine.product.product_name}: harga satuan tidak boleh 0 — isi harga aslinya, lalu beri diskon 100% kalau memang digratiskan.`,
+      );
       return;
     }
     setSaving(true);
@@ -372,7 +384,10 @@ export function SalesClient() {
     if (!payTarget) return;
     const remaining = Math.max(0, +(payTarget.total - payTarget.paid).toFixed(2));
     const amount = Number(payAmount);
-    if (!(amount > 0) || amount > remaining) {
+    // A fully waived invoice (or one already paid down to zero) has nothing
+    // left to collect — the server settles it without a cash amount, so the
+    // client shouldn't demand one either.
+    if (remaining > 0 && (!(amount > 0) || amount > remaining)) {
       setPayError(`Nominal harus lebih dari 0 dan maksimal ${rupiah(remaining)}.`);
       return;
     }
@@ -473,52 +488,61 @@ export function SalesClient() {
               </div>
             </div>
 
-            <label className="block space-y-1.5">
-              <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                <Wallet className="size-3.5" /> Nominal Pembayaran
-              </span>
-              <div className="relative">
-                <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
-                  Rp
-                </span>
-                <Input
-                  inputMode="numeric"
-                  value={formatNumberInput(payAmount)}
-                  onChange={(e) => setPayAmount(parseNumberInput(e.target.value))}
-                  className="pl-8 text-right tabular-nums"
-                />
-              </div>
-            </label>
+            {payRemaining <= 0 ? (
+              <p className="rounded-lg border border-dashed border-emerald-300 bg-emerald-50 px-3 py-2 text-[13px] leading-relaxed text-emerald-800 dark:border-emerald-800/60 dark:bg-emerald-950/30 dark:text-emerald-200">
+                Tidak ada tagihan tersisa — faktur ini akan langsung ditandai{" "}
+                <span className="font-semibold">Lunas</span>, tanpa mencatat kas masuk.
+              </p>
+            ) : (
+              <>
+                <label className="block space-y-1.5">
+                  <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                    <Wallet className="size-3.5" /> Nominal Pembayaran
+                  </span>
+                  <div className="relative">
+                    <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                      Rp
+                    </span>
+                    <Input
+                      inputMode="numeric"
+                      value={formatNumberInput(payAmount)}
+                      onChange={(e) => setPayAmount(parseNumberInput(e.target.value))}
+                      className="pl-8 text-right tabular-nums"
+                    />
+                  </div>
+                </label>
 
-            {/* Quick fills: common DP percentages (of the invoice total, capped
-                at the remaining balance) + full settlement. */}
-            <div className="flex flex-wrap gap-2">
-              {[30, 50].map((pct) => {
-                const v = Math.min(payRemaining, +((payTarget.total * pct) / 100).toFixed(2));
-                return (
-                  <Button
-                    key={pct}
-                    size="sm"
-                    variant="outline"
-                    disabled={v <= 0}
-                    onClick={() => setPayAmount(String(v))}
-                  >
-                    DP {pct}%
+                {/* Quick fills: common DP percentages (of the invoice total,
+                    capped at the remaining balance) + full settlement. */}
+                <div className="flex flex-wrap gap-2">
+                  {[30, 50].map((pct) => {
+                    const v = Math.min(payRemaining, +((payTarget.total * pct) / 100).toFixed(2));
+                    return (
+                      <Button
+                        key={pct}
+                        size="sm"
+                        variant="outline"
+                        disabled={v <= 0}
+                        onClick={() => setPayAmount(String(v))}
+                      >
+                        DP {pct}%
+                      </Button>
+                    );
+                  })}
+                  <Button size="sm" variant="outline" onClick={() => setPayAmount(String(payRemaining))}>
+                    Lunas ({rupiah(payRemaining)})
                   </Button>
-                );
-              })}
-              <Button size="sm" variant="outline" onClick={() => setPayAmount(String(payRemaining))}>
-                Lunas ({rupiah(payRemaining)})
-              </Button>
-            </div>
+                </div>
 
-            <PaymentMethodPicker value={payMethod} onChange={setPayMethod} />
+                <PaymentMethodPicker value={payMethod} onChange={setPayMethod} />
 
-            <p className="text-[11px] text-muted-foreground">
-              Pembayaran sebagian membuat status faktur menjadi{" "}
-              <span className="font-medium">Sebagian</span>; sisa tagihan bisa dibayar lagi kapan saja
-              lewat tombol Bayar yang sama.
-            </p>
+                <p className="text-[11px] text-muted-foreground">
+                  Pembayaran sebagian membuat status faktur menjadi{" "}
+                  <span className="font-medium">Sebagian</span>; sisa tagihan bisa dibayar lagi kapan saja
+                  lewat tombol Bayar yang sama.
+                </p>
+              </>
+            )}
 
             {payError && <p className="text-xs text-destructive">{payError}</p>}
           </div>
@@ -527,11 +551,11 @@ export function SalesClient() {
         <SheetFooter className="border-t">
           <Button
             onClick={submitPay}
-            disabled={paying || !payTarget || !(Number(payAmount) > 0)}
+            disabled={paying || !payTarget || (payRemaining > 0 && !(Number(payAmount) > 0))}
             className="w-full bg-green-600 text-white hover:bg-green-700"
           >
             {paying && <Loader2 className="size-4 animate-spin" />}
-            Catat Pembayaran
+            {payRemaining <= 0 ? "Tandai Lunas" : "Catat Pembayaran"}
           </Button>
         </SheetFooter>
       </SheetContent>
@@ -1120,9 +1144,18 @@ export function SalesClient() {
                             inputMode="numeric"
                             value={formatNumberInput(i.unit_price)}
                             onChange={(e) => setPrice(i.product.id, parseNumberInput(e.target.value))}
-                            className="h-8 w-full pl-8 text-right text-sm tabular-nums"
+                            className={`h-8 w-full pl-8 text-right text-sm tabular-nums ${
+                              !(Number(i.unit_price) > 0) && lineDiscountPct(i) < 100
+                                ? "border-destructive focus-visible:ring-destructive"
+                                : ""
+                            }`}
                           />
                         </div>
+                        {!(Number(i.unit_price) > 0) && lineDiscountPct(i) < 100 && (
+                          <p className="text-[10px] leading-snug text-destructive">
+                            Tidak boleh 0 — pakai diskon 100% kalau digratiskan.
+                          </p>
+                        )}
                       </div>
                     </div>
 
@@ -1181,7 +1214,7 @@ export function SalesClient() {
               {error && <p className="text-xs text-destructive">{error}</p>}
               <Button
                 onClick={save}
-                disabled={saving || cart.length === 0}
+                disabled={saving || cart.length === 0 || !!zeroPriceLine}
                 className="mt-2 w-full bg-teal-600 text-white hover:bg-teal-700"
               >
                 {saving && <Loader2 className="size-4 animate-spin" />}

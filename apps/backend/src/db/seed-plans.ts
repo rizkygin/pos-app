@@ -36,10 +36,10 @@ const plans = [
 // to a tier's monthly and yearly plan. desktopCashier gates the native cashier
 // app; salesInvoice/purchaseInvoice/stock gate the Faktur & Stok suite.
 const featuresByTier: Record<string, Record<string, unknown>> = {
-  basic: { maxOutlets: 1, maxEmployees: 1, desktopCashier: false, customerCanOrder: true, salesInvoice: false, purchaseInvoice: false, stock: false, cashflow: true, report: true, reportInvoice: false, cashierShift: false, pager: false, tax: false },
-  pro: { maxOutlets: 1, maxEmployees: 3, desktopCashier: false, customerCanOrder: true, salesInvoice: true, purchaseInvoice: true, stock: false, cashflow: true, report: true, reportInvoice: false, cashierShift: false, pager: false, tax: false },
-  max_lite: { maxOutlets: 2, maxEmployees: 5, desktopCashier: true, customerCanOrder: true, salesInvoice: true, purchaseInvoice: true, stock: true, cashflow: true, report: true, reportInvoice: true, cashierShift: true, pager: true, tax: true },
-  max: { maxOutlets: 3, maxEmployees: 5, desktopCashier: true, customerCanOrder: true, salesInvoice: true, purchaseInvoice: true, stock: true, cashflow: true, report: true, reportInvoice: true, cashierShift: true, pager: true, tax: true },
+  basic: { maxOutlets: 1, maxEmployees: 1, desktopCashier: false, customerCanOrder: true, salesInvoice: false, purchaseInvoice: false, stock: false, cashflow: true, report: true, reportInvoice: false, cashierShift: false, pager: false, tax: false, recipeExplorer: false },
+  pro: { maxOutlets: 1, maxEmployees: 3, desktopCashier: false, customerCanOrder: true, salesInvoice: true, purchaseInvoice: true, stock: false, cashflow: true, report: true, reportInvoice: false, cashierShift: false, pager: false, tax: false, recipeExplorer: true },
+  max_lite: { maxOutlets: 2, maxEmployees: 5, desktopCashier: true, customerCanOrder: true, salesInvoice: true, purchaseInvoice: true, stock: true, cashflow: true, report: true, reportInvoice: true, cashierShift: true, pager: true, tax: true, recipeExplorer: true },
+  max: { maxOutlets: 3, maxEmployees: 5, desktopCashier: true, customerCanOrder: true, salesInvoice: true, purchaseInvoice: true, stock: true, cashflow: true, report: true, reportInvoice: true, cashierShift: true, pager: true, tax: true, recipeExplorer: true },
 };
 
 // PLACEHOLDER trial length (same for all plans). Adjust per tier if desired.
