@@ -32,11 +32,8 @@ import {
 import { Button } from '@/components/ui/button';
 import { formatCurrency } from '@/lib/utils/format';
 import {
-  openLabelApp,
   openOrderLabelApp,
   buildOrderLabelBatch,
-  type LabelBatchJob,
-  type ProductLabel,
   type OrderLabel,
 } from '@/lib/labelbridge';
 import { API_URL } from '@/lib/api-url';
@@ -994,7 +991,7 @@ export const CashierClient = ({
   // to the printer until the cashier has seen what it will produce. The modal
   // holds the label size and lays these out, so it takes the items rather than
   // a finished batch — changing the size there re-flows the preview.
-  const [labelPreview, setLabelPreview] = useState<ProductLabel[] | null>(null);
+  const [labelPreview, setLabelPreview] = useState<OrderLabel[] | null>(null);
 
   // The product whose option picker is open, if any. Null = closed. Always the
   // BASE the cashier tapped — the variant they choose comes back on confirm.
@@ -1013,14 +1010,17 @@ export const CashierClient = ({
    */
   const openLabelPreview = () => {
     if (cart.length === 0) return;
-    // Trigger preview modal with placeholder data; confirmPrintLabels will
-    // build the actual order labels from cart when confirmed.
-    const items: ProductLabel[] = cart.map((item) => ({
-      name: item.product.product_name,
-      price: '',
-      copies: item.quantity,
+    const orderLabels: OrderLabel[] = cart.map((item) => ({
+      orderId: activeTabId,
+      customerName: customerName.trim() || 'Pesanan',
+      productName: item.product.product_name,
+      variant: item.product.variant_name || null,
+      addons: (item.addons ?? []).map((a) => a.name),
+      date: new Date(),
+      outletName,
+      logoUrl: outletLogo && outletLogo !== 'avatar.png' ? outletLogo : null,
     }));
-    setLabelPreview(items);
+    setLabelPreview(orderLabels);
   };
 
   /**
@@ -1037,6 +1037,7 @@ export const CashierClient = ({
       addons: (item.addons ?? []).map((a) => a.name),
       date: new Date(),
       outletName,
+      logoUrl: outletLogo && outletLogo !== 'avatar.png' ? outletLogo : null,
     }));
 
     const batch = buildOrderLabelBatch(orderLabels);

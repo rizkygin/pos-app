@@ -461,6 +461,7 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
             addons: item.addons?.map(a => a.product_name) || null,
             date: data.date,
             outletName: data.outletName,
+            logoUrl: data.outletLogo && data.outletLogo !== 'avatar.png' ? data.outletLogo : null,
         }));
         const batch = buildOrderLabelBatch(orderLabels);
         openOrderLabelApp(batch);
