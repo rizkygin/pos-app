@@ -1,7 +1,10 @@
 'use client';
 
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
-import { ReceiptModal, type ReceiptData } from '@/components/dashboard/receipt-modal';
+import {
+  ReceiptModal,
+  type ReceiptData,
+} from '@/components/dashboard/receipt-modal';
 import Image from 'next/image';
 import {
   Search,
@@ -23,19 +26,25 @@ import {
   Bell,
   Printer,
   ChefHat,
+  Tag,
+  Eye,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatCurrency } from '@/lib/utils/format';
-import { API_URL } from '@/lib/api-url';
 import {
-  POS_PAYMENT_OPTIONS,
-  type PosPaymentMethod,
-} from '@/lib/pos-payment';
+  openLabelApp,
+  type LabelBatchJob,
+  type ProductLabel,
+} from '@/lib/labelbridge';
+import { API_URL } from '@/lib/api-url';
+import { POS_PAYMENT_OPTIONS, type PosPaymentMethod } from '@/lib/pos-payment';
 import { ShiftBar } from './shift-bar';
+import { LabelPreviewModal } from './label-preview-modal';
+import { OptionPickerModal, priceOf } from './option-picker-modal';
 import { computeTax, taxLineLabel, type TaxConfig } from '@/lib/tax';
 import { resolveProductImage, isBackendImage } from '@/lib/image-src';
 
-type Product = {
+export type Product = {
   id: string;
   product_name: string;
   price: string;
@@ -50,9 +59,66 @@ type Product = {
   // arrangement customers see. Null when the product isn't in a section.
   menu_group?: string | null;
   menu_group_order?: number | null;
+  /** Add-on questions this product asks ("Topping", "Level Pedas"). */
+  addon_groups?: AddonGroup[];
+  /**
+   * Variants (migration 0071). A variant is a PRODUCT, not a modifier: this
+   * row is one when variant_of is set, and the cart line it produces is this
+   * row — its own price, its own stock, its own cost.
+   *
+   * Which is why there is no `variants` array here. The cashier already holds
+   * the whole catalogue, variants included, so the base's options are a group-by
+   * over rows it has rather than a second copy of them riding along on each
+   * product. See variantsByBase below.
+   */
+  variant_of?: string | null;
+  /** Short label among its siblings: "Reguler", "Large". */
+  variant_name?: string | null;
+  /** On a base: the question its picker asks ("Ukuran"). */
+  variant_label?: string | null;
+  variant_sort?: number;
+};
+
+export type AddonOption = {
+  id: number;
+  product_id: string;
+  name: string;
+  price: number;
+  available: boolean;
+};
+
+export type AddonGroup = {
+  id: number;
+  name: string;
+  /** >= 1 means the cashier must pick something ("wajib pilih"). */
+  min_select: number;
+  /** null = unlimited. */
+  max_select: number | null;
+  options: AddonOption[];
+};
+
+/** One add-on chosen for a cart line. */
+export type CartAddon = {
+  product_id: string;
+  option_id: number;
+  name: string;
+  /** Per ONE unit of the parent line. The server multiplies by the line qty. */
+  quantity: number;
+  price: number;
 };
 
 type CartItem = {
+  /**
+   * Identity of this LINE, not of the product.
+   *
+   * Two Nasi Goreng with different toppings are two different lines, so the
+   * cart can no longer be keyed on product.id the way it was — every handler
+   * below (quantity, note, remove) addresses a line by this instead.
+   *
+   * Held tabs parked before add-ons existed have no lineId; hydration backfills
+   * one, the same way it already backfills pagerNumber and orderNote.
+   */
+  lineId: string;
   product: Product;
   quantity: number;
   /**
@@ -61,6 +127,39 @@ type CartItem = {
    * the kitchen ticket and then gone. Never sent to the backend.
    */
   note?: string;
+  /**
+   * Add-ons chosen for this line. Unlike the note, these DO reach the backend:
+   * each becomes a child order line with its own price, stock and cost.
+   */
+  addons?: CartAddon[];
+};
+
+/**
+ * What makes two cart lines "the same thing" for merging.
+ *
+ * Product alone is no longer enough: a nasi goreng with telur and one without
+ * are different orders to the kitchen and different money. Sorted so the same
+ * add-ons chosen in a different order still collapse onto one line.
+ */
+const lineSignature = (productId: string, addons: CartAddon[] | undefined) =>
+  [
+    productId,
+    ...(addons ?? [])
+      .map((a) => `${a.product_id}:${a.quantity}:${a.price}`)
+      .sort(),
+  ].join('|');
+
+/** Per-unit price of a line, add-ons included. */
+const unitPriceOf = (item: CartItem) => {
+  const base =
+    item.product.price_mark_down && item.product.price_mark_down !== '0'
+      ? parseFloat(item.product.price_mark_down)
+      : parseFloat(item.product.price);
+  const addons = (item.addons ?? []).reduce(
+    (sum, a) => sum + a.price * a.quantity,
+    0,
+  );
+  return base + addons;
 };
 
 // A parked/held order kept in localStorage so a cashier can juggle several open
@@ -127,6 +226,14 @@ type CashierClientProps = {
 // nonsense. The +/- buttons are unbounded as before.
 const MAX_QUANTITY = 9999;
 
+// Categories that exist only inside the dashboard, mirroring INTERNAL_CATEGORIES
+// on the backend. Nothing filed under one is sellable at the counter: "bahan" is
+// recipe material, "tambahan" is an add-on option that reaches an order as a
+// child line through the picker. is_for_sale already keeps both out of the
+// catalogue, but the tabs are built from category, so this is what stops an
+// outlet growing a "tambahan" shelf full of toppings nobody can ring up.
+const INTERNAL_CATEGORIES = new Set(['bahan', 'tambahan']);
+
 const INITIAL_CATEGORIES = [
   {
     id: 'All',
@@ -156,7 +263,10 @@ export const CashierClient = ({
   // scanner (or a cashier typing a code) means "find this EXACT item", not
   // "filter the grid". Enter/scan looks it up and adds it straight to cart.
   const [barcodeQuery, setBarcodeQuery] = useState('');
-  const [barcodeFeedback, setBarcodeFeedback] = useState<{ ok: boolean; text: string } | null>(null);
+  const [barcodeFeedback, setBarcodeFeedback] = useState<{
+    ok: boolean;
+    text: string;
+  } | null>(null);
   // Two refs, not one: the mobile and desktop barcode inputs below are both
   // mounted at once (toggled by CSS breakpoint classes, not conditional
   // rendering) — a single ref would only ever point at whichever renders
@@ -165,6 +275,122 @@ export const CashierClient = ({
   const barcodeInputDesktopRef = useRef<HTMLInputElement>(null);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
+
+  // ── Live catalogue ────────────────────────────────────────────────────────
+  //
+  // initialProducts is a server-rendered snapshot, and the POS is a tab that
+  // stays open all day. Before this it was never refetched: a cashier who
+  // opened the counter at 08:00 kept selling 08:00 prices, and an item marked
+  // habis at 10:00 stayed on sale until someone reloaded the page.
+  //
+  // So the catalogue is state, refreshed whenever the tab is looked at again —
+  // cashiers alt-tab constantly, which makes focus a better signal than any
+  // interval. This is also the seam a server-sent-events stream would plug
+  // into later: something else calls setCatalogue, and everything below is
+  // already written against it.
+  //
+  // IT NEVER TOUCHES A CART. See staleLines below for why.
+  const [catalogue, setCatalogue] = useState<Product[]>(initialProducts);
+  const catalogueById = useMemo(
+    () => new Map(catalogue.map((p) => [p.id, p])),
+    [catalogue],
+  );
+
+  /**
+   * Base product id -> its variants, in menu order.
+   *
+   * Grouped from the catalogue the cashier already holds rather than fetched:
+   * a variant IS a product row, so it arrives with everything else and asking
+   * the server for it again would be asking for rows already in memory.
+   *
+   * Archived variants never appear here because the catalogue endpoint filters
+   * deletedAt — which is correct, because this drives COMPOSITION. A held tab
+   * that already contains an archived variant still settles: by then the
+   * variant is just the product on the line, and nothing in checkout consults
+   * this map. Same split add-ons make between the picker and resolveAddons.
+   */
+  const variantsByBase = useMemo(() => {
+    const map = new Map<string, Product[]>();
+    for (const p of catalogue) {
+      if (!p.variant_of) continue;
+      const siblings = map.get(p.variant_of);
+      if (siblings) siblings.push(p);
+      else map.set(p.variant_of, [p]);
+    }
+    for (const siblings of map.values()) {
+      siblings.sort(
+        (a, b) =>
+          (a.variant_sort ?? 0) - (b.variant_sort ?? 0) ||
+          a.product_name.localeCompare(b.product_name, 'id'),
+      );
+    }
+    return map;
+  }, [catalogue]);
+
+  /**
+   * The options a base offers, base first.
+   *
+   * The base leads because it is the default — the thing the owner priced when
+   * they created the product, and the one the cashier means when they don't
+   * think about size. Empty for a product with no variants, which is what lets
+   * the picker skip the question entirely rather than asking one with a single
+   * answer.
+   */
+  const variantOptionsOf = useCallback(
+    (base: Product): Product[] => {
+      const siblings = variantsByBase.get(base.id);
+      return siblings && siblings.length > 0 ? [base, ...siblings] : [];
+    },
+    [variantsByBase],
+  );
+
+  /**
+   * Is there anything here the cashier can actually sell?
+   *
+   * A base marked habis whose Large is still in the fridge must stay tappable,
+   * or the sale that IS possible becomes unreachable. The picker then greys out
+   * the sold-out options individually.
+   */
+  const sellable = useCallback(
+    (base: Product) =>
+      base.isAvailable ||
+      (variantsByBase.get(base.id) ?? []).some((v) => v.isAvailable),
+    [variantsByBase],
+  );
+
+  const refreshCatalogue = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/products/mine`, {
+        credentials: 'include',
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!Array.isArray(data?.products)) return;
+      // Same filter the server component applies: inventory-only items are not
+      // sellable at the counter and must not spawn their own category tabs.
+      setCatalogue(
+        data.products.filter(
+          (p: { is_for_sale?: boolean }) => p.is_for_sale !== false,
+        ),
+      );
+    } catch {
+      // A failed refresh leaves the previous catalogue in place. Being one
+      // edit behind is a great deal better than a counter that can't sell.
+    }
+  }, []);
+
+  useEffect(() => {
+    const onFocus = () => refreshCatalogue();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refreshCatalogue();
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [refreshCatalogue]);
   // One modal serves both slips; `variant` picks the customer receipt or the
   // money-free kitchen ticket.
   const [receipt, setReceipt] = useState<{
@@ -282,6 +508,15 @@ export const CashierClient = ({
           ...t,
           pagerNumber: t.pagerNumber ?? '',
           orderNote: t.orderNote ?? '',
+          // Tabs parked before add-ons existed have no lineId, and every cart
+          // handler now addresses lines by it. Minted here rather than left
+          // undefined, or the first tap on such a tab would edit every line at
+          // once (they would all match `undefined`).
+          cart: (t.cart ?? []).map((item) => ({
+            ...item,
+            lineId: item.lineId ?? crypto.randomUUID(),
+            addons: item.addons ?? [],
+          })),
         }));
         activeId = parsed.activeId ?? '';
       }
@@ -356,12 +591,12 @@ export const CashierClient = ({
   const closeTab = useCallback(
     (id: string) => {
       const t = tabsRef.current.find((x) => x.id === id);
-      const count = t
-        ? t.cart.reduce((acc, i) => acc + i.quantity, 0)
-        : 0;
+      const count = t ? t.cart.reduce((acc, i) => acc + i.quantity, 0) : 0;
       if (
         count > 0 &&
-        !window.confirm('Tutup tab ini? Keranjang yang belum dibayar akan hilang.')
+        !window.confirm(
+          'Tutup tab ini? Keranjang yang belum dibayar akan hilang.',
+        )
       )
         return;
       const remaining = tabsRef.current.filter((x) => x.id !== id);
@@ -379,9 +614,121 @@ export const CashierClient = ({
     [applyTab, persistTabs],
   );
 
+  // ── Reconciling carts against the live catalogue ──────────────────────────
+  //
+  // A cart line holds a SNAPSHOT of the product it was added from, and held
+  // tabs live in localStorage for days. So a fresh catalogue does not fix a
+  // stale cart, and it must not try to: silently re-pricing a line while the
+  // customer is counting out cash, after the cashier has already read the total
+  // aloud, is worse than the stale price it replaces.
+  //
+  // So staleness is DERIVED and shown, never applied. Nothing below mutates a
+  // cart; the cashier decides, and repriceStaleLines is the only thing that
+  // writes. Availability is deliberately NOT auto-removed either — an item that
+  // went habis is still in front of the customer.
+
+  type LineStale = {
+    tabId: string;
+    lineId: string;
+    name: string;
+    /** null when the product has been archived out of the catalogue. */
+    fresh: Product | null;
+    oldPrice: number;
+    newPrice: number | null;
+    unavailable: boolean;
+  };
+
+  const staleLines = useMemo(() => {
+    const priceOf = (p: Pick<Product, 'price' | 'price_mark_down'>) =>
+      p.price_mark_down && p.price_mark_down !== '0'
+        ? parseFloat(p.price_mark_down)
+        : parseFloat(p.price);
+
+    const out: LineStale[] = [];
+    for (const t of tabs) {
+      for (const item of t.cart) {
+        const fresh = catalogueById.get(item.product.id) ?? null;
+        const oldPrice = priceOf(item.product);
+        // Archived out of the catalogue: flagged, never auto-removed. The
+        // backend settles it from the payload regardless (lib/addons.ts), so
+        // this is information, not an obstacle.
+        if (!fresh) {
+          out.push({
+            tabId: t.id,
+            lineId: item.lineId,
+            name: item.product.product_name,
+            fresh: null,
+            oldPrice,
+            newPrice: null,
+            unavailable: true,
+          });
+          continue;
+        }
+        const newPrice = priceOf(fresh);
+        const unavailable = fresh.isAvailable === false;
+        if (newPrice !== oldPrice || unavailable) {
+          out.push({
+            tabId: t.id,
+            lineId: item.lineId,
+            name: item.product.product_name,
+            fresh,
+            oldPrice,
+            newPrice,
+            unavailable,
+          });
+        }
+      }
+    }
+    return out;
+  }, [tabs, catalogueById]);
+
+  const staleByLineId = useMemo(
+    () => new Map(staleLines.map((x) => [x.lineId, x])),
+    [staleLines],
+  );
+  // Which OTHER tabs are affected, so a cashier on tab 1 can see that tab 3 has
+  // a problem without opening it.
+  const staleTabIds = useMemo(
+    () => new Set(staleLines.map((x) => x.tabId)),
+    [staleLines],
+  );
+
+  /**
+   * Accept the new prices — across EVERY tab, not just the active one.
+   *
+   * The sync effect that persists the cart only ever rewrites the ACTIVE tab
+   * (`t.id === id ? {...} : t`), so a held tab has to be updated here directly.
+   * That is also where the trap is: the effect rebuilds from `tabsRef.current`,
+   * which its own effect refreshes a render later. Calling setTabs and setCart
+   * together would let the cart effect fire against the pre-update ref and
+   * silently throw the held-tab edits away.
+   *
+   * Assigning the ref synchronously, before the state updates are queued, is
+   * what closes that window.
+   */
+  const repriceStaleLines = useCallback(() => {
+    const refresh = (items: CartItem[]) =>
+      items.map((item) => {
+        const fresh = catalogueById.get(item.product.id);
+        // An archived product keeps its snapshot: there is nothing fresher to
+        // swap in, and dropping the line would delete a sale in progress.
+        return fresh ? { ...item, product: fresh } : item;
+      });
+
+    const next = tabsRef.current.map((t) => ({ ...t, cart: refresh(t.cart) }));
+    tabsRef.current = next;
+    setTabs(next);
+    persistTabs(next, activeIdRef.current);
+    // The live editing state is a copy of the active tab's cart, so it has to
+    // be refreshed too or the screen would keep showing the old prices.
+    setCart((prev) => refresh(prev));
+  }, [catalogueById, persistTabs]);
+
   // After a paid checkout, drop the tab and move to the next (or a fresh one).
   const completeActiveTab = useCallback(() => {
-    const remaining = tabsRef.current.filter((t) => t.id !== activeIdRef.current);
+    const remaining = tabsRef.current.filter(
+      (t) => t.id !== activeIdRef.current,
+    );
     const next = remaining.length ? remaining : [newHeldTab('Pesanan 1')];
     const target = next[0];
     setTabs(next);
@@ -396,14 +743,15 @@ export const CashierClient = ({
   // are talking about the same shelves. Ungrouped products fall back to
   // `category`, so an outlet that never touched Grup Menu is unaffected.
   //
-  // 'bahan' gets no tab regardless of grouping: raw ingredients are stock
-  // material, not something rung up at the POS.
+  // The internal categories get no tab regardless of grouping: raw ingredients
+  // are stock material and add-on options are sold as child lines through the
+  // picker, so neither is ever rung up on its own here.
   const categories = useMemo(() => {
     const groups = new Map<string, number>(); // section name -> sort_order
     const loose = new Set<string>();
 
-    for (const p of initialProducts) {
-      if (p.category === 'bahan') continue;
+    for (const p of catalogue) {
+      if (INTERNAL_CATEGORIES.has(p.category)) continue;
       if (p.menu_group) groups.set(p.menu_group, p.menu_group_order ?? 0);
       else if (p.category) loose.add(p.category);
     }
@@ -426,57 +774,107 @@ export const CashierClient = ({
         border: 'border-green-200',
       })),
     ];
-  }, [initialProducts]);
+  }, [catalogue]);
 
   // What a product files under in the tabs above — its section if it has one.
   const tabKeyOf = (p: Product) => p.menu_group ?? p.category;
 
   const filteredProducts = useMemo(() => {
-    return initialProducts.filter((product) => {
-      // 'bahan' products never appear at the POS (no tab either — see the
-      // categories memo): ingredients are consumed via recipes, not sold.
+    const needle = searchQuery.toLowerCase();
+    return catalogue.filter((product) => {
+      // Internal products never appear at the POS (no tab either — see the
+      // categories memo): ingredients are consumed via recipes, and an add-on
+      // is added to a dish through the picker, never rung up beside it.
       // Matched on the same key the tabs are built from, or selecting a section
       // like "Besi" would compare against a value no product carries.
+      const internal = INTERNAL_CATEGORIES.has(product.category);
+      // A variant gets no tile of its own — it is reached by tapping its base
+      // and answering the question. Two tiles for one drink is the duplication
+      // this feature exists to remove; the grid shows bases, the picker shows
+      // sizes. (The catalogue still holds them: a barcode scan finds a variant
+      // directly, and the cart resolves lines through catalogueById.)
+      if (product.variant_of) return false;
       const matchesCategory =
         selectedCategory === 'All'
-          ? product.category !== 'bahan'
-          : product.category !== 'bahan' && tabKeyOf(product) === selectedCategory;
-      const matchesSearch = product.product_name
-        .toLowerCase()
-        .includes(searchQuery.toLowerCase());
+          ? !internal
+          : !internal && tabKeyOf(product) === selectedCategory;
+      // Typing "large" must find the drink that HAS a Large, even though the
+      // Large itself has no tile to land on.
+      const matchesSearch =
+        product.product_name.toLowerCase().includes(needle) ||
+        (variantsByBase.get(product.id) ?? []).some(
+          (v) =>
+            v.product_name.toLowerCase().includes(needle) ||
+            (v.variant_name ?? '').toLowerCase().includes(needle),
+        );
       return matchesCategory && matchesSearch;
     });
-  }, [initialProducts, selectedCategory, searchQuery]);
+  }, [catalogue, selectedCategory, searchQuery, variantsByBase]);
 
   // Cart operations
-  const addToCart = (product: Product) => {
+  const addToCart = (product: Product, addons?: CartAddon[]) => {
     if (!product.isAvailable) return;
 
+    const signature = lineSignature(product.id, addons);
     setCart((prev) => {
-      const existing = prev.find((item) => item.product.id === product.id);
+      // Same product AND the same add-ons collapses onto one line; the same
+      // product with different toppings is a separate line, because it is a
+      // separate thing to cook and a separate price.
+      const existing = prev.find(
+        (item) => lineSignature(item.product.id, item.addons) === signature,
+      );
       if (existing) {
         return prev.map((item) =>
-          item.product.id === product.id
+          item.lineId === existing.lineId
             ? { ...item, quantity: item.quantity + 1 }
             : item,
         );
       }
-      return [...prev, { product, quantity: 1 }];
+      return [
+        ...prev,
+        { lineId: crypto.randomUUID(), product, quantity: 1, addons },
+      ];
     });
   };
 
-  const handleBarcodeScan = (source: React.RefObject<HTMLInputElement | null>) => {
+  /**
+   * Tapping a product opens the picker when it asks any question — which size,
+   * which toppings — and drops it straight in the cart when it asks none. The
+   * common case must stay one tap.
+   */
+  const selectProduct = (product: Product) => {
+    if (!sellable(product)) return;
+    const groups = product.addon_groups ?? [];
+    if (variantOptionsOf(product).length > 0 || groups.length > 0) {
+      setPickerTarget(product);
+      return;
+    }
+    addToCart(product);
+  };
+
+  const handleBarcodeScan = (
+    source: React.RefObject<HTMLInputElement | null>,
+  ) => {
     const code = barcodeQuery.trim();
     if (!code) return;
 
-    const match = initialProducts.find((p) => p.barcode && p.barcode === code);
+    const match = catalogue.find((p) => p.barcode && p.barcode === code);
     if (!match) {
-      setBarcodeFeedback({ ok: false, text: `Barcode "${code}" tidak ditemukan.` });
+      setBarcodeFeedback({
+        ok: false,
+        text: `Barcode "${code}" tidak ditemukan.`,
+      });
     } else if (!match.isAvailable) {
-      setBarcodeFeedback({ ok: false, text: `${match.product_name} sedang tidak tersedia.` });
+      setBarcodeFeedback({
+        ok: false,
+        text: `${match.product_name} sedang tidak tersedia.`,
+      });
     } else {
       addToCart(match);
-      setBarcodeFeedback({ ok: true, text: `${match.product_name} ditambahkan.` });
+      setBarcodeFeedback({
+        ok: true,
+        text: `${match.product_name} ditambahkan.`,
+      });
     }
     setBarcodeQuery('');
     // Keep the SAME field focused so the next scan can land immediately —
@@ -493,10 +891,10 @@ export const CashierClient = ({
     return () => clearTimeout(t);
   }, [barcodeFeedback]);
 
-  const updateQuantity = (productId: string, delta: number) => {
+  const updateQuantity = (lineId: string, delta: number) => {
     setCart((prev) =>
       prev.map((item) => {
-        if (item.product.id === productId) {
+        if (item.lineId === lineId) {
           const newQuantity = item.quantity + delta;
           return newQuantity > 0 ? { ...item, quantity: newQuantity } : item;
         }
@@ -509,14 +907,15 @@ export const CashierClient = ({
   // in a draft slot rather than in the cart, so an intermediate empty field
   // never writes quantity 0 into the order; the cart only changes on commit.
   // One slot is enough — only the focused input is ever being edited.
-  const [qtyDraft, setQtyDraft] = useState<{ id: string; value: string } | null>(
-    null,
-  );
+  const [qtyDraft, setQtyDraft] = useState<{
+    id: string;
+    value: string;
+  } | null>(null);
   // Escape cancels. Set at keydown and read on the blur it triggers, because
   // the input's DOM value still holds the draft at that point.
   const qtyCancelledRef = useRef(false);
 
-  const setQuantity = (productId: string, raw: string) => {
+  const setQuantity = (lineId: string, raw: string) => {
     setQtyDraft(null);
     const parsed = parseInt(raw, 10);
     // Blank or junk means "never mind" — keep the previous quantity instead of
@@ -524,15 +923,15 @@ export const CashierClient = ({
     if (!Number.isFinite(parsed) || parsed < 1) return;
     setCart((prev) =>
       prev.map((item) =>
-        item.product.id === productId
+        item.lineId === lineId
           ? { ...item, quantity: Math.min(parsed, MAX_QUANTITY) }
           : item,
       ),
     );
   };
 
-  const removeFromCart = (productId: string) => {
-    setCart((prev) => prev.filter((item) => item.product.id !== productId));
+  const removeFromCart = (lineId: string) => {
+    setCart((prev) => prev.filter((item) => item.lineId !== lineId));
   };
 
   const clearCart = () => {
@@ -547,7 +946,7 @@ export const CashierClient = ({
     setNoteDraft(item.note ?? '');
     setNoteTarget({
       kind: 'item',
-      id: item.product.id,
+      id: item.lineId,
       name: item.product.product_name,
     });
   };
@@ -567,7 +966,7 @@ export const CashierClient = ({
       setCart((prev) =>
         prev.map((item) =>
           // Empty means "remove the note" — drop the key rather than storing "".
-          item.product.id === id ? { ...item, note: value || undefined } : item,
+          item.lineId === id ? { ...item, note: value || undefined } : item,
         ),
       );
     }
@@ -576,13 +975,83 @@ export const CashierClient = ({
   };
 
   // Calculations
-  const cartTotal = cart.reduce((total, item) => {
-    const price =
-      item.product.price_mark_down && item.product.price_mark_down !== '0'
-        ? parseFloat(item.product.price_mark_down)
-        : parseFloat(item.product.price);
-    return total + price * item.quantity;
-  }, 0);
+  // Self-clearing banner, same idiom as barcodeFeedback above.
+  const [labelFeedback, setLabelFeedback] = useState<{
+    ok: boolean;
+    text: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!labelFeedback) return;
+    const t = setTimeout(() => setLabelFeedback(null), 3000);
+    return () => clearTimeout(t);
+  }, [labelFeedback]);
+
+  // The cart lines awaiting confirmation. Labels cost stock, so nothing is sent
+  // to the printer until the cashier has seen what it will produce. The modal
+  // holds the label size and lays these out, so it takes the items rather than
+  // a finished batch — changing the size there re-flows the preview.
+  const [labelPreview, setLabelPreview] = useState<ProductLabel[] | null>(null);
+
+  // The product whose option picker is open, if any. Null = closed. Always the
+  // BASE the cashier tapped — the variant they choose comes back on confirm.
+  const [pickerTarget, setPickerTarget] = useState<Product | null>(null);
+
+  // Read-back view of the cart. The cart panel is narrow and each line packs a
+  // name, its add-ons, a note and a price into ~11px rows, which is fine for
+  // building an order and poor for checking one — add-on names truncate exactly
+  // when the cashier wants to read them back to the customer. This is the same
+  // cart, laid out to be READ: nothing here edits anything.
+  const [clearView, setClearView] = useState(false);
+
+  /**
+   * Stage a product label for every unit in the cart — a line with quantity 3
+   * yields three identical labels, because each one goes on a physical item.
+   *
+   * Discounted lines carry the marked-down price, since that is what the
+   * customer pays and what the label is for.
+   */
+  const openLabelPreview = () => {
+    if (cart.length === 0) return;
+
+    const items: ProductLabel[] = cart.map((item) => {
+      return {
+        name: item.product.product_name,
+        // The line's unit price, add-ons included — the label is what the
+        // customer pays for that one item, and a topping is part of it.
+        price: formatCurrency(unitPriceOf(item)),
+        barcode: item.product.barcode,
+        note: item.note,
+        copies: item.quantity,
+      };
+    });
+
+    setLabelPreview(items);
+  };
+
+  /**
+   * Hand the reviewed batch to LabelBridge as a single job rather than a deep
+   * link per line: it renders the batch into one command stream, so the printer
+   * sees one connection and one paper path.
+   */
+  const confirmPrintLabels = (batch: LabelBatchJob, total: number) => {
+    setLabelPreview(null);
+    openLabelApp(batch, () =>
+      setLabelFeedback({
+        ok: false,
+        text: 'LabelBridge belum terpasang di perangkat ini.',
+      }),
+    );
+    setLabelFeedback({ ok: true, text: `Mencetak ${total} label...` });
+  };
+
+  // Add-ons are part of what the customer pays, so they are part of the base
+  // the discount and the tax are worked out from — the backend computes tax
+  // from the `total` this screen sends.
+  const cartTotal = cart.reduce(
+    (total, item) => total + unitPriceOf(item) * item.quantity,
+    0,
+  );
 
   const discountValue = parseFloat(discountInput) || 0;
   const discountAmount =
@@ -649,6 +1118,13 @@ export const CashierClient = ({
         price: i.product.price,
         price_mark_down: i.product.price_mark_down,
         note: i.note,
+        // Passed through rather than folded into price: the slip prints them
+        // indented under the item so the printed numbers still sum to Subtotal.
+        addons: (i.addons ?? []).map((a) => ({
+          product_name: a.name,
+          quantity: a.quantity,
+          price: a.price,
+        })),
       })),
       subtotal: cartTotal,
       discountAmount,
@@ -740,7 +1216,10 @@ export const CashierClient = ({
       snapshotPaymentMethod === 'cash' && amountPaid > 0
         ? amountPaid
         : snapshotGrandTotal;
-    const snapshotChangeDue = Math.max(0, snapshotAmountPaid - snapshotGrandTotal);
+    const snapshotChangeDue = Math.max(
+      0,
+      snapshotAmountPaid - snapshotGrandTotal,
+    );
     try {
       const response = await fetch(`${API_URL}/api/add-order-detail`, {
         method: 'POST',
@@ -788,6 +1267,12 @@ export const CashierClient = ({
             quantity: i.quantity,
             price: i.product.price,
             price_mark_down: i.product.price_mark_down,
+            variant_name: i.product.variant_name,
+            addons: (i.addons ?? []).map((a) => ({
+              product_name: a.name,
+              quantity: a.quantity,
+              price: a.price,
+            })),
           })),
           subtotal: snapshotTotal,
           discountAmount: snapshotDiscountAmount,
@@ -893,14 +1378,15 @@ export const CashierClient = ({
             </div>
           </div>
           {barcodeFeedback && (
-            <p className={`text-xs mb-1 md:hidden ${barcodeFeedback.ok ? 'text-emerald-600' : 'text-rose-600'}`}>
+            <p
+              className={`text-xs mb-1 md:hidden ${barcodeFeedback.ok ? 'text-emerald-600' : 'text-rose-600'}`}
+            >
               {barcodeFeedback.text}
             </p>
           )}
 
           {/* Desktop: full header */}
           <div className="hidden md:flex flex-row gap-4 items-center justify-between">
-            
             <div className="flex flex-col items-end gap-1">
               <div className="flex gap-3">
                 <div className="relative w-56">
@@ -932,7 +1418,9 @@ export const CashierClient = ({
                 </div>
               </div>
               {barcodeFeedback && (
-                <p className={`text-xs ${barcodeFeedback.ok ? 'text-emerald-600' : 'text-rose-600'}`}>
+                <p
+                  className={`text-xs ${barcodeFeedback.ok ? 'text-emerald-600' : 'text-rose-600'}`}
+                >
                   {barcodeFeedback.text}
                 </p>
               )}
@@ -978,17 +1466,42 @@ export const CashierClient = ({
                 const displayPrice = isDiscounted
                   ? product.price_mark_down
                   : product.price;
-                const inCart =
-                  cart.find((item) => item.product.id === product.id)
-                    ?.quantity || 0;
+                // Summed, not found: one product can now occupy several lines
+                // (different toppings), and the badge means "how many of this
+                // are in the cart" regardless of how they were configured.
+                // The tile's options: base first, empty when it has none.
+                const options = variantOptionsOf(product);
+                const optionIds = new Set(options.map((o) => o.id));
+                // Summed, and across variants: a Large in the cart belongs to
+                // the tile the cashier tapped to put it there, so the badge has
+                // to count it — otherwise the one tile that could explain the
+                // cart is the one showing nothing.
+                const inCart = cart.reduce(
+                  (n, item) =>
+                    item.product.id === product.id ||
+                    optionIds.has(item.product.id)
+                      ? n + item.quantity
+                      : n,
+                  0,
+                );
+                // A base whose own row is sold out but whose Large is not stays
+                // tappable — the picker greys out what's actually gone.
+                const available = sellable(product);
+                // What one costs, at least. With variants the headline is the
+                // cheapest option rather than the base's price: the base is the
+                // default, but the grid is a menu and a menu quotes its floor.
+                const fromPrice =
+                  options.length > 0
+                    ? Math.min(...options.map(priceOf))
+                    : Number(displayPrice);
 
                 return (
                   <button
                     key={product.id}
-                    onClick={() => addToCart(product)}
-                    disabled={!product.isAvailable}
+                    onClick={() => selectProduct(product)}
+                    disabled={!available}
                     className={`group relative flex flex-col text-left bg-background rounded-2xl overflow-hidden border-2 transition-all duration-300 hover:shadow-xl hover:-translate-y-1 ${
-                      !product.isAvailable
+                      !available
                         ? 'opacity-60 cursor-not-allowed border-muted grayscale-[0.5]'
                         : inCart > 0
                           ? 'border-blue-500 ring-2 ring-blue-500/20'
@@ -1013,12 +1526,17 @@ export const CashierClient = ({
 
                       {/* Stock Badge */}
                       <div className="absolute top-3 left-3 flex flex-col gap-2">
-                        {!product.isAvailable && (
+                        {!available && (
                           <span className="bg-rose-500/90 backdrop-blur text-white text-[10px] font-black uppercase px-2.5 py-1 rounded-full shadow-sm">
                             Out of Stock
                           </span>
                         )}
-                        {isDiscounted && product.isAvailable && (
+                        {options.length > 0 && available && (
+                          <span className="bg-violet-500/90 backdrop-blur text-white text-[10px] font-black uppercase px-2.5 py-1 rounded-full shadow-sm">
+                            {options.length} {product.variant_label?.trim() || 'Varian'}
+                          </span>
+                        )}
+                        {isDiscounted && available && (
                           <span className="bg-emerald-500/90 backdrop-blur text-white text-[10px] font-black uppercase px-2.5 py-1 rounded-full shadow-sm">
                             Promo
                           </span>
@@ -1044,13 +1562,18 @@ export const CashierClient = ({
 
                       <div className="mt-auto flex items-end justify-between">
                         <div className="flex flex-col">
-                          {isDiscounted && (
+                          {isDiscounted && options.length === 0 && (
                             <span className="text-[10px] md:text-xs text-muted-foreground line-through decoration-rose-500/50">
                               {formatCurrency(Number(product.price))}
                             </span>
                           )}
+                          {options.length > 0 && (
+                            <span className="text-[9px] md:text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                              mulai
+                            </span>
+                          )}
                           <span className="font-extrabold text-blue-600 text-sm md:text-base">
-                            {formatCurrency(Number(displayPrice))}
+                            {formatCurrency(fromPrice)}
                           </span>
                         </div>
                       </div>
@@ -1156,6 +1679,14 @@ export const CashierClient = ({
                         </span>
                       )}
                       <span className="flex-1 truncate">{label}</span>
+                      {staleTabIds.has(t.id) && (
+                        <span
+                          title="Ada item yang berubah di menu"
+                          className="shrink-0 rounded-full bg-amber-500 px-1.5 text-[10px] font-bold text-white"
+                        >
+                          !
+                        </span>
+                      )}
                       {count > 0 && (
                         <span className="shrink-0 rounded-full bg-muted px-1.5 text-[10px] font-semibold">
                           {count} item
@@ -1198,31 +1729,33 @@ export const CashierClient = ({
                   rendered at all — a disabled box that explains itself would
                   cost more room than the feature does. */}
               {canUsePager && (
-              <label
-                className={`flex shrink-0 flex-col items-center rounded-xl border-2 px-1.5 py-1 transition-colors ${
-                  pagerClash
-                    ? 'border-rose-400 bg-rose-50'
-                    : pagerNumber.trim()
-                      ? 'border-blue-500 bg-blue-50'
-                      : 'border-transparent bg-muted/50'
-                }`}
-                title="Nomor pager"
-              >
-                <Bell
-                  className={`h-3 w-3 ${pagerClash ? 'text-rose-500' : 'text-blue-600'}`}
-                />
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  aria-label="Nomor pager"
-                  value={pagerNumber}
-                  onChange={(e) =>
-                    setPagerNumber(e.target.value.replace(/\D/g, '').slice(0, 3))
-                  }
-                  placeholder="--"
-                  className="w-8 bg-transparent text-center text-base font-black tabular-nums outline-none placeholder:font-bold placeholder:text-muted-foreground/50"
-                />
-              </label>
+                <label
+                  className={`flex shrink-0 flex-col items-center rounded-xl border-2 px-1.5 py-1 transition-colors ${
+                    pagerClash
+                      ? 'border-rose-400 bg-rose-50'
+                      : pagerNumber.trim()
+                        ? 'border-blue-500 bg-blue-50'
+                        : 'border-transparent bg-muted/50'
+                  }`}
+                  title="Nomor pager"
+                >
+                  <Bell
+                    className={`h-3 w-3 ${pagerClash ? 'text-rose-500' : 'text-blue-600'}`}
+                  />
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    aria-label="Nomor pager"
+                    value={pagerNumber}
+                    onChange={(e) =>
+                      setPagerNumber(
+                        e.target.value.replace(/\D/g, '').slice(0, 3),
+                      )
+                    }
+                    placeholder="--"
+                    className="w-8 bg-transparent text-center text-base font-black tabular-nums outline-none placeholder:font-bold placeholder:text-muted-foreground/50"
+                  />
+                </label>
               )}
               <div className="min-w-0 flex-1">
                 <input
@@ -1237,10 +1770,11 @@ export const CashierClient = ({
                 </p>
               </div>
             </div>
-            {/* Side by side, not stacked. Two labelled buttons in a column
-                made the header two rows tall on a panel where every row costs
-                a cart item — and Clear is destructive, so it reads better as a
-                small icon than as a text button sitting under the note. */}
+            {/* Side by side, not stacked. Labelled buttons in a column made
+                the header two rows tall on a panel where every row costs a
+                cart item, so note / read-back / clear all ride here as icons.
+                Read-back only appears once there is something to misread: a
+                single plain item reads fine in the panel itself. */}
             <div className="flex shrink-0 items-center gap-1">
               <button
                 onClick={openOrderNote}
@@ -1254,6 +1788,17 @@ export const CashierClient = ({
               >
                 <StickyNote className="h-4 w-4" />
               </button>
+              {(cart.length > 1 ||
+                cart.some((i) => (i.addons?.length ?? 0) > 0 || i.note)) && (
+                <button
+                  onClick={() => setClearView(true)}
+                  className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  title="Lihat lebih jelas"
+                  aria-label="Lihat lebih jelas"
+                >
+                  <Eye className="h-4 w-4" />
+                </button>
+              )}
               {cart.length > 0 && (
                 <button
                   onClick={clearCart}
@@ -1271,12 +1816,40 @@ export const CashierClient = ({
               Pager {pagerNumber.trim()} sedang dipakai tab lain.
             </p>
           )}
+          {labelFeedback && (
+            <p
+              className={`mt-1 text-[11px] font-semibold ${
+                labelFeedback.ok ? 'text-emerald-600' : 'text-rose-500'
+              }`}
+            >
+              {labelFeedback.text}
+            </p>
+          )}
           {orderNote.trim() && (
             <p className="mt-1 line-clamp-2 rounded-lg bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
               {orderNote}
             </p>
           )}
         </div>
+
+        {/* The owner changed something a parked cart still references. Shown,
+            never applied — accepting is the cashier's call. */}
+        {staleLines.length > 0 && (
+          <div className="mx-4 mt-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 dark:bg-amber-950/30">
+            <p className="text-[11px] font-semibold text-amber-900 dark:text-amber-200">
+              {staleLines.length} item berubah di menu
+            </p>
+            <p className="mt-0.5 text-[11px] text-amber-800 dark:text-amber-300">
+              Keranjang masih memakai harga lama.
+            </p>
+            <button
+              onClick={repriceStaleLines}
+              className="mt-1.5 rounded-lg bg-amber-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-amber-700"
+            >
+              Pakai harga baru
+            </button>
+          </div>
+        )}
 
         {/* Cart Items */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -1299,7 +1872,7 @@ export const CashierClient = ({
 
               return (
                 <div
-                  key={item.product.id}
+                  key={item.lineId}
                   className="flex gap-3 bg-muted/30 p-3 rounded-2xl border animate-in slide-in-from-right-4"
                 >
                   {/* Item Image */}
@@ -1338,13 +1911,42 @@ export const CashierClient = ({
                           <StickyNote className="h-4 w-4" />
                         </button>
                         <button
-                          onClick={() => removeFromCart(item.product.id)}
+                          onClick={() => removeFromCart(item.lineId)}
                           className="text-muted-foreground hover:text-rose-500 transition-colors p-1"
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>
                       </div>
                     </div>
+                    {(() => {
+                      const stale = staleByLineId.get(item.lineId);
+                      if (!stale) return null;
+                      return (
+                        <p className="mt-1 rounded bg-amber-50 px-1.5 py-0.5 text-[11px] text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                          {stale.newPrice === null
+                            ? 'Produk sudah diarsipkan'
+                            : stale.unavailable
+                              ? 'Sudah habis di menu'
+                              : `Harga berubah ${formatCurrency(stale.oldPrice)} \u2192 ${formatCurrency(stale.newPrice)}`}
+                        </p>
+                      );
+                    })()}
+                    {(item.addons ?? []).map((a) => (
+                      <p
+                        key={a.option_id}
+                        className="mt-0.5 flex justify-between gap-2 pl-1 text-[11px] text-muted-foreground"
+                      >
+                        <span className="truncate">
+                          + {a.quantity > 1 ? `${a.quantity}x ` : ''}
+                          {a.name}
+                        </span>
+                        {a.price > 0 && (
+                          <span className="shrink-0">
+                            {formatCurrency(a.price * a.quantity)}
+                          </span>
+                        )}
+                      </p>
+                    ))}
                     {item.note && (
                       <p className="mt-1 line-clamp-2 rounded bg-amber-50 px-1.5 py-0.5 text-[11px] text-amber-800">
                         {item.note}
@@ -1352,14 +1954,21 @@ export const CashierClient = ({
                     )}
 
                     <div className="flex items-center justify-between mt-2">
+                      {/* The LINE's unit price, add-ons included — this is the
+                          number the quantity beside it multiplies. */}
                       <span className="font-bold text-blue-600 text-sm">
-                        {formatCurrency(Number(displayPrice))}
+                        {formatCurrency(unitPriceOf(item))}
+                        {(item.addons?.length ?? 0) > 0 && (
+                          <span className="ml-1 text-[10px] font-normal text-muted-foreground">
+                            (dasar {formatCurrency(Number(displayPrice))})
+                          </span>
+                        )}
                       </span>
 
                       {/* Quantity Controls */}
                       <div className="flex items-center gap-3 bg-background border rounded-lg p-1 shadow-sm">
                         <button
-                          onClick={() => updateQuantity(item.product.id, -1)}
+                          onClick={() => updateQuantity(item.lineId, -1)}
                           className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-muted text-muted-foreground transition-colors"
                         >
                           <Minus className="h-3 w-3" />
@@ -1369,13 +1978,13 @@ export const CashierClient = ({
                           inputMode="numeric"
                           aria-label={`Jumlah ${item.product.product_name}`}
                           value={
-                            qtyDraft?.id === item.product.id
+                            qtyDraft?.id === item.lineId
                               ? qtyDraft.value
                               : String(item.quantity)
                           }
                           onFocus={(e) => {
                             setQtyDraft({
-                              id: item.product.id,
+                              id: item.lineId,
                               value: String(item.quantity),
                             });
                             // Select-all so the cashier can just type over it.
@@ -1383,8 +1992,10 @@ export const CashierClient = ({
                           }}
                           onChange={(e) =>
                             setQtyDraft({
-                              id: item.product.id,
-                              value: e.target.value.replace(/\D/g, '').slice(0, 4),
+                              id: item.lineId,
+                              value: e.target.value
+                                .replace(/\D/g, '')
+                                .slice(0, 4),
                             })
                           }
                           onKeyDown={(e) => {
@@ -1402,12 +2013,12 @@ export const CashierClient = ({
                               setQtyDraft(null);
                               return;
                             }
-                            setQuantity(item.product.id, e.target.value);
+                            setQuantity(item.lineId, e.target.value);
                           }}
                           className="w-10 h-6 text-sm font-bold text-center bg-transparent rounded-md outline-none transition-colors focus:bg-muted focus:ring-2 focus:ring-blue-500"
                         />
                         <button
-                          onClick={() => updateQuantity(item.product.id, 1)}
+                          onClick={() => updateQuantity(item.lineId, 1)}
                           className="w-6 h-6 flex items-center justify-center rounded-md bg-blue-50 hover:bg-blue-100 text-blue-600 transition-colors"
                         >
                           <Plus className="h-3 w-3" />
@@ -1645,21 +2256,34 @@ export const CashierClient = ({
             </div>
           )}
 
-          {/* Pay-first flow: take the money and print both slips while the tab
+          {/* Pay-first flow: take the money and print the slips while the tab
               stays open, so the pager number and notes remain on screen until
-              the food is handed over. Checkout below is what ends the order.
-              Shorter than the primary button and visually secondary, because
-              they run BEFORE it rather than instead of it. */}
-          <div className="mb-2 flex gap-2">
+              the food is handed over. They run BEFORE Checkout rather than
+              instead of it, so they ride the same row as unlabelled squares:
+              same reach, a third of the weight, and the row that ends the
+              order stays one row. Icon-only, so each needs its own label. */}
+          <div className="flex items-center gap-2">
             <Button
               type="button"
               variant="outline"
               onClick={printCustomerReceipt}
               disabled={checkoutDisabled}
-              className="h-10 flex-1 rounded-xl border-2 text-xs font-bold"
+              className="h-10 w-10 shrink-0 rounded-xl border-2 p-0"
+              title="Cetak struk pelanggan"
+              aria-label="Cetak struk pelanggan"
             >
-              <Printer className="mr-1.5 h-3.5 w-3.5" />
-              Struk
+              <Printer className="h-4 w-4" />
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={openLabelPreview}
+              disabled={cart.length === 0}
+              className="h-10 w-10 shrink-0 rounded-xl border-2 p-0"
+              title="Pratinjau & cetak label produk"
+              aria-label="Cetak label produk"
+            >
+              <Tag className="h-4 w-4" />
             </Button>
             {canUsePager && (
               <Button
@@ -1667,15 +2291,13 @@ export const CashierClient = ({
                 variant="outline"
                 onClick={printKitchenTicket}
                 disabled={cart.length === 0}
-                className="h-10 flex-1 rounded-xl border-2 text-xs font-bold"
+                className="h-10 w-10 shrink-0 rounded-xl border-2 p-0"
+                title="Cetak tiket dapur"
+                aria-label="Cetak tiket dapur"
               >
-                <ChefHat className="mr-1.5 h-3.5 w-3.5" />
-                Dapur
+                <ChefHat className="h-4 w-4" />
               </Button>
             )}
-          </div>
-
-          <div className="flex gap-2">
             <Button
               onClick={handleCheckout}
               disabled={checkoutDisabled || isSubmitting}
@@ -1699,6 +2321,161 @@ export const CashierClient = ({
           heading={receipt.heading}
           onClose={() => setReceipt(null)}
         />
+      )}
+
+      {/* What the label printer is about to produce, drawn from the same
+          element list that gets sent to it. */}
+      {pickerTarget && (
+        <OptionPickerModal
+          product={pickerTarget}
+          variantLabel={pickerTarget.variant_label?.trim() || 'Varian'}
+          variants={variantOptionsOf(pickerTarget)}
+          // Add-on groups are the BASE's, and a variant inherits them: "Ukuran"
+          // and "Topping" are separate questions, so a Large gets the same
+          // toppings offered as a Reguler without the owner attaching the group
+          // to every size by hand.
+          groups={pickerTarget.addon_groups ?? []}
+          onCancel={() => setPickerTarget(null)}
+          onConfirm={({ product, addons }) => {
+            // The chosen variant IS the line's product. Nothing downstream —
+            // pricing, stock, cost, the receipt — needs to know a question was
+            // asked to get here.
+            addToCart(product, addons.length ? addons : undefined);
+            setPickerTarget(null);
+          }}
+        />
+      )}
+
+      {labelPreview && (
+        <LabelPreviewModal
+          items={labelPreview}
+          onConfirm={confirmPrintLabels}
+          onClose={() => setLabelPreview(null)}
+        />
+      )}
+
+      {/* Read-back view: the same cart at a size a cashier can read aloud to
+          the customer. Deliberately inert — no quantity steppers, no remove, no
+          note buttons — because the one job here is checking, and a stray tap
+          on a control while reading an order back is how a wrong sale happens.
+          Editing stays in the panel behind it. */}
+      {clearView && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-0 backdrop-blur-sm sm:items-center sm:p-4"
+          onClick={() => setClearView(false)}
+        >
+          <div
+            className="flex max-h-[88vh] w-full flex-col rounded-t-3xl bg-background shadow-2xl sm:max-w-lg sm:rounded-3xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex shrink-0 items-start justify-between gap-3 border-b px-5 py-4">
+              <div className="min-w-0">
+                <h3 className="text-lg font-bold">Rincian Pesanan</h3>
+                <p className="text-xs text-muted-foreground">
+                  {cart.reduce((n, i) => n + i.quantity, 0)} item
+                  {customerName.trim() ? ` · ${customerName.trim()}` : ''}
+                  {canUsePager && pagerNumber.trim()
+                    ? ` · Pager ${pagerNumber.trim()}`
+                    : ''}
+                </p>
+              </div>
+              <button
+                onClick={() => setClearView(false)}
+                className="p-1 text-muted-foreground hover:text-foreground"
+                aria-label="Tutup"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 divide-y overflow-y-auto px-5">
+              {cart.map((item) => (
+                <div key={item.lineId} className="py-3">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <p className="min-w-0 text-base font-bold leading-snug">
+                      <span className="text-blue-600">{item.quantity}x</span>{' '}
+                      {item.product.product_name}
+                    </p>
+                    {/* The line total, which is what the customer is being read
+                        — the per-unit price is detail they did not ask for. */}
+                    <span className="shrink-0 text-base font-bold tabular-nums">
+                      {formatCurrency(unitPriceOf(item) * item.quantity)}
+                    </span>
+                  </div>
+
+                  {/* Full names, no truncation and no 11px type: this is the
+                      whole reason the view exists. */}
+                  {(item.addons ?? []).map((a) => (
+                    <div
+                      key={a.option_id}
+                      className="mt-1 flex items-baseline justify-between gap-3 pl-4 text-sm"
+                    >
+                      <span className="min-w-0 text-muted-foreground">
+                        + {a.quantity > 1 ? `${a.quantity}x ` : ''}
+                        {a.name}
+                      </span>
+                      <span className="shrink-0 tabular-nums text-muted-foreground">
+                        {a.price > 0
+                          ? formatCurrency(a.price * a.quantity * item.quantity)
+                          : 'Gratis'}
+                      </span>
+                    </div>
+                  ))}
+
+                  {item.note && (
+                    <p className="mt-1.5 rounded-lg bg-amber-50 px-2 py-1 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+                      {item.note}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div className="shrink-0 space-y-1 border-t px-5 py-4 text-sm">
+              {orderNote.trim() && (
+                <p className="mb-2 rounded-lg bg-amber-50 px-2 py-1 text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+                  {orderNote}
+                </p>
+              )}
+              <div className="flex justify-between text-muted-foreground">
+                <span>Subtotal</span>
+                <span className="tabular-nums">
+                  {formatCurrency(cartTotal)}
+                </span>
+              </div>
+              {discountAmount > 0 && (
+                <div className="flex justify-between text-emerald-600">
+                  <span>
+                    Diskon{discountLabel ? ` (${discountLabel})` : ''}
+                  </span>
+                  <span className="tabular-nums">
+                    -{formatCurrency(discountAmount)}
+                  </span>
+                </div>
+              )}
+              {tax.applies && (
+                <div className="flex justify-between text-muted-foreground">
+                  <span>{taxLineLabel(taxConfig)}</span>
+                  <span className="tabular-nums">
+                    {formatCurrency(tax.amount)}
+                  </span>
+                </div>
+              )}
+              <div className="flex justify-between pt-1 text-lg font-bold">
+                <span>Total</span>
+                <span className="tabular-nums">
+                  {formatCurrency(grandTotal)}
+                </span>
+              </div>
+              <Button
+                onClick={() => setClearView(false)}
+                className="mt-3 h-12 w-full rounded-xl bg-blue-600 font-bold hover:bg-blue-700"
+              >
+                Tutup
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Kitchen note editor — one small dialog for both the per-item and the
@@ -1790,9 +2567,7 @@ export const CashierClient = ({
               {cart.reduce((acc, item) => acc + item.quantity, 0)} items
             </span>
           </div>
-          <span className="font-black">
-            {formatCurrency(grandTotal)}
-          </span>
+          <span className="font-black">{formatCurrency(grandTotal)}</span>
         </button>
       </div>
     </div>

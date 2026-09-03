@@ -4,6 +4,15 @@ import { useState } from "react";
 import { Printer, X, CheckCircle } from "lucide-react";
 import { resolveOutletImage } from "@/lib/image-src";
 import { posPaymentLabel } from "@/lib/pos-payment";
+import { buildOrderLabelBatch, openOrderLabelApp, type OrderLabel } from "@/lib/labelbridge";
+
+type ReceiptAddon = {
+    product_name: string;
+    /** Per unit of the parent line, as the cashier picked it. */
+    quantity: number;
+    /** Per-unit rupiah. 0 is a real add-on, not a missing one. */
+    price: number;
+};
 
 type ReceiptItem = {
     product_name: string;
@@ -15,6 +24,14 @@ type ReceiptItem = {
      * along to the printer and is never persisted with the order.
      */
     note?: string | null;
+    /**
+     * Add-ons chosen for this line. Printed indented UNDER the item, never
+     * folded into its price — the customer should be able to read what each
+     * part cost, and the kitchen needs to see them as separate instructions.
+     */
+    addons?: ReceiptAddon[] | null;
+    /** Product variant if this item is a variant ("Large", "Extra Hot"). */
+    variant_name?: string | null;
 };
 
 export type ReceiptData = {
@@ -238,6 +255,9 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
         bold(true);
         line(item.product_name);
         bold(false);
+        if (item.variant_name) {
+            line(`  ${item.variant_name}`);
+        }
         if (isDiscount) {
             // Original price up top, discount subtracted below, so the item
             // nets to unit*qty and the printed numbers sum to Subtotal.
@@ -245,6 +265,14 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
             row("  Diskon item", `-${fmt((original - unit) * item.quantity)}`);
         } else {
             row(`${item.quantity} x ${fmt(unit)}`, fmt(unit * item.quantity));
+        }
+        // Indented under the item, priced separately, so the printed numbers
+        // still sum to Subtotal. A free add-on prints without a price rather
+        // than as "Rp 0" — the customer only needs to see they got it.
+        for (const a of item.addons ?? []) {
+            const total = a.price * a.quantity * item.quantity;
+            if (total > 0) row(`  + ${a.product_name}`, fmt(total));
+            else line(`  + ${a.product_name}`);
         }
     }
     divider();
@@ -389,6 +417,15 @@ function buildKitchenEscposBase64(data: ReceiptData, paper: PaperWidth): string 
         line(`${item.quantity}x ${item.product_name}`);
         size(0x00);
         bold(false);
+        if (item.variant_name) {
+            line(`  ${item.variant_name}`);
+        }
+        // Add-ons before the free-text note: they are the structured part of
+        // "what to make", and no prices — money on a kitchen ticket is noise.
+        for (const a of item.addons ?? []) {
+            const each = a.quantity > 1 ? `${a.quantity}x ` : "";
+            for (const l of wrapText(`+ ${each}${a.product_name}`, LINE - 4)) line(`   ${l}`);
+        }
         if (item.note) {
             // Indented so a note can never be mistaken for another item.
             for (const l of wrapText(item.note, LINE - 4)) line(`   * ${l}`);
@@ -414,6 +451,20 @@ function buildKitchenEscposBase64(data: ReceiptData, paper: PaperWidth): string 
 export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant = "customer" }: Props) {
     const isKitchen = variant === "kitchen";
     const shortId = data.orderId.split("-")[0].toUpperCase();
+
+    const handlePrintOrderLabels = () => {
+        const orderLabels: OrderLabel[] = data.items.map((item) => ({
+            orderId: data.orderId,
+            customerName: data.customerName,
+            productName: item.product_name,
+            variant: item.variant_name || null,
+            addons: item.addons?.map(a => a.product_name) || null,
+            date: data.date,
+            outletName: data.outletName,
+        }));
+        const batch = buildOrderLabelBatch(orderLabels);
+        openOrderLabelApp(batch);
+    };
 
     // Outlet logo, or null while it's still the placeholder avatar.
     const logoSrc =
@@ -449,7 +500,18 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
                     ? `<div class="row"><span>${item.quantity} x ${fmt(original)}</span><span>${fmt(original * item.quantity)}</span></div>` +
                       `<div class="row"><span>&nbsp;&nbsp;Diskon item</span><span>-${fmt((original - unit) * item.quantity)}</span></div>`
                     : `<div class="row"><span>${item.quantity} x ${fmt(unit)}</span><span>${fmt(unit * item.quantity)}</span></div>`;
-                return `<div class="item"><div class="name">${esc(item.product_name)}</div>${priceRows}</div>`;
+                // Indented under the item and priced separately, mirroring the
+                // ESC/POS layout so both slips read the same.
+                const addonRows = (item.addons ?? [])
+                    .map((a) => {
+                        const total = a.price * a.quantity * item.quantity;
+                        return total > 0
+                            ? `<div class="row addon"><span>+ ${esc(a.product_name)}</span><span>${fmt(total)}</span></div>`
+                            : `<div class="row addon"><span>+ ${esc(a.product_name)}</span><span></span></div>`;
+                    })
+                    .join("");
+                const variantRow = item.variant_name ? `<div class="variant">${esc(item.variant_name)}</div>` : "";
+                return `<div class="item"><div class="name">${esc(item.product_name)}</div>${variantRow}${priceRows}${addonRows}</div>`;
             })
             .join("");
 
@@ -478,6 +540,8 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
   .row span:last-child { text-align: right; white-space: nowrap; }
   .item { margin: 3px 0; }
   .item .name { font-weight: bold; word-break: break-word; }
+  .item .variant { padding-left: 3mm; font-size: 10px; }
+  .item .addon { padding-left: 3mm; }
   /* Centered via a full-width text-align wrapper: auto margins on the img
      alone drift on some print engines, which size the replaced element
      before the @page width applies. */
@@ -529,6 +593,13 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
             .map(
                 (item) =>
                     `<div class="item"><div class="name">${item.quantity}x ${esc(item.product_name)}</div>` +
+                    (item.variant_name ? `<div class="variant">${esc(item.variant_name)}</div>` : "") +
+                    (item.addons ?? [])
+                        .map(
+                            (a) =>
+                                `<div class="addon">+ ${a.quantity > 1 ? `${a.quantity}x ` : ""}${esc(a.product_name)}</div>`,
+                        )
+                        .join("") +
                     (item.note ? `<div class="note">* ${esc(item.note)}</div>` : "") +
                     `</div>`,
             )
@@ -550,7 +621,9 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
   .row span:last-child { text-align: right; white-space: nowrap; }
   .item { margin: 4px 0; }
   .item .name { font-weight: bold; font-size: 15px; word-break: break-word; }
+  .item .variant { padding-left: 4mm; font-size: 12px; word-break: break-word; }
   .item .note { padding-left: 4mm; word-break: break-word; }
+  .item .addon { padding-left: 4mm; word-break: break-word; }
 </style></head><body>
   <div class="c b lg">PESANAN DAPUR</div>
   ${data.pagerNumber ? `<div class="c b xl">PAGER ${esc(data.pagerNumber)}</div>` : ""}
@@ -680,6 +753,12 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
                                         <p className="font-bold text-[15px] leading-tight">
                                             {item.quantity}x {item.product_name}
                                         </p>
+                                        {(item.addons ?? []).map((a, j) => (
+                                            <p key={j} className="pl-4 text-xs text-gray-700">
+                                                + {a.quantity > 1 ? `${a.quantity}x ` : ""}
+                                                {a.product_name}
+                                            </p>
+                                        ))}
                                         {item.note && (
                                             <p className="pl-4 text-xs text-gray-600">* {item.note}</p>
                                         )}
@@ -757,6 +836,9 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
                                 return (
                                     <div key={i}>
                                         <p className="font-semibold text-[13px] leading-tight">{item.product_name}</p>
+                                        {item.variant_name && (
+                                            <p className="text-xs text-gray-500 italic">{item.variant_name}</p>
+                                        )}
                                         <div className="flex justify-between text-xs text-gray-500">
                                             <span>
                                                 {item.quantity} × {fmt(unitPrice)}
@@ -772,6 +854,18 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
                                                 <span>-{fmt(itemDiscount)}</span>
                                             </div>
                                         )}
+                                        {(item.addons ?? []).map((a, j) => {
+                                            const addonTotal = a.price * a.quantity * item.quantity;
+                                            return (
+                                                <div
+                                                    key={j}
+                                                    className="flex justify-between pl-3 text-[11px] text-gray-500"
+                                                >
+                                                    <span>+ {a.product_name}</span>
+                                                    {addonTotal > 0 && <span>{fmt(addonTotal)}</span>}
+                                                </div>
+                                            );
+                                        })}
                                     </div>
                                 );
                             })}
@@ -871,6 +965,15 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
                     >
                         Close
                     </button>
+                    {!isKitchen && (
+                        <button
+                            onClick={handlePrintOrderLabels}
+                            className="flex-1 h-11 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-semibold text-sm flex items-center justify-center gap-2 transition-colors"
+                        >
+                            <Printer className="h-4 w-4" />
+                            Print Labels
+                        </button>
+                    )}
                     <button
                         onClick={handlePrint}
                         className="flex-1 h-11 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm flex items-center justify-center gap-2 transition-colors"
