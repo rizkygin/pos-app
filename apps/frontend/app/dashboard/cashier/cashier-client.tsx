@@ -33,11 +33,8 @@ import { Button } from '@/components/ui/button';
 import { formatCurrency } from '@/lib/utils/format';
 import {
   openLabelApp,
-  openOrderLabelApp,
-  buildOrderLabelBatch,
   type LabelBatchJob,
   type ProductLabel,
-  type OrderLabel,
 } from '@/lib/labelbridge';
 import { API_URL } from '@/lib/api-url';
 import { POS_PAYMENT_OPTIONS, type PosPaymentMethod } from '@/lib/pos-payment';
@@ -1046,30 +1043,6 @@ export const CashierClient = ({
       }),
     );
     setLabelFeedback({ ok: true, text: `Mencetak ${total} label...` });
-  };
-
-  const handlePrintOrderLabels = () => {
-    if (cart.length === 0) return;
-    const orderLabels: OrderLabel[] = cart.map((item) => ({
-      orderId: activeTabId,
-      customerName: customerName.trim() || 'Pesanan',
-      productName: item.product.product_name,
-      variant: item.product.variant_name || null,
-      addons: (item.addons ?? []).map((a) => a.name),
-      date: new Date(),
-      outletName,
-    }));
-    const batch = buildOrderLabelBatch(orderLabels);
-    openOrderLabelApp(batch, () =>
-      setLabelFeedback({
-        ok: false,
-        text: 'LabelBridge belum terpasang di perangkat ini.',
-      }),
-    );
-    setLabelFeedback({
-      ok: true,
-      text: `Mencetak ${orderLabels.length} label pesanan...`,
-    });
   };
 
   // Add-ons are part of what the customer pays, so they are part of the base
@@ -2311,17 +2284,6 @@ export const CashierClient = ({
               aria-label="Cetak label produk"
             >
               <Tag className="h-4 w-4" />
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={handlePrintOrderLabels}
-              disabled={cart.length === 0}
-              className="h-10 w-10 shrink-0 rounded-xl border-2 p-0 bg-purple-50 border-purple-200 hover:bg-purple-100 text-purple-600"
-              title="Cetak label pesanan (order labels)"
-              aria-label="Cetak label pesanan"
-            >
-              <Printer className="h-4 w-4" />
             </Button>
             {canUsePager && (
               <Button
