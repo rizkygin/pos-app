@@ -19,12 +19,13 @@ const plans = [
   { tier: 'max_lite', interval: 'yearly', name: 'Max Lite Tahunan', price: 1080000, sort_order: 30 },
   { tier: 'max', interval: 'monthly', name: 'Max Bulanan', price: 200000, sort_order: 40 },
   { tier: 'max', interval: 'yearly', name: 'Max Tahunan', price: 1944000, sort_order: 40 },
-  // Max + 50% for the membership programme across every outlet the owner runs.
-  // Yearly carries the same ~19% annual discount as Max (300k * 12 * 0.81), not
+  // Max + 25% for the membership programme across every outlet the owner runs.
+  // Yearly carries the same ~19% annual discount as Max (250k * 12 * 0.81), not
   // the 10% the basic tier uses — a merchant comparing the two top tiers should
-  // see the same trade for paying up front.
-  { tier: 'ultimax', interval: 'monthly', name: 'Ultimax Bulanan', price: 300000, sort_order: 50 },
-  { tier: 'ultimax', interval: 'yearly', name: 'Ultimax Tahunan', price: 2916000, sort_order: 50 },
+  // see the same trade for paying up front. Move BOTH together: repricing the
+  // month alone quietly turns the year into a worse deal than paying monthly.
+  { tier: 'ultimax', interval: 'monthly', name: 'Ultimax Bulanan', price: 250000, sort_order: 50 },
+  { tier: 'ultimax', interval: 'yearly', name: 'Ultimax Tahunan', price: 2430000, sort_order: 50 },
 ] as const;
 
 // cashierShift / pager / tax are the counter features that start at Max Lite:
