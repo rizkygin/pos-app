@@ -487,6 +487,15 @@ function buildKitchenEscposBase64(data: ReceiptData, paper: PaperWidth): string 
     return btoa(bin);
 }
 
+/**
+ * "Print Labels" (LabelBridge) is HIDDEN pending a test on a real label
+ * printer — it was shipped untested, and a button that silently does nothing is
+ * worse than no button. Everything behind it is left wired up (the handler, the
+ * batch builder, the deep link), so flipping this to true is the whole
+ * re-enable. Delete the flag once the flow is verified on a device.
+ */
+const SHOW_ORDER_LABELS: boolean = false;
+
 export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant = "customer" }: Props) {
     const isKitchen = variant === "kitchen";
     const shortId = data.orderId.split("-")[0].toUpperCase();
@@ -1068,7 +1077,7 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
                     >
                         Close
                     </button>
-                    {!isKitchen && (
+                    {SHOW_ORDER_LABELS && !isKitchen && (
                         <button
                             onClick={handlePrintOrderLabels}
                             className="flex-1 h-11 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-semibold text-sm flex items-center justify-center gap-2 transition-colors"
