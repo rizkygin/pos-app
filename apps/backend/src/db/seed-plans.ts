@@ -19,9 +19,13 @@ const plans = [
   { tier: 'max_lite', interval: 'yearly', name: 'Max Lite Tahunan', price: 1080000, sort_order: 30 },
   { tier: 'max', interval: 'monthly', name: 'Max Bulanan', price: 200000, sort_order: 40 },
   { tier: 'max', interval: 'yearly', name: 'Max Tahunan', price: 1944000, sort_order: 40 },
-  // PLACEHOLDER prices: Max + 50%. Adjust from the pricing sheet before seeding prod.
-  { tier: 'ultimax', interval: 'monthly', name: 'Ultimax Bulanan', price: 300000, sort_order: 50 },
-  { tier: 'ultimax', interval: 'yearly', name: 'Ultimax Tahunan', price: 3240000, sort_order: 50 },
+  // PLACEHOLDER prices (Max + 50%) and therefore is_active: false — the plan
+  // rows exist so the tier, the gate and the admin tools work, but the merchant
+  // subscription page lists only active plans, so nobody is shown a price the
+  // pricing sheet has not decided. Set the real numbers, flip these to true,
+  // and re-run this seed to put Ultimax on sale.
+  { tier: 'ultimax', interval: 'monthly', name: 'Ultimax Bulanan', price: 300000, sort_order: 50, is_active: false },
+  { tier: 'ultimax', interval: 'yearly', name: 'Ultimax Tahunan', price: 3240000, sort_order: 50, is_active: false },
 ] as const;
 
 // cashierShift / pager / tax are the counter features that start at Max Lite:
@@ -60,7 +64,8 @@ async function main() {
       trial_days: TRIAL_DAYS,
       features: featuresByTier[p.tier],
       sort_order: p.sort_order,
-      is_active: true,
+      // Defaults to on sale; a plan row may opt out (see ultimax above).
+      is_active: (p as { is_active?: boolean }).is_active ?? true,
     };
     await db
       .insert(subscriptionPlansTable)
