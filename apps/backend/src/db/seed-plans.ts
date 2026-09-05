@@ -19,13 +19,12 @@ const plans = [
   { tier: 'max_lite', interval: 'yearly', name: 'Max Lite Tahunan', price: 1080000, sort_order: 30 },
   { tier: 'max', interval: 'monthly', name: 'Max Bulanan', price: 200000, sort_order: 40 },
   { tier: 'max', interval: 'yearly', name: 'Max Tahunan', price: 1944000, sort_order: 40 },
-  // PLACEHOLDER prices (Max + 50%) and therefore is_active: false — the plan
-  // rows exist so the tier, the gate and the admin tools work, but the merchant
-  // subscription page lists only active plans, so nobody is shown a price the
-  // pricing sheet has not decided. Set the real numbers, flip these to true,
-  // and re-run this seed to put Ultimax on sale.
-  { tier: 'ultimax', interval: 'monthly', name: 'Ultimax Bulanan', price: 300000, sort_order: 50, is_active: false },
-  { tier: 'ultimax', interval: 'yearly', name: 'Ultimax Tahunan', price: 3240000, sort_order: 50, is_active: false },
+  // Max + 50% for the membership programme across every outlet the owner runs.
+  // Yearly carries the same ~19% annual discount as Max (300k * 12 * 0.81), not
+  // the 10% the basic tier uses — a merchant comparing the two top tiers should
+  // see the same trade for paying up front.
+  { tier: 'ultimax', interval: 'monthly', name: 'Ultimax Bulanan', price: 300000, sort_order: 50 },
+  { tier: 'ultimax', interval: 'yearly', name: 'Ultimax Tahunan', price: 2916000, sort_order: 50 },
 ] as const;
 
 // cashierShift / pager / tax are the counter features that start at Max Lite:
@@ -64,7 +63,9 @@ async function main() {
       trial_days: TRIAL_DAYS,
       features: featuresByTier[p.tier],
       sort_order: p.sort_order,
-      // Defaults to on sale; a plan row may opt out (see ultimax above).
+      // Defaults to on sale. A plan row may set is_active: false to exist in the
+      // catalog without being listed — /api/subscription-plans filters on this —
+      // which is how a tier gets staged before its price is announced.
       is_active: (p as { is_active?: boolean }).is_active ?? true,
     };
     await db
