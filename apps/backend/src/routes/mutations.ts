@@ -26,6 +26,12 @@ import { getOpenShiftId } from "../lib/shift";
 import { computeTax, taxConfigFrom } from "../lib/tax";
 import { resolveAddons } from "../lib/addons";
 import { normalizeIndonesianPhone } from "../lib/utils/phone";
+import {
+  applyMembershipToOrder,
+  quoteMembership,
+  reverseOrderMembership,
+  type AppliedMembership,
+} from "../lib/membership";
 import { DEFAULT_COORDS, parseCoordPair } from "../lib/utils/coords";
 import { isWithinServiceArea } from "../lib/service-area";
 
@@ -55,6 +61,12 @@ async function addPosToCashflowin(
   method: string = "cash",
   shiftId: number | null = null,
 ) {
+  // Zero is skipped rather than booked, mirroring cancelPosOrder: a sale paid
+  // entirely with points puts nothing in the drawer, and a 0-rupiah cash-in
+  // row is noise in the cashflow report. The order itself still exists — the
+  // cancel path's fallback rebuilds a free order's refund as 0 from its lines.
+  if (!(total > 0)) return;
+
   let [category] = await tx
     .select({ id: cashInCategoryTable.id })
     .from(cashInCategoryTable)
@@ -166,17 +178,51 @@ export async function mutationRoutes(app: FastifyInstance) {
       // tax is charged on what the customer pays, not on a price they were
       // given a discount off.
       const taxable = hasFeature(access.gate, "tax");
-      const tax = computeTax(
-        Number(body.total) || 0,
-        taxable
-          ? taxConfigFrom(access.outlet)
-          : { enabled: false, rate: 0, inclusive: false, label: "Pajak" },
-      );
+      const taxConfig = taxable
+        ? taxConfigFrom(access.outlet)
+        : { enabled: false, rate: 0, inclusive: false, label: "Pajak" };
+
+      // Membership sits BETWEEN the manual discount and the tax: body.total is
+      // already net of the cashier's own discount, the promo and the points
+      // come off next, and tax is charged on what is left — on what the
+      // customer actually pays. Everything is resolved from this outlet's own
+      // settings, never taken from the request: a client that could name its
+      // own discount could give itself the shop.
+      const canUseMembership = hasFeature(access.gate, "membership");
+      const membershipInput = {
+        outletId: body.outletId as number,
+        base: Number(body.total) || 0,
+        memberId: body.memberId ?? null,
+        memberPhone: body.memberPhone ?? null,
+        promoCode: body.promoCode ?? null,
+        pointsToRedeem: body.pointsToRedeem ?? null,
+      };
 
       let new_order_id: string | undefined;
+      let applied: AppliedMembership | null = null;
+      let orderNet = Number(body.total) || 0;
+      let taxForResponse = computeTax(orderNet, taxConfig);
 
       try {
         await db.transaction(async (tx) => {
+          // Re-quoted here, inside the transaction, with the member row
+          // locked: the preview the cashier screen showed is a preview, and
+          // two tills redeeming one balance at the same moment must serialise
+          // rather than both spend it.
+          const quote = canUseMembership
+            ? await quoteMembership(tx, membershipInput, { lock: true })
+            : null;
+          // A member that vanished, a promo that expired mid-sale, points that
+          // are no longer there: the sale still goes through at the price
+          // those things don't discount. Refusing would strand a customer at
+          // the counter over a loyalty perk.
+          const promoDiscount = quote?.promoDiscount ?? 0;
+          const pointsDiscount = quote?.pointsDiscount ?? 0;
+          const netTotal = Math.max(0, (Number(body.total) || 0) - promoDiscount - pointsDiscount);
+          const tax = computeTax(netTotal, taxConfig);
+          orderNet = netTotal;
+          taxForResponse = tax;
+
           // Which stint at the drawer this sale belongs to, read inside the
           // transaction so a shift closing at this exact moment can't leave the
           // sale attributed to a shift whose totals are already frozen.
@@ -207,15 +253,44 @@ export async function mutationRoutes(app: FastifyInstance) {
               tax_rate: tax.rate === null ? null : String(tax.rate),
               tax_amount: tax.amount === null ? null : String(tax.amount),
               tax_inclusive: tax.inclusive,
+              // Frozen breakdown. NULL when nothing applied, so a reader can
+              // tell "no member" from "member who earned nothing".
+              member_id: quote?.member?.id ?? null,
+              outlet_promo_id: quote?.promo?.id ?? null,
+              promo_discount_amount: quote?.promo ? String(promoDiscount) : null,
+              points_redeemed: quote?.pointsRedeemed ? quote.pointsRedeemed : null,
+              points_discount_amount: pointsDiscount > 0 ? String(pointsDiscount) : null,
+              points_earned: quote?.pointsToEarn ? quote.pointsToEarn : null,
               note: {
                 customerName: body.customerName || null,
                 cashierName,
-                discountAmount: body.discountAmount ?? 0,
+                // The TOTAL discount, which is what every existing reader
+                // (shift close, segmented reports, the cancel fallback)
+                // subtracts from the line sum. The columns above are the
+                // breakdown; this stays the one number they all agree on.
+                discountAmount: (Number(body.discountAmount) || 0) + promoDiscount + pointsDiscount,
+                manualDiscountAmount: Number(body.discountAmount) || 0,
+                promoDiscountAmount: promoDiscount,
+                pointsDiscountAmount: pointsDiscount,
+                memberName: quote?.member?.name ?? null,
+                memberTier: quote?.member?.tier ?? null,
+                promoCode: quote?.promo?.code ?? null,
                 paymentMethod,
                 amountPaid: body.amountPaid ?? 0,
                 changeDue: body.changeDue ?? 0,
               },
             });
+
+            // After the order row exists (the ledger and the promo-use row
+            // both point at it by foreign key) and before the cash is booked.
+            if (quote?.enabled && (quote.member || quote.promo)) {
+              applied = await applyMembershipToOrder(tx, {
+                outletId: body.outletId,
+                orderId: new_order_id,
+                quote,
+                actorUserId: access.userId,
+              });
+            }
 
             for (const item of body.cart as any[]) {
               const qty = Number(item.quantity);
@@ -349,7 +424,16 @@ export async function mutationRoutes(app: FastifyInstance) {
         throw err; // anything else: let the outer catch handle it, unchanged
       }
 
-      return { success: true, message: "Order created successfully", orderId: new_order_id };
+      // The membership figures go back so the receipt prints what actually
+      // happened, not what the screen predicted before checkout.
+      return {
+        success: true,
+        message: "Order created successfully",
+        orderId: new_order_id,
+        total: orderNet,
+        grandTotal: taxForResponse.total,
+        membership: applied,
+      };
     } catch (error: any) {
       return reply.status(500).send({ error: { message: error.message || "Internal server error" } });
     }
@@ -519,6 +603,16 @@ export async function mutationRoutes(app: FastifyInstance) {
             });
           }
         }
+
+        // Undo the loyalty side too: pull back the points the sale earned,
+        // hand back the points it spent, release the promo use, and take the
+        // sale out of the member's running totals. Reversal rows, not edits —
+        // the ledger should show that both things happened.
+        await reverseOrderMembership(tx, {
+          outletId: access.outlet.id,
+          orderId,
+          actorUserId: access.userId,
+        });
 
         // status alongside deleted_at: the soft-delete filter is what hides the
         // order, but anything that reads a cancelled row directly (the reprint

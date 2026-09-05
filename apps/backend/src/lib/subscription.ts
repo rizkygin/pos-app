@@ -19,6 +19,7 @@ import { formatDateID, yearIn } from './timezone';
 // ============================================================================
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type SubscriptionTier = (typeof subscriptionPlansTable.$inferSelect)['tier'];
 
 // Where merchants transfer to. Set real values in env (local .env + Railway
 // backend service); these fallbacks are obviously fake on purpose.
@@ -52,7 +53,7 @@ function addInterval(from: Date, interval: 'monthly' | 'yearly') {
 
 // Tier ladder for upgrade/downgrade decisions and the day-count convention
 // used to price remaining time (Model 2 credit-to-days conversion).
-const TIER_RANK: Record<string, number> = { basic: 0, pro: 1, max_lite: 2, max: 3 };
+const TIER_RANK: Record<string, number> = { basic: 0, pro: 1, max_lite: 2, max: 3, ultimax: 4 };
 const PERIOD_DAYS: Record<'monthly' | 'yearly', number> = { monthly: 30, yearly: 365 };
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -239,7 +240,7 @@ export async function trySendEmailNotification(notificationId: number) {
 async function getOrCreateSubscription(
   tx: Tx,
   userId: string,
-  plan: { id: number; tier: 'basic' | 'pro' | 'max_lite' | 'max'; trial_days: number },
+  plan: { id: number; tier: SubscriptionTier; trial_days: number },
 ) {
   const [existing] = await tx
     .select()
@@ -544,6 +545,7 @@ export async function confirmPayment(paymentId: number, adminUserId: string) {
       pro: 'Pro',
       max_lite: 'Max Lite',
       max: 'Max',
+      ultimax: 'Ultimax',
     };
     // Human-facing receipt number, stable per payment: KW/SUB/<year>/<id>.
     const receipt: ReceiptPayload = {
@@ -658,7 +660,7 @@ export async function applyScheduledTierIfDue<
     id: number;
     user_id: string;
     next_plan_id: number | null;
-    next_tier: 'basic' | 'pro' | 'max_lite' | 'max' | null;
+    next_tier: SubscriptionTier | null;
     next_tier_at: Date | null;
   },
 >(sub: T): Promise<T> {

@@ -434,7 +434,7 @@ export async function subscriptionRoutes(app: FastifyInstance) {
     if (!email) return reply.status(400).send({ success: false, error: "Email merchant wajib diisi" });
     if (!(pct >= 0 && pct <= 100))
       return reply.status(400).send({ success: false, error: "Diskon harus 0–100%" });
-    const TIERS = ["basic", "pro", "max_lite", "max"];
+    const TIERS = ["basic", "pro", "max_lite", "max", "ultimax"];
     const INTERVALS = ["monthly", "yearly"];
     const tier = body.tier && TIERS.includes(body.tier) ? body.tier : null;
     const interval = body.interval && INTERVALS.includes(body.interval) ? body.interval : null;

@@ -3,7 +3,7 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "../db";
 import { cashierShiftsTable, usersTable } from "../db/schema";
 import { hasFeature, requireOutletAccess } from "../lib/outlet-access";
-import { buildShiftReport, getOpenShift, listRecentShifts } from "../lib/shift";
+import { buildShiftReport, getOpenShift, listRecentShifts, listShiftsInRange } from "../lib/shift";
 import { money } from "../lib/money-sql";
 
 /**
@@ -90,6 +90,60 @@ export async function shiftRoutes(app: FastifyInstance) {
         variance: r.variance === null ? null : Number(r.variance),
       })),
     };
+  });
+
+  /**
+   * Laporan Shift: every shift opened in a date range with its slip figures.
+   *
+   * Gated on the `reports` permission (it is a report, and an owner may hand
+   * that page to a manager) AND on the cashierShift plan feature: unlike
+   * closing a shift, nothing is stranded by refusing this to a lapsed plan —
+   * the slips themselves stay reachable from the cashier's shift strip.
+   *
+   * `from`/`to` are instants; `to` is exclusive. Capped at 93 days like the
+   * segmented reports, because it fans out per shift over orders and cash.
+   */
+  app.get("/api/shifts/report", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, "reports");
+    if (!access) return;
+    if (!hasFeature(access.gate, SHIFT_FEATURE)) {
+      return reply.status(403).send({
+        success: false,
+        error: "Laporan Shift tersedia mulai paket Max Lite — upgrade paket untuk membukanya.",
+        code: "PLAN_FEATURE",
+      });
+    }
+
+    const q = request.query as Record<string, string>;
+    const from = new Date(q.from ?? "");
+    const to = new Date(q.to ?? "");
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+      return reply.status(400).send({ success: false, error: "Rentang tanggal tidak valid" });
+    }
+    if (to <= from) {
+      return reply.status(400).send({ success: false, error: "Tanggal akhir harus setelah tanggal mulai" });
+    }
+    if (to.getTime() - from.getTime() > 93 * 24 * 60 * 60 * 1000) {
+      return reply.status(400).send({ success: false, error: "Rentang maksimal 3 bulan" });
+    }
+
+    const shifts = await listShiftsInRange(access.outlet.id, from, to);
+    const totals = shifts.reduce(
+      (a, s) => ({
+        shifts: a.shifts + 1,
+        open: a.open + (s.isOpen ? 1 : 0),
+        orders: a.orders + s.orderCount,
+        cancelled: a.cancelled + s.cancelledCount,
+        net: a.net + s.net,
+        tax: a.tax + s.tax,
+        collected: a.collected + s.collected,
+        cashCollected: a.cashCollected + s.cashCollected,
+        // Only closed shifts have a counted drawer to be short or over on.
+        variance: a.variance + (s.variance ?? 0),
+      }),
+      { shifts: 0, open: 0, orders: 0, cancelled: 0, net: 0, tax: 0, collected: 0, cashCollected: 0, variance: 0 },
+    );
+    return { success: true, shifts, totals };
   });
 
   /** One shift's full report. Works for open and closed shifts alike. */

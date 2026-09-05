@@ -4,7 +4,7 @@ import { db, reportDb } from "../db";
 import { orderCogsSql } from "../lib/cogs";
 import { menuGroupsTable, productsTable } from "../db/schema";
 import { requireOutletAccess } from "../lib/outlet-access";
-import { money } from "../lib/money-sql";
+import { money, orderDiscount } from "../lib/money-sql";
 
 /**
  * Segmented sales reports: the same period sliced four ways.
@@ -38,6 +38,12 @@ const MAX_RANGE_DAYS = 93; // ~3 months, the hard cap the UI also enforces
  * sales. Subtracting this is what keeps revenue — and therefore profit and
  * margin — honest for those outlets. See lib/tax.ts for the full asymmetry.
  */
+// Manual discount + outlet promo + points, off the order row. Revenue is the
+// lines minus this (and minus the tax hiding inside inclusive prices, below):
+// what the customer actually paid, which is the only figure profit can be
+// measured against. See orderDiscount in lib/money-sql.ts.
+const ORDER_DISCOUNT = orderDiscount(sql`o`);
+
 const TAX_IN_PRICE = sql`case when coalesce(o.tax_inclusive, false)
                               then coalesce(o.tax_amount, 0) else 0 end`;
 
@@ -297,7 +303,8 @@ export async function reportRoutes(app: FastifyInstance) {
       const result = await reportDb.execute(sql`
         with base as (
           select o.id, ${key} as grp_key, ${label} as grp_label,
-                 ${TAX_IN_PRICE} as tax_in_price
+                 ${TAX_IN_PRICE} as tax_in_price,
+                 ${ORDER_DISCOUNT} as discount
           from ${dimensionSql(dimension).from}
           where ${where}
         ),
@@ -305,7 +312,7 @@ export async function reportRoutes(app: FastifyInstance) {
         select b.grp_key                          as key,
                min(b.grp_label)                   as label,
                count(*)::int                      as orders,
-               (coalesce(sum(a.revenue), 0) - coalesce(sum(b.tax_in_price), 0))::float8 as revenue,
+               (coalesce(sum(a.revenue), 0) - coalesce(sum(b.tax_in_price), 0) - coalesce(sum(b.discount), 0))::float8 as revenue,
                coalesce(sum(a.cogs), 0)::float8    as cogs,
                coalesce(sum(a.qty), 0)::int        as qty
         from base b
@@ -385,7 +392,8 @@ export async function reportRoutes(app: FastifyInstance) {
                  o.note ->> 'customerName' as customer_name,
                  o.note ->> 'cashierName'  as cashier_name,
                  o.note ->> 'paymentMethod' as payment_method,
-                 ${TAX_IN_PRICE} as tax_in_price
+                 ${TAX_IN_PRICE} as tax_in_price,
+                 ${ORDER_DISCOUNT} as discount
           from ${dimensionSql(dimension).from}
           where ${where}
         ),
@@ -406,7 +414,7 @@ export async function reportRoutes(app: FastifyInstance) {
                to_json(p.created_at) #>> '{}' as created_at,
                p.status, p.fulfillment, p.grp_label as label,
                p.customer_name, p.cashier_name, p.payment_method,
-               (coalesce(a.revenue, 0) - coalesce(p.tax_in_price, 0))::float8 as revenue,
+               (coalesce(a.revenue, 0) - coalesce(p.tax_in_price, 0) - coalesce(p.discount, 0))::float8 as revenue,
                coalesce(a.cogs, 0)::float8    as cogs,
                coalesce(a.qty, 0)::int        as qty,
                -- Counting the matched ORDERS is a walk of the window index;

@@ -34,6 +34,8 @@ import {
   Users,
   Globe,
   ChevronRight,
+  Percent,
+  ClipboardCheck,
 } from 'lucide-react';
 import { API_URL } from '@/lib/api-url';
 
@@ -44,10 +46,17 @@ type Summary = {
     profit: number;
     orders: number;
     aov: number;
+    /** Tax collected in the period. Always sent; carded only when taxFeature. */
+    tax: number;
     revenueDeltaPct: number;
     profitDeltaPct: number;
     ordersDeltaPct: number;
+    taxDeltaPct: number;
   };
+  /** Plan includes counter tax (Max Lite+): show the tax card. */
+  taxFeature: boolean;
+  /** The outlet's own label for it ("PB1", "PPN"), from its tax settings. */
+  taxLabel: string;
   trend: { day: string; revenue: number }[];
   topProducts: { name: string; qty: number; revenue: number; profit: number }[];
   hourly: { hour: number; orders: number; revenue: number }[];
@@ -75,6 +84,9 @@ const SUB_REPORTS = [
   { href: '/dashboard/reports/cashier', label: 'Per Kasir', desc: 'Siapa yang melayani', icon: UserCog, grad: 'from-blue-400 to-indigo-500' },
   { href: '/dashboard/reports/customer', label: 'Per Pelanggan', desc: 'Nama pelanggan kasir', icon: Users, grad: 'from-violet-400 to-purple-500' },
   { href: '/dashboard/reports/online-order', label: 'Order Online', desc: 'Pesanan dari aplikasi', icon: Globe, grad: 'from-amber-400 to-orange-500' },
+  // Max Lite and up; the page itself shows the upgrade card below that, the
+  // same way the tax settings do, so the tile is never hidden.
+  { href: '/dashboard/reports/shift', label: 'Laporan Shift', desc: 'Buka-tutup laci per kasir', icon: ClipboardCheck, grad: 'from-rose-400 to-pink-500' },
 ] as const;
 
 const trendConfig = { revenue: { label: 'Omzet', color: 'hsl(221 83% 53%)' } } satisfies ChartConfig;
@@ -224,7 +236,7 @@ export default function ReportsPage() {
       </div>
 
       {/* Sub-reports */}
-      <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {SUB_REPORTS.map((s) => (
           <Link
             key={s.href}
@@ -250,9 +262,15 @@ export default function ReportsPage() {
       ) : (
         <>
           {/* KPI cards */}
-          <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {/* Five cards on plans with counter tax, four below that. The tax
+              card is what lets the owner reconcile this page against Buku Kas
+              by eye: omzet + pajak = what the drawer took in. */}
+          <div className={`mt-6 grid grid-cols-2 gap-3 ${data.taxFeature ? 'lg:grid-cols-5' : 'lg:grid-cols-4'}`}>
             <KpiCard icon={Wallet} label="Omzet" value={fmtIDR(k!.revenue)} delta={k!.revenueDeltaPct} grad="from-blue-400 to-indigo-500" />
             <KpiCard icon={TrendingUp} label="Laba Kotor" value={fmtIDR(k!.profit)} delta={k!.profitDeltaPct} grad="from-emerald-400 to-teal-500" />
+            {data.taxFeature && (
+              <KpiCard icon={Percent} label={`${data.taxLabel} Terkumpul`} value={fmtIDR(k!.tax)} delta={k!.taxDeltaPct} grad="from-rose-400 to-pink-500" />
+            )}
             <KpiCard icon={ShoppingCart} label="Transaksi" value={`${k!.orders}`} delta={k!.ordersDeltaPct} grad="from-violet-400 to-purple-500" />
             <KpiCard icon={Receipt} label="Rata-rata / Transaksi" value={fmtIDR(k!.aov)} grad="from-amber-400 to-orange-500" />
           </div>
@@ -285,9 +303,16 @@ export default function ReportsPage() {
           </section>
 
           {/* Top products + Peak hours */}
+          {/* min-w-0 on the cards is what keeps this page inside a phone.
+              Recharts writes a pixel width onto its own wrapper from the last
+              measurement, and a grid item's automatic minimum size is its
+              min-content — so that stale pixel width becomes a floor the track
+              can never shrink back below, and the card grows past the viewport
+              (the dashboard's overflow-x-hidden then shears its right border
+              off rather than scrolling). */}
           <div className="mt-6 grid gap-6 lg:grid-cols-2">
             {/* Top products */}
-            <section className="rounded-3xl border border-border/60 bg-card p-5 shadow-sm">
+            <section className="min-w-0 rounded-3xl border border-border/60 bg-card p-5 shadow-sm">
               <div className="mb-4 flex items-center gap-2">
                 <Trophy className="size-4 text-amber-500" />
                 <h3 className="text-lg font-black tracking-tight">Produk Terlaris</h3>
@@ -319,7 +344,7 @@ export default function ReportsPage() {
             </section>
 
             {/* Peak hours */}
-            <section className="rounded-3xl border border-border/60 bg-card p-5 shadow-sm">
+            <section className="min-w-0 rounded-3xl border border-border/60 bg-card p-5 shadow-sm">
               <div className="mb-4 flex items-center gap-2">
                 <Clock className="size-4 text-violet-500" />
                 <h3 className="text-lg font-black tracking-tight">Jam Ramai</h3>

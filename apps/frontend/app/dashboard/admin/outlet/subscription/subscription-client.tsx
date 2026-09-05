@@ -228,6 +228,7 @@ function DealForm() {
           <option value="pro">Pro</option>
           <option value="max_lite">Max Lite</option>
           <option value="max">Max</option>
+          <option value="ultimax">Ultimax</option>
         </select>
         <select
           value={intervalScope}

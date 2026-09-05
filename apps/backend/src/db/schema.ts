@@ -734,10 +734,30 @@ export const ordersTable = pgTable(
     // to everyone who is online — a stuck order helps nobody, so exhausting the
     // queue must degrade to "anyone can take it", never to silence.
     offer_pool_opened_at: timestamp('offer_pool_opened_at', { withTimezone: true }),
+
+    // --- Membership, frozen at the moment of sale (migration 0073) ---
+    //
+    // All NULL for an order that involved no member, no outlet promo and no
+    // points — which is every order taken before this existed. Frozen for the
+    // same reason as tax: the owner changing the point value tomorrow must not
+    // rewrite what a customer was charged (or earned) today.
+    //
+    // note.discountAmount stays the TOTAL discount (manual + promo + points),
+    // because that is what every existing reader (shift close, segmented
+    // reports, the cancel fallback) subtracts. These columns are the breakdown.
+    member_id: integer('member_id').references(() => outletsMembersTable.id),
+    outlet_promo_id: integer('outlet_promo_id').references(() => outletPromosTable.id),
+    promo_discount_amount: numeric('promo_discount_amount', { precision: 14, scale: 2 }),
+    points_redeemed: integer('points_redeemed'),
+    points_discount_amount: numeric('points_discount_amount', { precision: 14, scale: 2 }),
+    points_earned: integer('points_earned'),
     ...timestamps,
   },
   (table) => [
     index('id_idx').on(table.id),
+    index('orders_member_id_idx')
+      .on(table.member_id)
+      .where(sql`member_id is not null`),
     index('costomer_id_idx').on(table.customer_id),
     index('courier_id_idx').on(table.courier_id),
     index('outlet_id_idx').on(table.outlet_id),
@@ -1544,11 +1564,16 @@ export const employeesTable = pgTable(
 
 // Tiers the merchant can subscribe to (gating limits live on subscription_plans
 // .features, read by the access middleware — built later).
+// ultimax = Max plus the membership programme (outlet-owned customer database,
+// points, tiers, outlet promo codes) on every outlet the owner runs. Added by
+// migration 0073; the gate reads it off subscription_plans.features like every
+// other flag, so nothing here knows it outranks max.
 export const SUBSCRIPTION_TIER = pgEnum('subscription_tier', [
   'basic',
   'pro',
   'max_lite',
   'max',
+  'ultimax',
 ]);
 export const BILLING_INTERVAL = pgEnum('billing_interval', [
   'monthly',
@@ -2059,5 +2084,220 @@ export const productAddonGroupsTable = pgTable(
       .on(t.product_id, t.group_id)
       .where(sql`${t.deleted_at} is null`),
     index('product_addon_groups_product_idx').on(t.product_id, t.sort_order),
+  ],
+);
+
+// ============================================================================
+// Membership (migration 0073): the outlet's OWN customer database.
+//
+// Not customersTable. That table is a platform login account — one row per
+// ulunpesan user, shared by every outlet — and a POS sale is attached to a
+// hardcoded "offline customer" row from it. A member here is the opposite
+// thing: a person THIS outlet knows, keyed by their phone number WITHIN the
+// outlet. The same phone at two outlets is two members with two balances, which
+// is what "the outlet has its data privately" means once written down.
+//
+// Points are a ledger (member_point_movements) with the balance cached on the
+// member, the same shape as stock_movements / postMovement: one writer, and a
+// cancelled sale is a reversal row, never arithmetic on a cached number.
+// ============================================================================
+
+export const MEMBER_TIER = pgEnum('member_tier', [
+  'silver',
+  'gold',
+  'platinum',
+  'diamond',
+]);
+
+export const POINT_MOVEMENT_KIND = pgEnum('point_movement_kind', [
+  'earn', // a sale credited points
+  'redeem', // points paid for (part of) a sale
+  'reversal', // a cancelled sale undoing its earn/redeem
+  'adjust', // owner correction by hand
+  'expire', // reserved: point expiry (not implemented yet)
+]);
+
+export const OUTLET_PROMO_TYPE = pgEnum('outlet_promo_type', ['percent', 'amount']);
+
+export const outletsMembersTable = pgTable(
+  'outlets_members',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    outlet_id: integer('outlet_id')
+      .notNull()
+      .references(() => outletsTable.id),
+    // Canonical 628… (lib/utils/phone.ts). The member's identity at this
+    // outlet: what the cashier types to find them.
+    phone: varchar('phone', { length: 20 }).notNull(),
+    name: varchar('name', { length: 100 }).notNull(),
+    // Printable alias for a card or QR, unique per outlet. Never the identity —
+    // the phone is — just something short a customer can read off a slip.
+    member_code: varchar('member_code', { length: 12 }).notNull(),
+    tier: MEMBER_TIER('tier').default('silver').notNull(),
+    // True once the owner set the tier by hand; auto-upgrade then leaves it
+    // alone, so a courtesy Diamond is not silently demoted by the arithmetic.
+    tier_manual: boolean('tier_manual').default(false).notNull(),
+    // Cache of sum(member_point_movements.delta). Rewritten by the single
+    // writer in lib/membership.ts, never by anything else.
+    points_balance: integer('points_balance').default(0).notNull(),
+    // Net spend (after every discount, before tax) across non-cancelled sales.
+    // The auto-upgrade thresholds compare against this.
+    lifetime_spend: numeric('lifetime_spend', { precision: 14, scale: 2 })
+      .default('0')
+      .notNull(),
+    visit_count: integer('visit_count').default(0).notNull(),
+    // Optional link to a platform account, for the day the customer logs in to
+    // ulunpesan and wants to see their points. Nothing reads it yet.
+    user_id: text('user_id').references(() => usersTable.id),
+    note: varchar('note', { length: 255 }),
+    ...timestamps,
+  },
+  (t) => [
+    // One live member per phone per outlet. Partial because removal is soft:
+    // a member deleted by mistake and re-registered is a normal history.
+    uniqueIndex('outlets_members_outlet_phone_uq')
+      .on(t.outlet_id, t.phone)
+      .where(sql`deleted_at IS NULL`),
+    uniqueIndex('outlets_members_outlet_code_uq').on(t.outlet_id, t.member_code),
+    index('outlets_members_outlet_name_idx').on(t.outlet_id, t.name),
+  ],
+);
+
+export const memberPointMovementsTable = pgTable(
+  'member_point_movements',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    member_id: integer('member_id')
+      .notNull()
+      .references(() => outletsMembersTable.id),
+    // Denormalised from the member so an outlet-scoped read of the ledger
+    // needs no join.
+    outlet_id: integer('outlet_id')
+      .notNull()
+      .references(() => outletsTable.id),
+    order_id: text('order_id').references(() => ordersTable.id),
+    kind: POINT_MOVEMENT_KIND('kind').notNull(),
+    // Signed: earn/adjust-up positive, redeem/adjust-down negative. A reversal
+    // carries the opposite sign of the row it undoes.
+    delta: integer('delta').notNull(),
+    balance_after: integer('balance_after').notNull(),
+    note: varchar('note', { length: 255 }),
+    actor_user_id: text('actor_user_id').references(() => usersTable.id),
+    created_at: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [
+    index('member_point_movements_member_idx').on(t.member_id, t.created_at),
+    index('member_point_movements_order_idx').on(t.order_id),
+  ],
+);
+
+// One row per outlet, created on first save. Absent = programme off.
+export const outletMembershipSettingsTable = pgTable('outlet_membership_settings', {
+  outlet_id: integer('outlet_id')
+    .primaryKey()
+    .references(() => outletsTable.id),
+  enabled: boolean('enabled').default(false).notNull(),
+  // Rupiah of net spend that earns ONE point (before the tier multiplier).
+  // 20,000 here + a Rp 200,000 sale = 10 points, the worked example this was
+  // specified from.
+  earn_rp_per_point: integer('earn_rp_per_point').default(10000).notNull(),
+  // Rupiah ONE point is worth when spent at the counter.
+  redeem_rp_per_point: integer('redeem_rp_per_point').default(1000).notNull(),
+  // Ceiling on how much of a bill points may cover. 100 = a sale can be free.
+  max_redeem_percent: integer('max_redeem_percent').default(100).notNull(),
+  min_redeem_points: integer('min_redeem_points').default(1).notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Four fixed rows per outlet (one per MEMBER_TIER). The owner edits the
+// numbers; the set of tiers is not theirs to change, which keeps every
+// receipt, badge and promo filter able to name the tier by its enum.
+export const outletMemberTiersTable = pgTable(
+  'outlet_member_tiers',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    outlet_id: integer('outlet_id')
+      .notNull()
+      .references(() => outletsTable.id),
+    tier: MEMBER_TIER('tier').notNull(),
+    // Points earned = floor(net / earn_rp_per_point * multiplier).
+    earn_multiplier: numeric('earn_multiplier', { precision: 4, scale: 2 })
+      .default('1')
+      .notNull(),
+    // lifetime_spend at which a member is auto-promoted INTO this tier. Silver
+    // is 0 by definition. Promotion only ever goes up; see lib/membership.ts.
+    min_lifetime_spend: numeric('min_lifetime_spend', { precision: 14, scale: 2 })
+      .default('0')
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }),
+  },
+  (t) => [uniqueIndex('outlet_member_tiers_outlet_tier_uq').on(t.outlet_id, t.tier)],
+);
+
+// The outlet's OWN promo codes. Deliberately not promosTable: that one is the
+// platform's marketing carousel (global unique code, gradient, hero image, no
+// outlet). These are typed at the counter, scoped to one outlet, and can be
+// restricted to member tiers — which is what makes a tier worth having.
+export const outletPromosTable = pgTable(
+  'outlet_promos',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    outlet_id: integer('outlet_id')
+      .notNull()
+      .references(() => outletsTable.id),
+    // Stored upper-case, matched upper-case.
+    code: varchar('code', { length: 30 }).notNull(),
+    title: varchar('title', { length: 100 }).notNull(),
+    discount_type: OUTLET_PROMO_TYPE('discount_type').notNull(),
+    // percent: 1..100. amount: rupiah.
+    discount_value: integer('discount_value').notNull(),
+    min_order: integer('min_order').default(0).notNull(),
+    // Rupiah cap for a percent promo; NULL = uncapped.
+    max_discount: integer('max_discount'),
+    // Which member tiers may use it. Empty = every tier. A code that is not
+    // member_only ignores this list entirely.
+    tiers: text('tiers').array().default([]).notNull(),
+    // false = anyone at the counter can type it, member or not.
+    member_only: boolean('member_only').default(true).notNull(),
+    valid_from: timestamp('valid_from', { withTimezone: true }),
+    valid_until: timestamp('valid_until', { withTimezone: true }),
+    // Total redemptions allowed across everyone; NULL = unlimited.
+    usage_limit: integer('usage_limit'),
+    // Redemptions allowed per member; NULL = unlimited. Meaningless for a
+    // non-member use, which has no one to count against.
+    per_member_limit: integer('per_member_limit'),
+    used_count: integer('used_count').default(0).notNull(),
+    is_active: boolean('is_active').default(true).notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex('outlet_promos_outlet_code_uq')
+      .on(t.outlet_id, t.code)
+      .where(sql`deleted_at IS NULL`),
+  ],
+);
+
+export const outletPromoUsesTable = pgTable(
+  'outlet_promo_uses',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    promo_id: integer('promo_id')
+      .notNull()
+      .references(() => outletPromosTable.id),
+    order_id: text('order_id')
+      .notNull()
+      .references(() => ordersTable.id),
+    member_id: integer('member_id').references(() => outletsMembersTable.id),
+    discount_amount: numeric('discount_amount', { precision: 14, scale: 2 }).notNull(),
+    created_at: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [
+    index('outlet_promo_uses_promo_member_idx').on(t.promo_id, t.member_id),
+    index('outlet_promo_uses_order_idx').on(t.order_id),
   ],
 );

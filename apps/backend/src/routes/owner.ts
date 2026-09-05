@@ -26,7 +26,7 @@ import { getOutletAccess, hasPermission, parseActiveOutletId, getSubscriptionGat
 import { attachOrderItems } from "../lib/utils/order-items";
 import { APP_TIMEZONE, getUTCRangeFromLocalDate, getUTCRangeFromLocalMonth } from "../lib/timezone";
 import { getOpenShiftId } from "../lib/shift";
-import { money } from "../lib/money-sql";
+import { money, netLineRevenue } from "../lib/money-sql";
 import { lineCogsSql, orderCogsSql } from "../lib/cogs";
 
 // Money columns (summary_price, buying_price) are varchar and a single blank
@@ -521,6 +521,16 @@ export async function ownerRoutes(app: FastifyInstance) {
     }
   });
 
+  // Revenue net of manual discount, promo and points, per line (see
+  // netLineRevenue). Every figure the Laporan page shows — KPI, trend, hourly,
+  // top products — is built from this, so a sale given away for free is Rp 0
+  // of omzet everywhere on the page, not just in the headline.
+  const NET_LINE = netLineRevenue(
+    orderDetailsTable.summary_price,
+    orderDetailsTable.order_id,
+    sql`${ordersTable}`,
+  );
+
   app.get("/api/get-data-chart", async (request, reply) => {
     try {
       const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
@@ -563,10 +573,21 @@ export async function ownerRoutes(app: FastifyInstance) {
       const data = await Promise.all(
         months.map(async ({ start, end, month }) => {
           const [result] = await db
-            .select({ total: sql<string>`coalesce(sum(${money(orderDetailsTable.summary_price)}), 0)` })
+            .select({ total: sql<string>`coalesce(sum(${NET_LINE}), 0)` })
             .from(orderDetailsTable)
             .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
-            .where(and(eq(productsTable.outlet_id, outlet.id), gte(orderDetailsTable.created_at, start), lt(orderDetailsTable.created_at, end)));
+            .innerJoin(ordersTable, eq(orderDetailsTable.order_id, ordersTable.id))
+            // Same realized-sales scope as /api/reports/summary: a voided or
+            // still-pending order is not omzet on the chart either.
+            .where(
+              and(
+                orderNotDeleted,
+                notInArray(ordersTable.status, ["cancelled", "pending"]),
+                eq(productsTable.outlet_id, outlet.id),
+                gte(orderDetailsTable.created_at, start),
+                lt(orderDetailsTable.created_at, end),
+              ),
+            );
           return { month, total: Number(result?.total ?? 0) };
         }),
       );
@@ -595,12 +616,17 @@ export async function ownerRoutes(app: FastifyInstance) {
         .select({
           hour: sql<number>`extract(hour from ${orderDetailsTable.created_at} at time zone ${timezone})::int`,
           count: sql<number>`count(distinct ${orderDetailsTable.order_id})`,
-          total: sql<number>`coalesce(sum(${money(orderDetailsTable.summary_price)}), 0)`,
+          total: sql<number>`coalesce(sum(${NET_LINE}), 0)`,
         })
         .from(orderDetailsTable)
         .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
+        .innerJoin(ordersTable, eq(orderDetailsTable.order_id, ordersTable.id))
         .where(
           and(
+            // Same realized-sales scope as /api/reports/summary, so the hourly
+            // bars and the KPI above them can never disagree about a day.
+            orderNotDeleted,
+            notInArray(ordersTable.status, ["cancelled", "pending"]),
             eq(productsTable.outlet_id, outlet.id),
             gte(orderDetailsTable.created_at, startUTC),
             lt(orderDetailsTable.created_at, endUTC),
@@ -688,7 +714,7 @@ export async function ownerRoutes(app: FastifyInstance) {
         );
 
       const kpiSelect = {
-        revenue: sql<number>`coalesce(sum(${money(orderDetailsTable.summary_price)}), 0)`.mapWith(Number),
+        revenue: sql<number>`coalesce(sum(${NET_LINE}), 0)`.mapWith(Number),
         orders: sql<number>`count(distinct ${orderDetailsTable.order_id})`.mapWith(Number),
       };
 
@@ -721,7 +747,27 @@ export async function ownerRoutes(app: FastifyInstance) {
         return Number(row?.cogs ?? 0);
       };
 
-      const [cur, prev, curCogs, prevCogs, trendRows, topRows, hourRows] = await Promise.all([
+      // Tax collected, same order-level scope and window as cogsFor. Shown as
+      // its own KPI so the drawer reconciles against the page in the open:
+      // omzet + tax = what the cash book took in, and the owner should be able
+      // to read that off the screen instead of wondering where the gap went.
+      const taxFor = async (start: Date, end: Date) => {
+        const [row] = await db
+          .select({ tax: sql<number>`coalesce(sum(coalesce(${ordersTable.tax_amount}, 0)), 0)`.mapWith(Number) })
+          .from(ordersTable)
+          .where(
+            and(
+              orderNotDeleted,
+              eq(ordersTable.outlet_id, outlet.id),
+              notInArray(ordersTable.status, ["cancelled", "pending"]),
+              gte(ordersTable.createdAt, start),
+              lt(ordersTable.createdAt, end),
+            ),
+          );
+        return Number(row?.tax ?? 0);
+      };
+
+      const [cur, prev, curCogs, prevCogs, curTax, prevTax, trendRows, topRows, hourRows] = await Promise.all([
         db
           .select(kpiSelect)
           .from(orderDetailsTable)
@@ -736,10 +782,12 @@ export async function ownerRoutes(app: FastifyInstance) {
           .where(scope(prevFrom, prevTo)),
         cogsFor(from, to),
         cogsFor(prevFrom, prevTo),
+        taxFor(from, to),
+        taxFor(prevFrom, prevTo),
         db
           .select({
             day: sql<string>`(${orderDetailsTable.created_at} at time zone ${timezone})::date`,
-            revenue: sql<number>`coalesce(sum(${money(orderDetailsTable.summary_price)}), 0)`.mapWith(Number),
+            revenue: sql<number>`coalesce(sum(${NET_LINE}), 0)`.mapWith(Number),
           })
           .from(orderDetailsTable)
           .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
@@ -751,7 +799,7 @@ export async function ownerRoutes(app: FastifyInstance) {
           .select({
             name: productsTable.product_name,
             qty: sql<number>`coalesce(sum(${orderDetailsTable.quantity}), 0)`.mapWith(Number),
-            revenue: sql<number>`coalesce(sum(${money(orderDetailsTable.summary_price)}), 0)`.mapWith(Number),
+            revenue: sql<number>`coalesce(sum(${NET_LINE}), 0)`.mapWith(Number),
             // From the cost ledger, the same source as the profit KPI above.
             // This used to be a live buying_price join with a note explaining
             // that per-product cost was unreadable from the ledger — true until
@@ -760,7 +808,7 @@ export async function ownerRoutes(app: FastifyInstance) {
             // Until then a nasi goreng cost whatever was typed into its
             // buying_price, which for a recipe product is usually nothing, so
             // the dishes an owner actually makes ranked as pure profit.
-            profit: sql<number>`coalesce(sum(${money(orderDetailsTable.summary_price)} - ${lineCogsSql({
+            profit: sql<number>`coalesce(sum(${NET_LINE} - ${lineCogsSql({
               id: orderDetailsTable.id,
               unitCost: orderDetailsTable.unit_cost,
               quantity: orderDetailsTable.quantity,
@@ -772,13 +820,13 @@ export async function ownerRoutes(app: FastifyInstance) {
           .innerJoin(ordersTable, eq(orderDetailsTable.order_id, ordersTable.id))
           .where(scope(from, to))
           .groupBy(productsTable.id)
-          .orderBy(desc(sql`coalesce(sum(${money(orderDetailsTable.summary_price)}), 0)`))
+          .orderBy(desc(sql`coalesce(sum(${NET_LINE}), 0)`))
           .limit(8),
         db
           .select({
             hour: sql<number>`extract(hour from (${orderDetailsTable.created_at} at time zone ${timezone}))::int`,
             orders: sql<number>`count(distinct ${orderDetailsTable.order_id})`.mapWith(Number),
-            revenue: sql<number>`coalesce(sum(${money(orderDetailsTable.summary_price)}), 0)`.mapWith(Number),
+            revenue: sql<number>`coalesce(sum(${NET_LINE}), 0)`.mapWith(Number),
           })
           .from(orderDetailsTable)
           .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
@@ -798,6 +846,12 @@ export async function ownerRoutes(app: FastifyInstance) {
         if (h >= 0 && h < 24) hourly[h] = { hour: h, orders: r.orders, revenue: Number(r.revenue) };
       });
 
+      // The tax chip is a plan feature (Max Lite and up), like the setting
+      // itself. The AMOUNT is always returned — money already collected is not
+      // hidden by a downgrade — the flag only says whether the page should
+      // give it a card of its own.
+      const gate = await getSubscriptionGate(outlet.user_id);
+
       return {
         success: true,
         period,
@@ -807,10 +861,14 @@ export async function ownerRoutes(app: FastifyInstance) {
           profit: c.revenue - c.cogs,
           orders: c.orders,
           aov: c.orders > 0 ? Math.round(c.revenue / c.orders) : 0,
+          tax: curTax,
           revenueDeltaPct: Number(pct(c.revenue, p.revenue).toFixed(1)),
           profitDeltaPct: Number(pct(c.revenue - c.cogs, p.revenue - p.cogs).toFixed(1)),
           ordersDeltaPct: Number(pct(c.orders, p.orders).toFixed(1)),
+          taxDeltaPct: Number(pct(curTax, prevTax).toFixed(1)),
         },
+        taxFeature: gate.features.tax === true,
+        taxLabel: outlet.tax_label || "Pajak",
         trend: trendRows.map((r) => ({ day: String(r.day), revenue: Number(r.revenue) })),
         topProducts: topRows.map((r) => ({
           name: r.name,

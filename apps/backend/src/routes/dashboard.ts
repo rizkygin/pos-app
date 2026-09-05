@@ -35,6 +35,7 @@ import {
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 import { orderNotDeleted } from "../lib/order-scope";
+import { orderDiscount } from "../lib/money-sql";
 import { getOutletByUserId } from "../lib/outlet-id";
 import { notInternalCategory } from "../lib/outlet-features";
 import { getOutletAccess, hasPermission, parseActiveOutletId } from "../lib/outlet-access";
@@ -159,7 +160,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
       prevToday: sql<number>`coalesce(sum(${amount}) filter (where ${at} >= ${yesterdayStart} and ${at} < ${todayStart}), 0)`.mapWith(Number),
     });
 
-    const [[orderSums], [invoiceSums]] = await Promise.all([
+    const [[grossOrderSums], [invoiceSums], [discountSums]] = await Promise.all([
       db
         .select({
           ...bucketSums(
@@ -187,7 +188,28 @@ export async function dashboardRoutes(app: FastifyInstance) {
         })
         .from(invoicesTable)
         .where(and(validSalesInvoices, gte(invoicesTable.issue_date, windowStart))),
+      // Order-level discounts (manual, promo, points) live on the ORDER, one
+      // per sale, so they cannot ride along the line scan above without being
+      // counted once per line. A second pass over orders, same window and same
+      // buckets, subtracted below. See orderDiscount in lib/money-sql.ts.
+      db
+        .select(bucketSums(orderDiscount(sql`${ordersTable}`), ordersTable.createdAt))
+        .from(ordersTable)
+        .where(and(validOrderDetails, gte(ordersTable.createdAt, windowStart))),
     ]);
+
+    // Net of discounts: what the customer actually paid. Gross line revenue
+    // minus a points-paid sale would otherwise report the bill as income and
+    // put gross profit above what the drawer ever saw.
+    const orderSums = {
+      ...grossOrderSums,
+      cur6: (grossOrderSums?.cur6 ?? 0) - (discountSums?.cur6 ?? 0),
+      prev6: (grossOrderSums?.prev6 ?? 0) - (discountSums?.prev6 ?? 0),
+      cur7: (grossOrderSums?.cur7 ?? 0) - (discountSums?.cur7 ?? 0),
+      prev7: (grossOrderSums?.prev7 ?? 0) - (discountSums?.prev7 ?? 0),
+      curToday: (grossOrderSums?.curToday ?? 0) - (discountSums?.curToday ?? 0),
+      prevToday: (grossOrderSums?.prevToday ?? 0) - (discountSums?.prevToday ?? 0),
+    };
 
     // Today's Kasir vs Online split. Revenue for the average comes from the
     // curToday bucket the headline already computes.

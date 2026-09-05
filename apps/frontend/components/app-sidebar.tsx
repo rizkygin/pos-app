@@ -38,6 +38,7 @@ import {
   Receipt,
   ClipboardList,
   Star,
+  Crown,
   History,
   CalendarClock,
   Megaphone,
@@ -216,6 +217,16 @@ const ownerNavItems: NavItem[] = [
     icon: Users,
     iconBg: 'bg-teal-100 dark:bg-teal-950',
     iconColor: 'text-teal-600 dark:text-teal-400',
+  },
+  {
+    // Always listed, like Langganan: the page itself explains the feature and
+    // offers the upgrade when the plan doesn't include it. A hidden entry is
+    // a feature nobody discovers they could buy.
+    name: 'Membership',
+    url: '/dashboard/membership',
+    icon: Crown,
+    iconBg: 'bg-violet-100 dark:bg-violet-950',
+    iconColor: 'text-violet-600 dark:text-violet-400',
   },
 ];
 

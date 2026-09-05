@@ -53,6 +53,24 @@ export type ReceiptData = {
     taxLabel?: string;
     taxAmount?: number;
     taxInclusive?: boolean;
+    /**
+     * Membership. Each piece is omitted when it didn't happen, because a
+     * receipt that prints "Poin dipakai 0" invites the customer to ask why.
+     *
+     * The discounts are their own lines under the manual one rather than
+     * folded into it: a customer should be able to see what the code was worth
+     * and what their points were worth, and the printed numbers still sum to
+     * TOTAL either way.
+     */
+    memberName?: string;
+    memberTier?: string;
+    promoCode?: string;
+    promoDiscount?: number;
+    pointsRedeemed?: number;
+    pointsDiscount?: number;
+    /** Credited by this sale, and the balance it left. */
+    pointsEarned?: number;
+    pointsBalance?: number;
     total: number;
     /**
      * Delivery orders only. The cashier (counter sale) omits it and no ongkir
@@ -214,6 +232,7 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
     };
 
     push(ESC, 0x40); // initialize
+    push(GS, 0x4c, 0x00, 0x00); // GS L 0 0 — zero left margin; some firmware defaults this nonzero, shifting the raster logo (and everything after it) right of where align() expects
 
     if (logoBytes.length) {
         // 58mm: left-aligned on purpose. The bitmap already spans the full
@@ -279,6 +298,12 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
 
     row("Subtotal", fmt(data.subtotal));
     if (data.discountAmount > 0) row(data.discountLabel, `-${fmt(data.discountAmount)}`);
+    // Membership discounts, each on its own line so the printed numbers still
+    // sum to TOTAL and the customer can see what each one saved them.
+    if (data.promoDiscount) row(`Promo ${data.promoCode ?? ""}`.trim(), `-${fmt(data.promoDiscount)}`);
+    if (data.pointsDiscount) {
+        row(`Poin (${(data.pointsRedeemed ?? 0).toLocaleString("id-ID")})`, `-${fmt(data.pointsDiscount)}`);
+    }
     if (data.deliveryFee) row("Ongkos kirim", fmt(data.deliveryFee));
     if (data.taxAmount !== undefined && data.taxLabel) {
         // Inclusive tax is a disclosure, not a charge: it is already inside the
@@ -305,6 +330,19 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
             row("Kembali", fmt(data.changeDue ?? 0));
         } else {
             row("Pembayaran", posPaymentLabel(data.paymentMethod));
+        }
+        divider();
+    }
+
+    // The member's own block, last, because it is about the next visit rather
+    // than this bill. Printed whenever a member was attached, even if they
+    // earned nothing — "you are recognised here" is the point of it.
+    if (data.memberName) {
+        align(0);
+        row("Member", data.memberTier ? `${data.memberName} (${data.memberTier})` : data.memberName);
+        if (data.pointsEarned) row("Poin didapat", `+${data.pointsEarned.toLocaleString("id-ID")}`);
+        if (data.pointsBalance !== undefined) {
+            row("Sisa poin", data.pointsBalance.toLocaleString("id-ID"));
         }
         divider();
     }
@@ -387,6 +425,7 @@ function buildKitchenEscposBase64(data: ReceiptData, paper: PaperWidth): string 
     };
 
     push(ESC, 0x40); // initialize
+    push(GS, 0x4c, 0x00, 0x00); // GS L 0 0 — zero left margin, see buildReceiptEscposBase64
 
     align(1);
     bold(true);
@@ -526,6 +565,21 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
                   : `<div class="row b"><span>Pembayaran</span><span>${esc(posPaymentLabel(data.paymentMethod))}</span></div>`) +
               `<div class="dv"></div>`;
 
+        // Mirrors the ESC/POS member block: about the next visit, not this
+        // bill, so it sits after the payment and before the thank-you.
+        const memberHtml = !data.memberName
+            ? ""
+            : `<div class="row sm"><span>Member</span><span class="b">${esc(
+                  data.memberTier ? `${data.memberName} (${data.memberTier})` : data.memberName,
+              )}</span></div>` +
+              (data.pointsEarned
+                  ? `<div class="row sm"><span>Poin didapat</span><span>+${data.pointsEarned.toLocaleString("id-ID")}</span></div>`
+                  : "") +
+              (data.pointsBalance !== undefined
+                  ? `<div class="row sm"><span>Sisa poin</span><span>${data.pointsBalance.toLocaleString("id-ID")}</span></div>`
+                  : "") +
+              `<div class="dv"></div>`;
+
         const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Struk #${shortId}</title>
 <style>
   @page { size: ${mm} auto; margin: 0; }
@@ -565,11 +619,14 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
   <div class="dv"></div>
   <div class="row sm"><span>Subtotal</span><span>${fmt(data.subtotal)}</span></div>
   ${data.discountAmount > 0 ? `<div class="row sm"><span>${esc(data.discountLabel)}</span><span>-${fmt(data.discountAmount)}</span></div>` : ""}
+  ${data.promoDiscount ? `<div class="row sm"><span>Promo ${esc(data.promoCode ?? "")}</span><span>-${fmt(data.promoDiscount)}</span></div>` : ""}
+  ${data.pointsDiscount ? `<div class="row sm"><span>Poin (${(data.pointsRedeemed ?? 0).toLocaleString("id-ID")})</span><span>-${fmt(data.pointsDiscount)}</span></div>` : ""}
   ${data.deliveryFee ? `<div class="row sm"><span>Ongkos kirim</span><span>${fmt(data.deliveryFee)}</span></div>` : ""}
   ${data.taxAmount !== undefined && data.taxLabel ? `<div class="row sm"><span>${esc(data.taxLabel)}${data.taxInclusive ? " (termasuk)" : ""}</span><span>${fmt(data.taxAmount)}</span></div>` : ""}
   <div class="row b lg"><span>TOTAL</span><span>${fmt(data.total)}</span></div>
   <div class="dv"></div>
   ${paymentHtml}
+  ${memberHtml}
   <div class="c sm">Terima kasih!</div>
   <div class="c sm">Silakan datang kembali ^^</div>
   <div class="dv"></div>
@@ -885,6 +942,20 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
                                 {data.discountAmount > 0 ? '-' : ''}{fmt(data.discountAmount)}
                             </span>
                         </div>
+                        {data.promoDiscount ? (
+                            <div className="flex justify-between text-xs mb-2">
+                                <span className="text-gray-500">Promo {data.promoCode}</span>
+                                <span className="text-rose-500">-{fmt(data.promoDiscount)}</span>
+                            </div>
+                        ) : null}
+                        {data.pointsDiscount ? (
+                            <div className="flex justify-between text-xs mb-2">
+                                <span className="text-gray-500">
+                                    Poin ({(data.pointsRedeemed ?? 0).toLocaleString('id-ID')})
+                                </span>
+                                <span className="text-rose-500">-{fmt(data.pointsDiscount)}</span>
+                            </div>
+                        ) : null}
                         {data.deliveryFee ? (
                             <div className="flex justify-between text-xs mb-2">
                                 <span className="text-gray-500">Ongkos kirim</span>
@@ -928,6 +999,37 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
                                             <span className="text-emerald-600">{fmt(data.changeDue ?? 0)}</span>
                                         </div>
                                     </>
+                                )}
+                                <div className="border-t border-dashed border-gray-300 my-3" />
+                            </>
+                        )}
+
+                        {/* Member block: about the next visit, so it sits after
+                            the payment, exactly as both printed slips have it. */}
+                        {data.memberName && (
+                            <>
+                                <div className="flex justify-between text-xs mb-1">
+                                    <span className="text-gray-500">Member</span>
+                                    <span className="font-semibold">
+                                        {data.memberName}
+                                        {data.memberTier ? ` (${data.memberTier})` : ''}
+                                    </span>
+                                </div>
+                                {data.pointsEarned ? (
+                                    <div className="flex justify-between text-xs mb-1">
+                                        <span className="text-gray-500">Poin didapat</span>
+                                        <span className="font-semibold text-amber-600">
+                                            +{data.pointsEarned.toLocaleString('id-ID')}
+                                        </span>
+                                    </div>
+                                ) : null}
+                                {data.pointsBalance !== undefined && (
+                                    <div className="flex justify-between text-xs mb-1">
+                                        <span className="text-gray-500">Sisa poin</span>
+                                        <span className="font-semibold">
+                                            {data.pointsBalance.toLocaleString('id-ID')}
+                                        </span>
+                                    </div>
                                 )}
                                 <div className="border-t border-dashed border-gray-300 my-3" />
                             </>

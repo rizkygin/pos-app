@@ -2,7 +2,7 @@ import { and, eq, isNull, desc } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 import { db } from "../db";
 import { cashierShiftsTable, outletsTable } from "../db/schema";
-import { money } from "./money-sql";
+import { money, orderDiscount } from "./money-sql";
 import { posPaymentLabel } from "./pos-payment";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -150,11 +150,7 @@ export async function buildShiftReport(
     with per_order as (
       select o.id,
              coalesce(nullif(o.note ->> 'paymentMethod', ''), 'cash') as method,
-             -- Same crash guard as lib/money-sql.ts, applied to a JSON value:
-             -- note is untyped, so a non-numeric discountAmount would otherwise
-             -- abort the whole statement rather than just its own row.
-             case when (o.note ->> 'discountAmount') ~ '^\\s*-?[0-9]+(\\.[0-9]+)?\\s*$'
-                  then (o.note ->> 'discountAmount')::numeric else 0 end as discount,
+             ${orderDiscount(sql`o`)} as discount,
              coalesce(o.tax_amount, 0) as tax,
              -- What this order actually put in the till. Exclusive tax was
              -- handed over on top of the line prices; inclusive tax was already
@@ -244,8 +240,7 @@ export async function buildShiftReport(
            coalesce(sum(
              coalesce((select sum(${money(sql`od.summary_price`)})
                          from "orderDetails" od where od.order_id = o.id), 0)
-             - case when (o.note ->> 'discountAmount') ~ '^\\s*-?[0-9]+(\\.[0-9]+)?\\s*$'
-                    then (o.note ->> 'discountAmount')::numeric else 0 end
+             - ${orderDiscount(sql`o`)}
              -- Same tax rule as the sales query: a void gives back what was
              -- tendered, so exclusive tax comes back and inclusive tax is
              -- already inside the line prices.
@@ -341,4 +336,139 @@ export async function listRecentShifts(outletId: number, limit: number) {
     .where(eq(cashierShiftsTable.outlet_id, outletId))
     .orderBy(desc(cashierShiftsTable.opened_at))
     .limit(limit);
+}
+
+export type ShiftListRow = {
+  id: number;
+  cashierName: string;
+  openedAt: string;
+  closedAt: string | null;
+  isOpen: boolean;
+  openingFloat: number;
+  /** Sales rung up on this shift, after discount, before tax. */
+  net: number;
+  tax: number;
+  /** What customers handed over across every method (net + exclusive tax). */
+  collected: number;
+  cashCollected: number;
+  nonCashCollected: number;
+  orderCount: number;
+  cancelledCount: number;
+  cashIn: number;
+  cashOut: number;
+  expectedCash: number;
+  countedCash: number | null;
+  variance: number | null;
+  closingNote: string | null;
+};
+
+/**
+ * Every shift OPENED inside [from, to), with the figures the closing slip
+ * prints, in one query. The owner's Laporan Shift is this list; clicking a row
+ * fetches buildShiftReport for the full slip.
+ *
+ * Same arithmetic as buildShiftReport, deliberately: net is gross minus the
+ * order's discount, collected adds back the tax that was handed over on top,
+ * and only cash movements count towards the drawer. A shift that shows one
+ * expected-cash figure on its slip and another on this page is a shift nobody
+ * can reconcile.
+ *
+ * Keyed on opened_at rather than closed_at so an overnight shift lands on the
+ * day it started and an open shift appears at all.
+ */
+export async function listShiftsInRange(
+  outletId: number,
+  from: Date,
+  to: Date,
+): Promise<ShiftListRow[]> {
+  const result = await db.execute(sql`
+    with sales as (
+      select o.shift_id,
+             count(*) filter (where o.deleted_at is null)::int as order_count,
+             count(*) filter (where o.deleted_at is not null)::int as cancelled_count,
+             coalesce(sum(case when o.deleted_at is null then po.gross - po.discount else 0 end), 0)::float8 as net,
+             coalesce(sum(case when o.deleted_at is null then coalesce(o.tax_amount, 0) else 0 end), 0)::float8 as tax,
+             coalesce(sum(case when o.deleted_at is null then po.gross - po.discount + po.tax_on_top else 0 end), 0)::float8 as collected,
+             coalesce(sum(case when o.deleted_at is null and po.method = 'cash'
+                               then po.gross - po.discount + po.tax_on_top else 0 end), 0)::float8 as cash_collected
+        from orders o
+        cross join lateral (
+          select coalesce(nullif(o.note ->> 'paymentMethod', ''), 'cash') as method,
+                 ${orderDiscount(sql`o`)} as discount,
+                 case when coalesce(o.tax_inclusive, false) then 0
+                      else coalesce(o.tax_amount, 0) end as tax_on_top,
+                 coalesce((select sum(${money(sql`od.summary_price`)})
+                             from "orderDetails" od where od.order_id = o.id), 0) as gross
+        ) po
+       where o.outlet_id = ${outletId}
+         and o.shift_id is not null
+       group by o.shift_id
+    ),
+    cash as (
+      select cf.shift_id,
+             coalesce(sum(case when ci.type = 'cash' then ${money(sql`ci.money_amount`)} else 0 end), 0)::float8 as cash_in,
+             coalesce(sum(case when co.type = 'cash' then ${money(sql`co.money_amount`)} else 0 end), 0)::float8 as cash_out
+        from "cashFlows" cf
+        left join "cashInDetailTable"  ci on ci.id = cf.cash_in_detail_id
+        left join "cashOutDetailTable" co on co.id = cf.cash_out_detail_id
+       where cf.outlet_id = ${outletId}
+         and cf.shift_id is not null
+       group by cf.shift_id
+    )
+    select s.id, s.cashier_name,
+           to_json(s.opened_at) #>> '{}' as opened_at,
+           to_json(s.closed_at) #>> '{}' as closed_at,
+           s.opening_float::float8 as opening_float,
+           s.expected_cash::float8 as expected_cash,
+           s.counted_cash::float8  as counted_cash,
+           s.variance::float8      as variance,
+           s.closing_note,
+           coalesce(sa.order_count, 0)     as order_count,
+           coalesce(sa.cancelled_count, 0) as cancelled_count,
+           coalesce(sa.net, 0)             as net,
+           coalesce(sa.tax, 0)             as tax,
+           coalesce(sa.collected, 0)       as collected,
+           coalesce(sa.cash_collected, 0)  as cash_collected,
+           coalesce(c.cash_in, 0)          as cash_in,
+           coalesce(c.cash_out, 0)         as cash_out
+      from cashier_shifts s
+      left join sales sa on sa.shift_id = s.id
+      left join cash  c  on c.shift_id  = s.id
+     where s.outlet_id = ${outletId}
+       and s.opened_at >= ${from}
+       and s.opened_at <  ${to}
+     order by s.opened_at desc
+  `);
+
+  return (result.rows as any[]).map((r) => {
+    const isOpen = r.closed_at === null;
+    const openingFloat = Number(r.opening_float ?? 0);
+    const cashIn = Number(r.cash_in);
+    const cashOut = Number(r.cash_out);
+    const collected = Number(r.collected);
+    const cashCollected = Number(r.cash_collected);
+    return {
+      id: Number(r.id),
+      cashierName: String(r.cashier_name),
+      openedAt: new Date(r.opened_at).toISOString(),
+      closedAt: r.closed_at ? new Date(r.closed_at).toISOString() : null,
+      isOpen,
+      openingFloat,
+      net: Number(r.net),
+      tax: Number(r.tax),
+      collected,
+      cashCollected,
+      nonCashCollected: collected - cashCollected,
+      orderCount: Number(r.order_count),
+      cancelledCount: Number(r.cancelled_count),
+      cashIn,
+      cashOut,
+      // Closed shifts report the frozen figure from their slip (see
+      // buildShiftReport for why); an open one is computed live.
+      expectedCash: isOpen ? openingFloat + cashIn - cashOut : Number(r.expected_cash ?? 0),
+      countedCash: r.counted_cash === null ? null : Number(r.counted_cash),
+      variance: r.variance === null ? null : Number(r.variance),
+      closingNote: r.closing_note ?? null,
+    };
+  });
 }

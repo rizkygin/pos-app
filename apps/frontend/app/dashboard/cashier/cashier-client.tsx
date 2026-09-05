@@ -28,6 +28,7 @@ import {
   ChefHat,
   Tag,
   Eye,
+  UserRound,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatCurrency } from '@/lib/utils/format';
@@ -43,6 +44,9 @@ import { LabelPreviewModal } from './label-preview-modal';
 import { OptionPickerModal, priceOf } from './option-picker-modal';
 import { computeTax, taxLineLabel, type TaxConfig } from '@/lib/tax';
 import { resolveProductImage, isBackendImage } from '@/lib/image-src';
+import { MembershipPanel } from './membership-panel';
+import { TIER_BADGE, TIER_LABEL, type MembershipQuote } from '@/lib/membership';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 
 export type Product = {
   id: string;
@@ -181,6 +185,14 @@ type HeldTab = {
   discountInput: string;
   paymentMethod: PosPaymentMethod;
   amountPaidInput: string;
+  /**
+   * Membership attached to this tab. Only the inputs are held, never the
+   * quote: a tab parked for an hour must re-ask the server what its promo and
+   * points are worth, because both can have changed in the meantime.
+   */
+  memberPhone: string;
+  promoCode: string;
+  pointsToRedeem: number;
 };
 
 const newHeldTab = (label: string): HeldTab => ({
@@ -194,6 +206,9 @@ const newHeldTab = (label: string): HeldTab => ({
   discountInput: '',
   paymentMethod: 'cash',
   amountPaidInput: '0',
+  memberPhone: '',
+  promoCode: '',
+  pointsToRedeem: 0,
 });
 
 type CashierClientProps = {
@@ -212,6 +227,13 @@ type CashierClientProps = {
    */
   canUseShift: boolean;
   canUsePager: boolean;
+  /**
+   * Membership programme (Ultimax). Resolved on the server so the counter
+   * never offers a member field an outlet cannot use; the backend applies the
+   * same gate when it stores the order, and ignores any member, promo or
+   * points sent by a client that shouldn't have them.
+   */
+  canUseMembership: boolean;
   /**
    * The outlet's counter tax, already resolved against the plan gate on the
    * server (disabled below Max Lite). Used for DISPLAY only — the server
@@ -254,6 +276,7 @@ export const CashierClient = ({
   cashierName,
   canUseShift,
   canUsePager,
+  canUseMembership,
   taxConfig,
   initialProducts,
 }: CashierClientProps) => {
@@ -271,8 +294,7 @@ export const CashierClient = ({
   // mounted at once (toggled by CSS breakpoint classes, not conditional
   // rendering) — a single ref would only ever point at whichever renders
   // last in JSX order.
-  const barcodeInputMobileRef = useRef<HTMLInputElement>(null);
-  const barcodeInputDesktopRef = useRef<HTMLInputElement>(null);
+  const barcodeInputRef = useRef<HTMLInputElement>(null);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
 
@@ -413,6 +435,18 @@ export const CashierClient = ({
   const [noteDraft, setNoteDraft] = useState('');
   const [amountPaidInput, setAmountPaidInput] = useState('0');
   const [paymentMethod, setPaymentMethod] = useState<PosPaymentMethod>('cash');
+  // ── Membership: inputs here, every figure from the server's quote ──
+  const [memberPhone, setMemberPhone] = useState('');
+  const [promoCode, setPromoCode] = useState('');
+  const [pointsToRedeem, setPointsToRedeem] = useState(0);
+  const [quote, setQuote] = useState<MembershipQuote | null>(null);
+  // The bill the quote was priced against. Compared before its discounts are
+  // applied, so a quote in flight while the cashier adds another item is
+  // ignored rather than shown against the wrong total.
+  const [quotedBase, setQuotedBase] = useState<number | null>(null);
+  const [quoteLoading, setQuoteLoading] = useState(false);
+  // Bumped to force a re-quote after registering a member mid-sale.
+  const [quoteNonce, setQuoteNonce] = useState(0);
   // Bumped after every checkout so the shift strip's running drawer total picks
   // up the sale that was just rung up.
   const [shiftRefresh, setShiftRefresh] = useState(0);
@@ -492,6 +526,13 @@ export const CashierClient = ({
     setDiscountInput(t.discountInput);
     setPaymentMethod(t.paymentMethod);
     setAmountPaidInput(t.amountPaidInput);
+    setMemberPhone(t.memberPhone ?? '');
+    setPromoCode(t.promoCode ?? '');
+    setPointsToRedeem(t.pointsToRedeem ?? 0);
+    // The old tab's quote must not survive the switch even for a frame: it
+    // priced a different cart for a different customer.
+    setQuote(null);
+    setQuotedBase(null);
   }, []);
 
   // Hydrate from localStorage once, client-side (avoids SSR hydration mismatch).
@@ -549,6 +590,9 @@ export const CashierClient = ({
             discountInput,
             paymentMethod,
             amountPaidInput,
+            memberPhone,
+            promoCode,
+            pointsToRedeem,
           }
         : t,
     );
@@ -563,6 +607,9 @@ export const CashierClient = ({
     discountInput,
     paymentMethod,
     amountPaidInput,
+    memberPhone,
+    promoCode,
+    pointsToRedeem,
     hydrated,
     persistTabs,
   ]);
@@ -877,9 +924,7 @@ export const CashierClient = ({
       });
     }
     setBarcodeQuery('');
-    // Keep the SAME field focused so the next scan can land immediately —
-    // there are two mounted inputs (mobile/desktop), only refocus the one
-    // that was actually just used.
+    // Keep the field focused so the next scan can land immediately.
     source.current?.focus();
   };
 
@@ -939,6 +984,14 @@ export const CashierClient = ({
     setDiscountInput('');
     setAmountPaidInput('0');
     setOrderNote('');
+    // The member came with the order, so they go with it. Leaving a phone
+    // attached to an emptied cart is how the next customer earns someone
+    // else's points.
+    setMemberPhone('');
+    setPromoCode('');
+    setPointsToRedeem(0);
+    setQuote(null);
+    setQuotedBase(null);
   };
 
   // ── Kitchen notes: per-item and per-order, both device-local ──
@@ -1074,17 +1127,114 @@ export const CashierClient = ({
         ? `Discount (${discountValue}%)`
         : 'Discount'
       : 'Discount';
-  // Net of discount, BEFORE tax. This is what gets posted as `total`: the
-  // server charges tax on it from the outlet's own settings rather than
-  // trusting a number the client worked out.
+  // Net of the manual discount, BEFORE membership and tax. This is what gets
+  // posted as `total`: the server applies the promo, the points and the tax to
+  // it from its own copy of the settings rather than trusting the client.
   const finalTotal = cartTotal - discountAmount;
 
+  // Membership comes off next, and only ever by the amounts the server quoted.
+  // A stale quote (priced against a cart that has since changed) is ignored
+  // rather than applied, so the screen never shows a discount checkout won't
+  // give — the effect below re-quotes on every change anyway.
+  const quoteFresh = !!quote && quote.enabled && quotedBase === finalTotal;
+  const promoDiscount = quoteFresh ? quote!.promoDiscount : 0;
+  const pointsDiscount = quoteFresh ? quote!.pointsDiscount : 0;
+  const membershipDiscount = promoDiscount + pointsDiscount;
+  const netTotal = Math.max(0, finalTotal - membershipDiscount);
+
   // Tax sits outside the line, so it is added (or extracted) once, here, on the
-  // discounted amount — never folded into any item price.
-  const tax = computeTax(finalTotal, taxConfig);
+  // fully discounted amount — never folded into any item price.
+  const tax = computeTax(netTotal, taxConfig);
   // What the customer actually hands over. Under inclusive pricing this equals
   // finalTotal; under exclusive it is finalTotal plus the tax.
   const grandTotal = tax.total;
+
+  // Ask the server what this bill is worth to this member. Debounced because
+  // it fires on every keystroke in the phone and promo fields, and skipped
+  // entirely when there is nothing to price — a request per empty cart is a
+  // request per item added.
+  useEffect(() => {
+    if (!canUseMembership) return;
+    const hasInput = !!memberPhone.trim() || !!promoCode.trim();
+    if (!hasInput || finalTotal <= 0) {
+      setQuote(null);
+      setQuotedBase(null);
+      setQuoteLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setQuoteLoading(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/membership/quote`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            total: finalTotal,
+            memberPhone: memberPhone.trim() || null,
+            promoCode: promoCode.trim() || null,
+            pointsToRedeem,
+          }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (res.ok && body.success) {
+          setQuote(body.quote);
+          setQuotedBase(finalTotal);
+        } else {
+          // A failed quote means no discount, never a stale one.
+          setQuote(null);
+          setQuotedBase(null);
+        }
+      } catch {
+        if (!cancelled) {
+          setQuote(null);
+          setQuotedBase(null);
+        }
+      } finally {
+        if (!cancelled) setQuoteLoading(false);
+      }
+    }, 350);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [canUseMembership, memberPhone, promoCode, pointsToRedeem, finalTotal, quoteNonce]);
+
+  const [memberOpen, setMemberOpen] = useState(false);
+  // The member as last resolved, independent of whether the quote's MONEY is
+  // fresh: identity doesn't change when an item is added, so the header badge
+  // must not blink out on every cart edit while the re-quote is in flight.
+  const attachedMember = quote?.member ?? null;
+
+  // "Nama Pelanggan" follows the member. Filled when a member attaches and the
+  // field is empty (or still holds the previous member's name), cleared again
+  // when the phone is removed — but a name the cashier typed by hand is theirs
+  // and is never overwritten, which is what the ref is for.
+  const memberFilledNameRef = useRef<string | null>(null);
+  useEffect(() => {
+    const name = attachedMember?.name ?? null;
+    if (name) {
+      if (customerName.trim() === '' || customerName === memberFilledNameRef.current) {
+        setCustomerName(name);
+        memberFilledNameRef.current = name;
+      }
+    } else if (!memberPhone.trim() && memberFilledNameRef.current) {
+      if (customerName === memberFilledNameRef.current) setCustomerName('');
+      memberFilledNameRef.current = null;
+    }
+  }, [attachedMember?.name, memberPhone, customerName]);
+
+  // Points the cashier asked for can outrun what the bill can absorb (items
+  // removed after "Maks"). The server clips silently; mirror that here so the
+  // field never shows more than will actually be spent.
+  useEffect(() => {
+    if (!quoteFresh || !quote) return;
+    if (pointsToRedeem > quote.maxRedeemablePoints) {
+      setPointsToRedeem(quote.maxRedeemablePoints);
+    }
+  }, [quoteFresh, quote, pointsToRedeem]);
 
   // Lazy mode pays the exact amount due, so change is always 0 and the payment
   // can never be insufficient. Everything about tendering and change is against
@@ -1137,6 +1287,18 @@ export const CashierClient = ({
       subtotal: cartTotal,
       discountAmount,
       discountLabel,
+      // Printed as their own lines under the manual discount, so the customer
+      // can see what the code and the points were each worth.
+      promoCode: quoteFresh ? (quote?.promo?.code ?? undefined) : undefined,
+      promoDiscount: promoDiscount || undefined,
+      pointsRedeemed: quoteFresh ? quote?.pointsRedeemed || undefined : undefined,
+      pointsDiscount: pointsDiscount || undefined,
+      memberName: quoteFresh ? (quote?.member?.name ?? undefined) : undefined,
+      memberTier: quoteFresh ? (quote?.member?.tier ?? undefined) : undefined,
+      // Predicted before checkout, replaced with what the server actually
+      // credited on the slip printed after it.
+      pointsEarned: quoteFresh ? quote?.pointsToEarn || undefined : undefined,
+      pointsBalance: quoteFresh ? quote?.member?.points_balance : undefined,
       taxLabel: tax.applies ? taxLineLabel(taxConfig) : undefined,
       taxAmount: tax.applies ? tax.amount : undefined,
       taxInclusive: taxConfig.inclusive,
@@ -1161,6 +1323,10 @@ export const CashierClient = ({
       orderNote,
       discountAmount,
       discountLabel,
+      quoteFresh,
+      quote,
+      promoDiscount,
+      pointsDiscount,
       grandTotal,
       tax,
       taxConfig,
@@ -1212,6 +1378,13 @@ export const CashierClient = ({
     const snapshotTotal = cartTotal;
     const snapshotDiscountAmount = discountAmount;
     const snapshotDiscountLabel = discountLabel;
+    // Membership, as the server last quoted it. Sent as INPUTS (phone, code,
+    // points) rather than amounts — the server re-prices them under lock, and
+    // what it hands back is what the slip prints.
+    const snapshotMemberPhone = canUseMembership ? memberPhone.trim() : '';
+    const snapshotPromoCode = canUseMembership ? promoCode.trim() : '';
+    const snapshotPoints = canUseMembership && quoteFresh ? pointsToRedeem : 0;
+    const snapshotQuote = quoteFresh ? quote : null;
     // Posted as `total`: the server wants the pre-tax, post-discount figure and
     // charges tax on it itself. Sending the grand total would tax the tax.
     const snapshotFinalTotal = finalTotal;
@@ -1245,6 +1418,9 @@ export const CashierClient = ({
           paymentMethod: snapshotPaymentMethod,
           amountPaid: snapshotAmountPaid,
           changeDue: snapshotChangeDue,
+          memberPhone: snapshotMemberPhone || null,
+          promoCode: snapshotPromoCode || null,
+          pointsToRedeem: snapshotPoints,
         }),
       });
       // Parse the body exactly once regardless of success/failure
@@ -1285,6 +1461,18 @@ export const CashierClient = ({
           subtotal: snapshotTotal,
           discountAmount: snapshotDiscountAmount,
           discountLabel: snapshotDiscountLabel,
+          // What the SERVER did, falling back to the quote for the fields it
+          // doesn't echo. The points figures especially: the screen predicted
+          // them, the server credited them, and the slip is a record of the
+          // second thing.
+          memberName: data.membership?.memberName ?? snapshotQuote?.member?.name ?? undefined,
+          memberTier: data.membership?.tier ?? snapshotQuote?.member?.tier ?? undefined,
+          promoCode: data.membership?.promoCode ?? undefined,
+          promoDiscount: data.membership?.promoDiscount || undefined,
+          pointsRedeemed: data.membership?.pointsRedeemed || undefined,
+          pointsDiscount: data.membership?.pointsDiscount || undefined,
+          pointsEarned: data.membership?.pointsEarned || undefined,
+          pointsBalance: data.membership?.pointsBalance ?? undefined,
           taxLabel: snapshotTax.applies ? taxLineLabel(taxConfig) : undefined,
           taxAmount: snapshotTax.applies ? snapshotTax.amount : undefined,
           taxInclusive: taxConfig.inclusive,
@@ -1318,6 +1506,12 @@ export const CashierClient = ({
     isInsufficient,
     paymentMethod,
     canUsePager,
+    canUseMembership,
+    memberPhone,
+    promoCode,
+    pointsToRedeem,
+    quote,
+    quoteFresh,
     grandTotal,
     tax,
     taxConfig,
@@ -1349,28 +1543,76 @@ export const CashierClient = ({
       <div className="flex-1 flex flex-col min-w-0 bg-background/50 backdrop-blur-sm border-r">
         {/* Header & Search */}
         <div className="p-3 pb-0">
-          <ShiftBar
-            cashierName={cashierName}
-            refreshSignal={shiftRefresh}
-            canUseShift={canUseShift}
-          />
-
-          {/* Mobile: search + barcode */}
-          <div className="flex items-center gap-2 mb-1 md:hidden">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          {/* One toolbar row: member, search, barcode. The mobile and desktop
+              headers used to be two separate copies of the same two inputs
+              stacked under the member row and the shift strip — five rows
+              before the first product. Everything here is h-9 and shares one
+              line at every width; only the labels widen on larger screens. */}
+          <div className="mb-1.5 flex items-center gap-2">
+            {canUseMembership && (
+              <Popover open={memberOpen} onOpenChange={setMemberOpen}>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="Member"
+                    title="Member"
+                    className={`flex h-9 shrink-0 items-center gap-1.5 rounded-xl border px-2.5 text-sm font-bold shadow-sm transition-colors ${
+                      attachedMember
+                        ? 'border-violet-300 bg-violet-50 text-violet-800 hover:bg-violet-100 dark:border-violet-800 dark:bg-violet-950/40 dark:text-violet-200 dark:hover:bg-violet-950/70'
+                        : 'bg-background/80 text-muted-foreground hover:bg-muted hover:text-foreground'
+                    }`}
+                  >
+                    <UserRound className="h-4 w-4 shrink-0" />
+                    {attachedMember ? (
+                      <>
+                        <span className="hidden max-w-[8rem] truncate sm:inline">
+                          {attachedMember.name}
+                        </span>
+                        <span
+                          className={`rounded border px-1 py-px text-[10px] font-black uppercase tracking-wide ${TIER_BADGE[attachedMember.tier]}`}
+                        >
+                          {TIER_LABEL[attachedMember.tier]}
+                        </span>
+                        <span className="hidden text-xs font-bold tabular-nums text-amber-600 md:inline dark:text-amber-400">
+                          {attachedMember.points_balance.toLocaleString('id-ID')} poin
+                        </span>
+                      </>
+                    ) : (
+                      <span className="hidden sm:inline">Member</span>
+                    )}
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent align="start" className="w-80 p-2">
+                  <MembershipPanel
+                    bare
+                    base={finalTotal}
+                    phone={memberPhone}
+                    onPhoneChange={setMemberPhone}
+                    promoCode={promoCode}
+                    onPromoCodeChange={setPromoCode}
+                    pointsToRedeem={pointsToRedeem}
+                    onPointsChange={setPointsToRedeem}
+                    quote={quoteFresh ? quote : null}
+                    loading={quoteLoading}
+                    onRegistered={() => setQuoteNonce((n) => n + 1)}
+                  />
+                </PopoverContent>
+              </Popover>
+            )}
+            <div className="relative min-w-0 flex-1">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <input
                 type="text"
-                placeholder="Search products..."
+                placeholder="Cari produk..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full h-9 pl-10 pr-4 rounded-xl border bg-background/80 shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none text-sm"
+                className="h-9 w-full rounded-xl border bg-background/80 pl-9 pr-3 text-sm shadow-sm outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-blue-500"
               />
             </div>
-            <div className="relative flex-1">
-              <Barcode className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <div className="relative min-w-0 flex-1 md:w-52 md:flex-none">
+              <Barcode className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <input
-                ref={barcodeInputMobileRef}
+                ref={barcodeInputRef}
                 type="text"
                 placeholder="Scan barcode..."
                 value={barcodeQuery}
@@ -1378,56 +1620,18 @@ export const CashierClient = ({
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault();
-                    handleBarcodeScan(barcodeInputMobileRef);
+                    handleBarcodeScan(barcodeInputRef);
                   }
                 }}
-                className="w-full h-9 pl-10 pr-4 rounded-xl border bg-background/80 shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none text-sm font-mono"
+                className="h-9 w-full rounded-xl border bg-background/80 pl-9 pr-3 font-mono text-sm shadow-sm outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-blue-500"
               />
-            </div>
-          </div>
-          {barcodeFeedback && (
-            <p
-              className={`text-xs mb-1 md:hidden ${barcodeFeedback.ok ? 'text-emerald-600' : 'text-rose-600'}`}
-            >
-              {barcodeFeedback.text}
-            </p>
-          )}
-
-          {/* Desktop: full header */}
-          <div className="hidden md:flex flex-row gap-4 items-center justify-between">
-            <div className="flex flex-col items-end gap-1">
-              <div className="flex gap-3">
-                <div className="relative w-56">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <input
-                    type="text"
-                    placeholder="Search products..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full h-11 pl-10 pr-4 rounded-xl border bg-background/80 shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none"
-                  />
-                </div>
-                <div className="relative w-56">
-                  <Barcode className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <input
-                    ref={barcodeInputDesktopRef}
-                    type="text"
-                    placeholder="Scan barcode..."
-                    value={barcodeQuery}
-                    onChange={(e) => setBarcodeQuery(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        handleBarcodeScan(barcodeInputDesktopRef);
-                      }
-                    }}
-                    className="w-full h-11 pl-10 pr-4 rounded-xl border bg-background/80 shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none font-mono"
-                  />
-                </div>
-              </div>
+              {/* Transient (2.5s), so it floats over the row rather than
+                  reserving a line that sits empty the rest of the time. */}
               {barcodeFeedback && (
                 <p
-                  className={`text-xs ${barcodeFeedback.ok ? 'text-emerald-600' : 'text-rose-600'}`}
+                  className={`absolute right-0 top-full z-10 mt-1 max-w-[20rem] truncate rounded-md border bg-background px-2 py-1 text-xs shadow-md ${
+                    barcodeFeedback.ok ? 'text-emerald-600' : 'text-rose-600'
+                  }`}
                 >
                   {barcodeFeedback.text}
                 </p>
@@ -1435,18 +1639,24 @@ export const CashierClient = ({
             </div>
           </div>
 
+          <ShiftBar
+            cashierName={cashierName}
+            refreshSignal={shiftRefresh}
+            canUseShift={canUseShift}
+          />
+
           {/* Categories */}
-          <div className="flex gap-2 md:gap-3 overflow-x-auto scrollbar-hide">
+          <div className="flex gap-1.5 overflow-x-auto scrollbar-hide md:gap-2">
             {categories.map((cat) => (
               <button
                 key={cat.id}
                 onClick={() => setSelectedCategory(cat.id)}
                 // capitalize: owner-typed section names already read properly,
                 // but the raw category fallback is stored lowercase.
-                className={`flex items-center gap-1.5 md:gap-2 px-3 py-1.5 md:px-4 md:py-2.5 rounded-xl border-2 whitespace-nowrap capitalize transition-all duration-300 font-semibold text-xs md:text-sm ${
+                className={`flex items-center gap-1.5 whitespace-nowrap rounded-lg border-2 px-2.5 py-1.5 text-xs font-semibold capitalize transition-all duration-300 md:px-3 md:text-sm ${
                   selectedCategory === cat.id
                     ? `${cat.border} ${cat.bg} ${cat.color} shadow-sm ring-1 ring-current`
-                    : 'border-transparent bg-background/60 hover:bg-muted text-muted-foreground hover:text-foreground hover:border-border'
+                    : 'border-transparent bg-background/60 text-muted-foreground hover:border-border hover:bg-muted hover:text-foreground'
                 }`}
               >
                 <cat.icon className="h-3.5 w-3.5 md:h-4 md:w-4" />
@@ -2165,6 +2375,31 @@ export const CashierClient = ({
               </span>
             </div>
 
+            {/* Membership discounts get their own rows rather than joining the
+                manual one: the cashier has to be able to say which is which
+                when a customer asks why the total moved. */}
+            {promoDiscount > 0 && (
+              <div className="mt-1.5 flex items-center justify-between text-sm text-muted-foreground">
+                <span className="truncate">Promo {quote?.promo?.code}</span>
+                <span className="shrink-0 font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
+                  -{formatCurrency(promoDiscount)}
+                </span>
+              </div>
+            )}
+            {pointsDiscount > 0 && (
+              <div className="mt-1.5 flex items-center justify-between text-sm text-muted-foreground">
+                <span>
+                  Poin
+                  <span className="ml-1 text-[11px]">
+                    ({quote?.pointsRedeemed.toLocaleString('id-ID')} poin)
+                  </span>
+                </span>
+                <span className="shrink-0 font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
+                  -{formatCurrency(pointsDiscount)}
+                </span>
+              </div>
+            )}
+
             {tax.applies && (
               <div className="mt-1.5 flex items-center justify-between text-sm text-muted-foreground">
                 <span>
@@ -2314,9 +2549,7 @@ export const CashierClient = ({
             >
               <CreditCard className="mr-2 h-5 w-5" />
               {isSubmitting ? 'Processing…' : 'Checkout Now'}
-              <span className="absolute right-4 text-xs font-medium text-white/50 bg-white/10 px-2 py-1 rounded hidden lg:block group-hover:bg-white/20 transition-colors">
-                ⌘ ↵
-              </span>
+              
             </Button>
           </div>
         </div>

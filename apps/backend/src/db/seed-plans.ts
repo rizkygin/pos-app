@@ -19,6 +19,9 @@ const plans = [
   { tier: 'max_lite', interval: 'yearly', name: 'Max Lite Tahunan', price: 1080000, sort_order: 30 },
   { tier: 'max', interval: 'monthly', name: 'Max Bulanan', price: 200000, sort_order: 40 },
   { tier: 'max', interval: 'yearly', name: 'Max Tahunan', price: 1944000, sort_order: 40 },
+  // PLACEHOLDER prices: Max + 50%. Adjust from the pricing sheet before seeding prod.
+  { tier: 'ultimax', interval: 'monthly', name: 'Ultimax Bulanan', price: 300000, sort_order: 50 },
+  { tier: 'ultimax', interval: 'yearly', name: 'Ultimax Tahunan', price: 3240000, sort_order: 50 },
 ] as const;
 
 // cashierShift / pager / tax are the counter features that start at Max Lite:
@@ -39,7 +42,10 @@ const featuresByTier: Record<string, Record<string, unknown>> = {
   basic: { maxOutlets: 1, maxEmployees: 1, desktopCashier: false, customerCanOrder: true, salesInvoice: false, purchaseInvoice: false, stock: false, cashflow: true, report: true, reportInvoice: false, cashierShift: false, pager: false, tax: false, recipeExplorer: false },
   pro: { maxOutlets: 1, maxEmployees: 3, desktopCashier: false, customerCanOrder: true, salesInvoice: true, purchaseInvoice: true, stock: false, cashflow: true, report: true, reportInvoice: false, cashierShift: false, pager: false, tax: false, recipeExplorer: true },
   max_lite: { maxOutlets: 2, maxEmployees: 5, desktopCashier: true, customerCanOrder: true, salesInvoice: true, purchaseInvoice: true, stock: true, cashflow: true, report: true, reportInvoice: true, cashierShift: true, pager: true, tax: true, recipeExplorer: true },
-  max: { maxOutlets: 3, maxEmployees: 5, desktopCashier: true, customerCanOrder: true, salesInvoice: true, purchaseInvoice: true, stock: true, cashflow: true, report: true, reportInvoice: true, cashierShift: true, pager: true, tax: true, recipeExplorer: true },
+  max: { maxOutlets: 3, maxEmployees: 5, desktopCashier: true, customerCanOrder: true, salesInvoice: true, purchaseInvoice: true, stock: true, cashflow: true, report: true, reportInvoice: true, cashierShift: true, pager: true, tax: true, recipeExplorer: true, membership: false },
+  // Ultimax = Max, plus the membership programme (members, points, tiers,
+  // outlet promo codes) on every outlet the owner runs. Same caps otherwise.
+  ultimax: { maxOutlets: 3, maxEmployees: 5, desktopCashier: true, customerCanOrder: true, salesInvoice: true, purchaseInvoice: true, stock: true, cashflow: true, report: true, reportInvoice: true, cashierShift: true, pager: true, tax: true, recipeExplorer: true, membership: true },
 };
 
 // PLACEHOLDER trial length (same for all plans). Adjust per tier if desired.

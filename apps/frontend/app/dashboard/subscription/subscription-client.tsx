@@ -35,7 +35,7 @@ import { API_URL } from '@/lib/api-url';
 
 type Plan = {
   id: number;
-  tier: 'basic' | 'pro' | 'max_lite' | 'max';
+  tier: 'basic' | 'pro' | 'max_lite' | 'max' | 'ultimax';
   interval: 'monthly' | 'yearly';
   name: string;
   price: string;
@@ -54,6 +54,7 @@ type Plan = {
     cashierShift?: boolean;
     pager?: boolean;
     tax?: boolean;
+    membership?: boolean;
   };
 };
 
@@ -110,12 +111,14 @@ const TIER_LABEL: Record<Plan['tier'], string> = {
   pro: 'Pro',
   max_lite: 'Max Lite',
   max: 'Max',
+  ultimax: 'Ultimax',
 };
 const TIER_TAGLINE: Record<Plan['tier'], string> = {
   basic: 'Untuk usaha yang baru mulai',
   pro: 'Paling pas untuk usaha berkembang',
   max_lite: 'Multi-outlet + kasir desktop',
   max: 'Tanpa batas, semua fitur',
+  ultimax: 'Max + membership di semua outlet',
 };
 
 const SUB_STATUS_LABEL: Record<Subscription['status'], string> = {
@@ -551,7 +554,7 @@ export function SubscriptionClient() {
         {/* pt-3/-mt-3: the "Terpopuler" badge floats 12px ABOVE its card; an
             overflow-x-auto container clips vertical overflow too, so give the
             scroll box internal top padding for the badge to live in. */}
-        <div className="-mx-4 -mt-3 flex snap-x snap-mandatory gap-4 overflow-x-auto px-4 pt-3 pb-2 scrollbar-hide sm:mx-0 sm:mt-0 sm:grid sm:grid-cols-2 sm:overflow-visible sm:px-0 sm:pt-0 sm:pb-0 lg:grid-cols-4">
+        <div className="-mx-4 -mt-3 flex snap-x snap-mandatory gap-4 overflow-x-auto px-4 pt-3 pb-2 scrollbar-hide sm:mx-0 sm:mt-0 sm:grid sm:grid-cols-2 sm:overflow-visible sm:px-0 sm:pt-0 sm:pb-0 lg:grid-cols-3 xl:grid-cols-5">
           {plans
             .filter((p) => p.interval === interval)
             .map((p) => {
@@ -648,6 +651,9 @@ export function SubscriptionClient() {
                     </FeatureRow>
                     <FeatureRow ok={!!f.tax} icon={Percent}>
                       Pajak kasir (PB1 / PPN)
+                    </FeatureRow>
+                    <FeatureRow ok={!!f.membership} icon={Crown}>
+                      Membership, poin &amp; promo outlet
                     </FeatureRow>
                     <FeatureRow ok={!!f.desktopCashier} icon={Monitor}>
                       Aplikasi kasir desktop
