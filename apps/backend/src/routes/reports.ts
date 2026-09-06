@@ -1,9 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, isNull, sql, type SQL } from "drizzle-orm";
 import { db, reportDb } from "../db";
-import { orderCogsSql } from "../lib/cogs";
+import { orderCogsSql, type CogsBasis } from "../lib/cogs";
 import { menuGroupsTable, productsTable } from "../db/schema";
-import { requireOutletAccess } from "../lib/outlet-access";
+import { requireOutletAccess, usesCostLedger } from "../lib/outlet-access";
 import { money, orderDiscount } from "../lib/money-sql";
 
 /**
@@ -230,10 +230,10 @@ function baseWhere(outletId: number, dimension: ReportDimension, f: Filters): SQ
  * every matched order (it is reporting on all of them), but the row list must
  * NOT — see the paging query below.
  */
-const lineAgg = (over: SQL) => sql`
+const lineAgg = (over: SQL, basis: CogsBasis) => sql`
   select od.order_id,
          coalesce(sum(${money(sql`od.summary_price`)}), 0) as revenue,
-         ${orderCogsSql(sql`od.order_id`)} as cogs,
+         ${orderCogsSql(sql`od.order_id`, basis)} as cogs,
          -- FILTER, not a WHERE: revenue above sums EVERY row (an add-on's
          -- summary_price is real money) while the item count must see only the
          -- lines the customer ordered, and both come out of this one pass.
@@ -298,6 +298,9 @@ export async function reportRoutes(app: FastifyInstance) {
 
     const { key, label } = dimensionSql(dimension);
     const where = baseWhere(access.outlet.id, dimension, filters);
+    // Ledger cost or the buying price frozen on the line — one basis for the
+    // whole report. See usesCostLedger in lib/outlet-access.ts.
+    const basis = { ledger: usesCostLedger(access.gate) };
 
     try {
       const result = await reportDb.execute(sql`
@@ -308,7 +311,7 @@ export async function reportRoutes(app: FastifyInstance) {
           from ${dimensionSql(dimension).from}
           where ${where}
         ),
-        agg as (${lineAgg(sql`base`)})
+        agg as (${lineAgg(sql`base`, basis)})
         select b.grp_key                          as key,
                min(b.grp_label)                   as label,
                count(*)::int                      as orders,
@@ -383,6 +386,8 @@ export async function reportRoutes(app: FastifyInstance) {
     // base set by the group key, so the page still agrees with the summary.
     if (q.key) wherePartsList.push(sql`${key} = ${q.key}`);
     const where = sql.join(wherePartsList, sql` and `);
+    // Same basis as the buckets above, so a row and its bucket agree on cost.
+    const basis = { ledger: usesCostLedger(access.gate) };
 
     try {
       const result = await reportDb.execute(sql`
@@ -406,7 +411,7 @@ export async function reportRoutes(app: FastifyInstance) {
         page as (
           select * from base order by created_at desc limit ${pageSize} offset ${offset}
         ),
-        agg as (${lineAgg(sql`page`)})
+        agg as (${lineAgg(sql`page`, basis)})
         select p.id,
                -- to_json(...) #>> '{}' renders the timestamp as ISO 8601.
                -- db.execute hands back raw driver strings ("2026-08-08 07:27:10+00"),

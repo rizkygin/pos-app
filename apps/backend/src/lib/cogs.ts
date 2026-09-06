@@ -1,5 +1,6 @@
 import { sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { money } from "./money-sql";
+import { FEATURE_CATEGORY } from "./outlet-features";
 
 // Cost of goods sold, read two ways: orderCogsSql for a whole order, and
 // lineCogsSql for a single line. Both are built from the same pieces below,
@@ -70,6 +71,34 @@ type Ref = AnyColumn | SQL;
 const unitCostOf = (unitCost: Ref, buyingPrice: Ref) =>
   sql`coalesce(${unitCost}, ${money(buyingPrice)})`;
 
+/**
+ * A SERVICE HAS NO COST OF GOODS, so it is left out of every sum below.
+ *
+ * `buying_price` on a jasa product is not what one job consumes — there is
+ * nothing to consume. Owners use the field for the only cost they have: what
+ * the equipment cost them. Outlet 15 rents decorations and typed 5.000.000
+ * against an item that rents for 75.000, so every rental it ever booked read as
+ * a four-million-rupiah loss. Nothing about the costing BASIS fixes that; the
+ * frozen snapshot and the ledger both read the same wrong number, because the
+ * number is answering a different question.
+ *
+ * Excluding the line entirely (rather than costing it at zero somewhere) is
+ * what keeps the omzet side untouched: a jasa sale is revenue, and revenue with
+ * no cost against it is a 100% margin — which is what a service margin IS.
+ *
+ * Only "jasa". NOT "bahan bangunan", the other ranged-price category: those are
+ * real goods bought at a real price, and dropping their cost would hand a
+ * hardware store a fake margin. See rangePricedFields in routes/products.ts for
+ * why the two are not the same thing, and lib/outlet-features.ts for the map.
+ *
+ * A stop-gap by agreement (2026-09-06): the real fix is a cost model that can
+ * express an asset amortised over many jobs, which jasa has no field for yet.
+ */
+const SERVICE_CATEGORY = FEATURE_CATEGORY.service;
+
+/** Predicate for the `p2` alias the order-scoped subqueries introduce. */
+const notService = sql`p2.category <> ${SERVICE_CATEGORY}`;
+
 // Sales rows are negative and voids positive, so negating the sum makes a
 // cancelled line cost nothing with no special case.
 const ledgerCostOf = (lineId: Ref) => sql`
@@ -93,7 +122,8 @@ const perLineCogs = (orderId: SQL | string) => sql`
   (select coalesce(sum(coalesce(${taggedLedgerCost}, ${lineCost} * od2.quantity)), 0)
      from "orderDetails" od2
      join products p2 on p2.id = od2.product_id
-    where od2.order_id = ${orderId})
+    where od2.order_id = ${orderId}
+      and ${notService})
 `;
 
 // ── Pre-0066 only, from here down ───────────────────────────────────────────
@@ -107,6 +137,7 @@ const nonMovingLinesFallback = (orderId: SQL | string) => sql`
      from "orderDetails" od2
      join products p2 on p2.id = od2.product_id
     where od2.order_id = ${orderId}
+      and ${notService}
       and p2.track_stock = false
       and not exists (select 1 from recipe_items ri where ri.product_id = p2.id))
 `;
@@ -115,7 +146,8 @@ const allLinesFallback = (orderId: SQL | string) => sql`
   (select coalesce(sum(${lineCost} * od2.quantity), 0)
      from "orderDetails" od2
      join products p2 on p2.id = od2.product_id
-    where od2.order_id = ${orderId})
+    where od2.order_id = ${orderId}
+      and ${notService})
 `;
 
 // The value to stamp on a NEW order line, resolved in the insert itself so the
@@ -134,7 +166,24 @@ export const lineUnitCostSql = (productId: SQL | string) => sql`
       and ${money(sql`p.buying_price`)} > 0)
 `;
 
-export const orderCogsSql = (orderId: SQL | string) => sql`
+/**
+ * Whether the caller's outlet costs from the ledger at all.
+ *
+ * `false` skips every branch below and costs the whole order from the price
+ * frozen on each line — which is what a plan without the Stok page has, and the
+ * only figure it can have. See usesCostLedger in lib/outlet-access.ts for what
+ * the ledger reads like when nothing maintains it (minus twenty million).
+ *
+ * Deliberately a required argument, not a default: a new reader that forgets it
+ * should fail to compile rather than quietly put every Basic merchant back on
+ * the ledger.
+ */
+export type CogsBasis = { ledger: boolean };
+
+export const orderCogsSql = (orderId: SQL | string, { ledger }: CogsBasis) =>
+  !ledger
+    ? allLinesFallback(orderId)
+    : sql`
   (case
      -- Which era wrote this order. A tagged movement can only have come from a
      -- sale posted after 0066, so its presence is the whole test.
@@ -203,14 +252,27 @@ export const orderCogsSql = (orderId: SQL | string) => sql`
 // the dish itself would show a 100% margin. The uniform fallback is wrong by an
 // amount the owner can reason about; that would be wrong in a way that reads as
 // a discovery about the business.
-export const lineCogsSql = (line: {
-  id: Ref;
-  unitCost: Ref;
-  quantity: Ref;
-  buyingPrice: Ref;
-}) => sql`
+export const lineCogsSql = (
+  line: {
+    id: Ref;
+    unitCost: Ref;
+    quantity: Ref;
+    buyingPrice: Ref;
+    /** products.category — a jasa line costs nothing. See SERVICE_CATEGORY. */
+    category: Ref;
+  },
+  { ledger }: CogsBasis,
+) => {
+  const cost = !ledger
+    ? sql`(${unitCostOf(line.unitCost, line.buyingPrice)} * ${line.quantity})`
+    : sql`
   coalesce(
     ${ledgerCostOf(line.id)},
     ${unitCostOf(line.unitCost, line.buyingPrice)} * ${line.quantity}
   )
 `;
+  // The order-scoped readers drop a service line from the FROM; this one is
+  // spliced into the caller's own aggregate, where the row has to survive so its
+  // revenue still counts. Zero here is that same exclusion, one row at a time.
+  return sql`(case when ${line.category} = ${SERVICE_CATEGORY} then 0 else ${cost} end)`;
+};

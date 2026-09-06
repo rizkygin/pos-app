@@ -22,7 +22,7 @@ import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 import { orderNotDeleted } from "../lib/order-scope";
 import { getOutletByUserId } from "../lib/outlet-id";
-import { getOutletAccess, hasPermission, parseActiveOutletId, getSubscriptionGate, gateBlocks, type EmployeePermission } from "../lib/outlet-access";
+import { getOutletAccess, hasPermission, parseActiveOutletId, getSubscriptionGate, gateBlocks, usesCostLedger, type EmployeePermission } from "../lib/outlet-access";
 import { attachOrderItems } from "../lib/utils/order-items";
 import { APP_TIMEZONE, getUTCRangeFromLocalDate, getUTCRangeFromLocalMonth } from "../lib/timezone";
 import { getOpenShiftId } from "../lib/shift";
@@ -672,6 +672,13 @@ export async function ownerRoutes(app: FastifyInstance) {
       const outlet = await outletFor(session.user.id, "reports", request);
       if (!outlet) return reply.status(403).send({ success: false, error: "Not an owner" });
 
+      // Where HPP comes from — the cost ledger, or the buying price frozen on
+      // each line. One decision for the whole response, so the KPI and the
+      // top-products table below cannot cost the same sale two ways. See
+      // usesCostLedger in lib/outlet-access.ts.
+      const gate = await getSubscriptionGate(outlet.user_id);
+      const basis = { ledger: usesCostLedger(gate) };
+
       // Local "today" (YYYY-MM-DD) in the outlet's timezone.
       const now = new Date();
       const localDateStr = (d: Date) => {
@@ -733,7 +740,7 @@ export async function ownerRoutes(app: FastifyInstance) {
         const res = await db.execute(sql`
           select coalesce(sum(c.cogs), 0)::float8 as cogs
           from (
-            select ${orderCogsSql(sql`o.id`)} as cogs
+            select ${orderCogsSql(sql`o.id`, basis)} as cogs
             from orders o
             where o.outlet_id = ${outlet.id}
               and o.deleted_at is null
@@ -813,7 +820,8 @@ export async function ownerRoutes(app: FastifyInstance) {
               unitCost: orderDetailsTable.unit_cost,
               quantity: orderDetailsTable.quantity,
               buyingPrice: productsTable.buying_price,
-            })}), 0)`.mapWith(Number),
+              category: productsTable.category,
+            }, basis)}), 0)`.mapWith(Number),
           })
           .from(orderDetailsTable)
           .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
@@ -850,7 +858,6 @@ export async function ownerRoutes(app: FastifyInstance) {
       // itself. The AMOUNT is always returned — money already collected is not
       // hidden by a downgrade — the flag only says whether the page should
       // give it a card of its own.
-      const gate = await getSubscriptionGate(outlet.user_id);
 
       return {
         success: true,

@@ -100,6 +100,18 @@ export type SubscriptionGate = {
   alive: boolean;
   status: string;
   features: Record<string, unknown>;
+  /**
+   * The features of the PAID PLAN this owner actually sits on — empty while
+   * they are on a trial (no plan chosen yet), and unaffected by expiry.
+   *
+   * `features` above is the entitlement: what the owner may DO right now, so a
+   * trial gets everything and a dead subscription gets nothing. That is the
+   * wrong question for anything whose answer must not move under an owner's
+   * history — see usesCostLedger below, where a trial that grants `stock`
+   * would put a merchant on ledger costing they have no way to maintain, and
+   * an expiry would silently restate every closed month.
+   */
+  planFeatures: Record<string, unknown>;
   periodEnd: Date | null;
 };
 
@@ -173,21 +185,27 @@ export async function getSubscriptionGate(ownerUserId: string): Promise<Subscrip
     !!sub.current_period_end &&
     sub.current_period_end > now;
 
-  let features: Record<string, unknown> = NO_FEATURES;
-  if (alive && sub.status === "trialing") features = TRIAL_FEATURES;
-  else if (alive && sub.plan_id) {
+  // Read once, used twice: the plan is what the owner PAYS FOR (planFeatures,
+  // true even when expired), while `features` below is what they may use today.
+  let planFeatures: Record<string, unknown> = NO_FEATURES;
+  if (sub.plan_id) {
     const [plan] = await db
       .select({ features: subscriptionPlansTable.features })
       .from(subscriptionPlansTable)
       .where(eq(subscriptionPlansTable.id, sub.plan_id))
       .limit(1);
-    features = (plan?.features as Record<string, unknown>) ?? NO_FEATURES;
+    planFeatures = (plan?.features as Record<string, unknown>) ?? NO_FEATURES;
   }
+
+  let features: Record<string, unknown> = NO_FEATURES;
+  if (alive && sub.status === "trialing") features = TRIAL_FEATURES;
+  else if (alive && sub.plan_id) features = planFeatures;
 
   const gate: SubscriptionGate = {
     alive,
     status: sub.status,
     features,
+    planFeatures,
     periodEnd: sub.current_period_end,
   };
   gateCache.set(ownerUserId, { gate, at: Date.now() });
@@ -219,6 +237,34 @@ const PERM_FEATURE: Partial<Record<EmployeePermission, string>> = {
  */
 export function hasFeature(gate: SubscriptionGate, flag: string): boolean {
   return gate.features[flag] === true;
+}
+
+/**
+ * Is this owner's COST LEDGER worth reading? Decides where every HPP / laba
+ * kotor figure comes from — see lib/cogs.ts.
+ *
+ * products.avg_cost is a running weighted average that only means anything
+ * where it is MAINTAINED: received stock, opname, production. Migration 0063
+ * seeded it from the hand-typed buying_price for every product that existed,
+ * and on a plan without the Stok page nothing has moved it since. That seed is
+ * a price per PACK — a sack, a crate, a carton — while a recipe consumes in
+ * pieces, so a sale of one item costed through the ledger reads as twenty
+ * sacks. Live example: outlet 44 sold Rp 550.000 of rice and the report booked
+ * Rp 11.000.000 of HPP against it, a headline laba kotor of minus twenty
+ * million. The same seed reads zero for anything created after 0063, and a
+ * sale then books cost_change 0.00 — a real zero, which outranks the frozen
+ * buying-price fallback and shows a 100% margin.
+ *
+ * So: only plans that include `stock` cost from the ledger. Everyone else — and
+ * that includes a TRIAL, which grants `stock` it gives no way to maintain —
+ * costs from the buying price frozen on the line when it sold.
+ *
+ * Read off planFeatures, not features, on purpose: an owner whose subscription
+ * lapses keeps the costing basis their history was written under, instead of
+ * having every closed month restated on the day they stop paying.
+ */
+export function usesCostLedger(gate: SubscriptionGate): boolean {
+  return gate.planFeatures.stock === true;
 }
 
 // Gate verdict for one request: null = allowed, otherwise the error message.
