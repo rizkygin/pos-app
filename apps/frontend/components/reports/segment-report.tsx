@@ -380,7 +380,10 @@ export function SegmentReport({
       <ReportFilterDialog
         open={filterOpen}
         initial={filters ?? defaultFilters()}
-        onClose={() => filters && setFilterOpen(false)}
+        // Closes even before a report has been run: the empty state behind
+        // it says what to do and "Ubah Filter" reopens this. Guarding on
+        // `filters` here is what made the X look broken on first open.
+        onClose={() => setFilterOpen(false)}
         onApply={apply}
       />
     </main>

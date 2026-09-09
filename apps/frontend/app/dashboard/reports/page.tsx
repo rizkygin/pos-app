@@ -36,6 +36,7 @@ import {
   ChevronRight,
   Percent,
   ClipboardCheck,
+  Package,
 } from 'lucide-react';
 import { API_URL } from '@/lib/api-url';
 
@@ -80,6 +81,9 @@ function fmtCompact(n: number) {
 // than on this page because each one groups by free text inside orders.note —
 // see components/reports/segment-report.tsx for why that must not auto-run.
 const SUB_REPORTS = [
+  // Not a segmented report — it groups product lines, not orders.note text —
+  // but it answers the filter popup the same way and belongs on the same shelf.
+  { href: '/dashboard/reports/product', label: 'Per Produk', desc: 'Terjual, transaksi, laba', icon: Package, grad: 'from-sky-400 to-cyan-500' },
   { href: '/dashboard/reports/payment-method', label: 'Metode Pembayaran', desc: 'Tunai vs non-tunai', icon: CreditCard, grad: 'from-emerald-400 to-teal-500' },
   { href: '/dashboard/reports/cashier', label: 'Per Kasir', desc: 'Siapa yang melayani', icon: UserCog, grad: 'from-blue-400 to-indigo-500' },
   { href: '/dashboard/reports/customer', label: 'Per Pelanggan', desc: 'Nama pelanggan kasir', icon: Users, grad: 'from-violet-400 to-purple-500' },
@@ -313,9 +317,19 @@ export default function ReportsPage() {
           <div className="mt-6 grid gap-6 lg:grid-cols-2">
             {/* Top products */}
             <section className="min-w-0 rounded-3xl border border-border/60 bg-card p-5 shadow-sm">
-              <div className="mb-4 flex items-center gap-2">
-                <Trophy className="size-4 text-amber-500" />
-                <h3 className="text-lg font-black tracking-tight">Produk Terlaris</h3>
+              <div className="mb-4 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Trophy className="size-4 text-amber-500" />
+                  <h3 className="text-lg font-black tracking-tight">Produk Terlaris</h3>
+                </div>
+                {/* This card is the top eight of the period picker above; the
+                    full ledger, over a range the owner chooses, lives there. */}
+                <Link
+                  href="/dashboard/reports/product"
+                  className="inline-flex items-center gap-0.5 text-[11px] font-bold text-muted-foreground hover:text-foreground"
+                >
+                  Semua produk <ChevronRight className="size-3.5" />
+                </Link>
               </div>
               {data.topProducts.length === 0 ? (
                 <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">Belum ada data</div>

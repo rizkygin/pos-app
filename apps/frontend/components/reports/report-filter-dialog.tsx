@@ -25,6 +25,18 @@ export type ReportFilters = {
   rating: string;
 };
 
+/**
+ * The chosen product / menu group by NAME, handed back alongside the filters.
+ *
+ * ReportFilters carries ids, and the option lists that map them to names are
+ * fetched in here — so a page that wants to show "Grup: Minuman" above its
+ * results would otherwise have to re-request /api/reports/filters just to
+ * translate its own state. Optional on both ends: a caller that doesn't show
+ * the applied filters ignores it, and a submit before the lists arrive simply
+ * has nothing to resolve.
+ */
+export type ReportFilterLabels = { product?: string; menuGroup?: string };
+
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 
 /** Last 30 days, ending tomorrow so today's sales are included. */
@@ -55,7 +67,7 @@ export function ReportFilterDialog({
   open: boolean;
   initial: ReportFilters;
   onClose: () => void;
-  onApply: (f: ReportFilters) => void;
+  onApply: (f: ReportFilters, labels?: ReportFilterLabels) => void;
   showRating?: boolean;
 }) {
   const [f, setF] = useState<ReportFilters>(initial);
@@ -98,7 +110,10 @@ export function ReportFilterDialog({
       return setError('Rentang maksimal 3 bulan — persempit tanggalnya.');
     }
     setError(null);
-    onApply(f);
+    onApply(f, {
+      product: options?.products.find((p) => p.id === f.productId)?.name,
+      menuGroup: options?.menuGroups.find((g) => String(g.id) === f.menuGroupId)?.name,
+    });
   };
 
   return (

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, isNull, sql, type SQL } from "drizzle-orm";
 import { db, reportDb } from "../db";
-import { orderCogsSql, type CogsBasis } from "../lib/cogs";
+import { lineCogsSql, orderCogsSql, type CogsBasis } from "../lib/cogs";
 import { menuGroupsTable, productsTable } from "../db/schema";
 import { requireOutletAccess, usesCostLedger } from "../lib/outlet-access";
 import { money, orderDiscount } from "../lib/money-sql";
@@ -179,16 +179,19 @@ function parseFilters(q: Record<string, string>): Filters | string {
 }
 
 /**
- * The WHERE of the orders scan, shared by the summary and the paginated list so
- * the two can never disagree about which orders the report covers.
+ * WHICH ORDERS a report covers, independent of how it goes on to group them.
  *
  * Sales = not soft-deleted, not cancelled, not still pending — the same
- * realized-sales definition the dashboard and /api/reports/summary use.
+ * realized-sales definition the dashboard and /api/reports/summary use. Every
+ * report in this file starts from exactly this set, so per-kasir and per-produk
+ * over one window can never disagree about how much the outlet sold.
  *
- * The product / menu-group / rating filters are EXISTS subqueries rather than
- * joins on purpose: an order with three matching lines must still count once.
+ * The rating filter belongs here rather than beside the product ones below
+ * because it is a fact about the ORDER ("this sale was rated 4★"), and it is an
+ * EXISTS rather than a join so an order with three rated lines still counts
+ * once.
  */
-function baseWhere(outletId: number, dimension: ReportDimension, f: Filters): SQL {
+function salesScope(outletId: number, f: Filters): SQL[] {
   const parts: SQL[] = [
     sql`o.outlet_id = ${outletId}`,
     sql`o.deleted_at is null`,
@@ -196,6 +199,30 @@ function baseWhere(outletId: number, dimension: ReportDimension, f: Filters): SQ
     sql`o.created_at < ${f.to}`,
     sql`o.status not in ('cancelled', 'pending')`,
   ];
+
+  if (f.rating !== null) {
+    parts.push(sql`exists (
+      select 1 from ratings r
+      join "orderDetails" od2 on od2.id = r.order_details_id
+      where od2.order_id = o.id and round(r.ratings) = ${f.rating}
+    )`);
+  }
+
+  return parts;
+}
+
+/**
+ * The WHERE of the SEGMENTED reports' orders scan, shared by their summary and
+ * their paginated list so the two can never disagree about which orders the
+ * report covers.
+ *
+ * The product / menu-group filters are EXISTS subqueries rather than joins on
+ * purpose: these reports have one row per ORDER, so an order with three
+ * matching lines must still count once. Per-produk narrows its LINES instead —
+ * see /api/reports/products, where a row IS a product.
+ */
+function baseWhere(outletId: number, dimension: ReportDimension, f: Filters): SQL {
+  const parts = salesScope(outletId, f);
 
   const { scope } = dimensionSql(dimension);
   if (scope) parts.push(scope);
@@ -208,14 +235,6 @@ function baseWhere(outletId: number, dimension: ReportDimension, f: Filters): SQ
       select 1 from "orderDetails" od
       join products p on p.id = od.product_id
       where ${sql.join(line, sql` and `)}
-    )`);
-  }
-
-  if (f.rating !== null) {
-    parts.push(sql`exists (
-      select 1 from ratings r
-      join "orderDetails" od2 on od2.id = r.order_details_id
-      where od2.order_id = o.id and round(r.ratings) = ${f.rating}
     )`);
   }
 
@@ -464,6 +483,199 @@ export async function reportRoutes(app: FastifyInstance) {
       const busy = loadFailure(error);
       if (busy) return reply.status(busy.status).send({ success: false, error: busy.error });
       return reply.status(500).send({ success: false, error: "Gagal memuat data" });
+    }
+  });
+
+  /**
+   * Laporan per Produk: one row per product SOLD in the window.
+   *
+   * The dashboard's "Produk Terlaris" answers the same question in eight rows
+   * with no filters and no paging — a leaderboard, not a report. This is the
+   * ledger version: every product that moved, in its own unit of measure, with
+   * the number of transactions it appeared in and the margin it earned, over a
+   * range the owner chose.
+   *
+   * THREE THINGS MAKE IT DIFFERENT FROM THE FOUR SEGMENTED REPORTS ABOVE, and
+   * all three follow from a row being a PRODUCT rather than an order:
+   *
+   * 1. It groups LINES. The others roll every line up to its order and group
+   *    that; here the line is the grain, so orderDetails is scanned once and
+   *    grouped by product_id.
+   * 2. The product / menu-group filters narrow those lines instead of selecting
+   *    whole orders. "Menu Grup: Minuman" means the drinks rows, not every row
+   *    of every order that contained a drink.
+   * 3. Order-level money is ALLOCATED. A discount and (under inclusive pricing)
+   *    the tax sitting inside the prices are facts about the order, so each line
+   *    carries its proportional share — the same rule netLineRevenue applies in
+   *    lib/money-sql.ts, extended to the tax half. The shares sum back to the
+   *    order's own figures, so this report's total matches per-kasir's over the
+   *    same window rather than reading gross.
+   *
+   * Add-on lines get their own rows and that is deliberate: an add-on option IS
+   * a product (migration 0069), so "Extra Keju × 214" is a real answer to a
+   * question this page is asked. The parents-only rule in lib/addons.ts governs
+   * counting ITEMS IN AN ORDER; here every row is one product's own units.
+   */
+  app.get("/api/reports/products", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, "reports");
+    if (!access) return;
+
+    const q = request.query as Record<string, string>;
+    const filters = parseFilters(q);
+    if (typeof filters === "string") {
+      return reply.status(400).send({ success: false, error: filters });
+    }
+
+    const page = Math.max(1, Number(q.page) || 1);
+    const pageSize = Math.min(100, Math.max(5, Number(q.pageSize) || 25));
+    const offset = (page - 1) * pageSize;
+
+    // Ledger cost or the buying price frozen on the line — one basis for the
+    // whole report, the same choice the segmented ones make. See usesCostLedger.
+    const basis = { ledger: usesCostLedger(access.gate) };
+
+    const orderWhere = sql.join(salesScope(access.outlet.id, filters), sql` and `);
+
+    // Line-level narrowing (see 2. above). Empty when neither filter is set.
+    const lineParts: SQL[] = [];
+    if (filters.productId) lineParts.push(sql`p.id = ${filters.productId}`);
+    if (filters.menuGroupId !== null) lineParts.push(sql`p.menu_group_id = ${filters.menuGroupId}`);
+    const lineWhere = lineParts.length ? sql`where ${sql.join(lineParts, sql` and `)}` : sql``;
+
+    const LINE_GROSS = money(sql`od.summary_price`);
+    const LINE_COGS = lineCogsSql(
+      {
+        id: sql`l.id`,
+        unitCost: sql`l.unit_cost`,
+        quantity: sql`l.quantity`,
+        buyingPrice: sql`l.buying_price`,
+        category: sql`l.category`,
+      },
+      basis,
+    );
+
+    // Whitelisted, because these land in ORDER BY. Anything else falls back to
+    // omzet, which is what an owner opening this page is ranking by anyway.
+    const SORTS: Record<string, SQL> = {
+      revenue: sql`pp.revenue`,
+      profit: sql`(pp.revenue - pp.cogs)`,
+      qty: sql`pp.qty`,
+      orders: sql`pp.orders`,
+      name: sql`pp.name`,
+    };
+    const sortKey = q.sort && SORTS[q.sort] ? q.sort : "revenue";
+    // Names read A→Z by default; every money/count column reads biggest-first.
+    const ascending = q.dir === "asc" || (q.dir !== "desc" && sortKey === "name");
+    const dir = ascending ? sql`asc` : sql`desc`;
+
+    try {
+      const result = await reportDb.execute(sql`
+        with base as (
+          select o.id,
+                 ${TAX_IN_PRICE} as tax_in_price,
+                 ${ORDER_DISCOUNT} as discount
+          from orders o
+          where ${orderWhere}
+        ),
+        -- What the whole order rang up at, gross. This is the denominator every
+        -- line's share of the discount and of the inclusive tax is taken
+        -- against, so it must sum EVERY row of the order — add-on children
+        -- included — exactly as netLineRevenue's own subquery does.
+        ord as (
+          select b.id, b.tax_in_price, b.discount,
+                 coalesce(sum(${money(sql`od.summary_price`)}), 0) as gross
+          from base b
+          join "orderDetails" od on od.order_id = b.id
+          group by b.id, b.tax_in_price, b.discount
+        ),
+        -- Referenced twice below, which is what makes Postgres materialise it:
+        -- one scan of the window's lines feeds both the per-product roll-up and
+        -- the distinct-transaction count.
+        lines as (
+          select od.id, od.order_id, od.quantity, od.unit_cost,
+                 p.id as product_id, p.product_name, p.unit, p.category,
+                 p.buying_price, (p.variant_of is not null) as is_variant,
+                 (${LINE_GROSS} - case when o.gross > 0
+                    then ${LINE_GROSS} * (o.discount + o.tax_in_price) / o.gross
+                    else 0 end) as revenue
+          from ord o
+          join "orderDetails" od on od.order_id = o.id
+          join products p on p.id = od.product_id
+          ${lineWhere}
+        ),
+        per_product as (
+          select l.product_id,
+                 min(l.product_name)                  as name,
+                 min(l.unit)                          as unit,
+                 min(l.category)                      as category,
+                 bool_or(l.is_variant)                as is_variant,
+                 -- The transaction count is DISTINCT orders, never a row count:
+                 -- two lines of the same product on one bill is one sale.
+                 count(distinct l.order_id)::int      as orders,
+                 coalesce(sum(l.quantity), 0)::float8 as qty,
+                 coalesce(sum(l.revenue), 0)::float8  as revenue,
+                 coalesce(sum(${LINE_COGS}), 0)::float8 as cogs
+          from lines l
+          group by l.product_id
+        )
+        select pp.*,
+               -- Totals ride along as window functions: they are evaluated
+               -- after the grouping and before the LIMIT, so they cover every
+               -- product in the range while only one page comes back.
+               count(*) over ()::int           as total_products,
+               sum(pp.qty) over ()::float8     as total_qty,
+               sum(pp.revenue) over ()::float8 as total_revenue,
+               sum(pp.cogs) over ()::float8    as total_cogs,
+               -- Summing pp.orders would double count every bill that carried
+               -- two different products, so the header's transaction count is
+               -- its own distinct pass over the same materialised lines.
+               (select count(distinct l2.order_id) from lines l2)::int as total_orders
+        from per_product pp
+        order by ${SORTS[sortKey]} ${dir}, pp.name asc
+        limit ${pageSize} offset ${offset}
+      `);
+
+      const rows = result.rows as any[];
+      const first = rows[0];
+      const total = first ? Number(first.total_products) : 0;
+
+      return {
+        success: true,
+        page,
+        pageSize,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / pageSize)),
+        sort: sortKey,
+        dir: ascending ? "asc" : "desc",
+        rows: rows.map((r) => ({
+          productId: String(r.product_id),
+          name: String(r.name),
+          unit: String(r.unit ?? "pcs"),
+          category: String(r.category ?? ""),
+          isVariant: r.is_variant === true,
+          qty: Number(r.qty),
+          orders: Number(r.orders),
+          revenue: Number(r.revenue),
+          // Both halves, not just the difference — an owner checking a row that
+          // looks wrong needs to see WHICH side moved. Same lineCogsSql the
+          // dashboard's top-products table uses.
+          cogs: Number(r.cogs),
+          profit: Number(r.revenue) - Number(r.cogs),
+        })),
+        totals: {
+          products: total,
+          orders: first ? Number(first.total_orders) : 0,
+          qty: first ? Number(first.total_qty) : 0,
+          revenue: first ? Number(first.total_revenue) : 0,
+          cogs: first ? Number(first.total_cogs) : 0,
+          profit: first ? Number(first.total_revenue) - Number(first.total_cogs) : 0,
+        },
+      };
+    } catch (error) {
+      request.log.error(error);
+      const busy = loadFailure(error);
+      if (busy) return reply.status(busy.status).send({ success: false, error: busy.error });
+      return reply.status(500).send({ success: false, error: "Gagal memuat laporan" });
     }
   });
 }
