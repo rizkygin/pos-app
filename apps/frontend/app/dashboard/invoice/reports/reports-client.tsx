@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from 'recharts';
 import {
@@ -20,6 +20,8 @@ import {
   Loader2,
   FileBarChart,
   SlidersHorizontal,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { API_URL } from '@/lib/api-url';
 import { methodMeta } from '../_components/payment-method';
@@ -58,14 +60,63 @@ type Group = {
   amount: number;
   paid?: number;
   outstanding?: number;
+  // Item dimensions only: how many units, in the product's own unit of measure.
+  qty?: number;
+  unit?: string;
 };
-type Dimension = 'payment' | 'staff' | 'customer';
+// Item dimensions only. `amount` here is net of the invoice-level discount and
+// of tax, so it does NOT equal the "Nilai Faktur" KPI — amount + tax does. The
+// server returns the tax precisely so this page can show that sum instead of
+// leaving an unexplained gap between two numbers on one screen.
+type ItemTotals = {
+  buckets: number;
+  invoices: number;
+  qty: number;
+  amount: number;
+  tax: number;
+  discount: number;
+};
+type Dimension = 'payment' | 'staff' | 'customer' | 'product' | 'menugroup';
+/** Which invoice type the item dimensions are reading. NOT the KPI `Side` above. */
+type InvoiceSide = 'sales' | 'purchase';
+
+/** One row of the drill-down. Which fields are set depends on the dimension. */
+type DetailRow = {
+  invoiceId: number;
+  number: string;
+  date: string;
+  party: string;
+  product?: string;
+  unit?: string;
+  qty?: number;
+  unitPrice?: number;
+  amount?: number;
+  method?: string;
+  staff?: string;
+  status?: string;
+  total?: number;
+  paid?: number;
+  outstanding?: number;
+};
+
+// The two item dimensions group invoice_items, not invoices, so they carry a
+// side toggle and their own columns. See the note in routes/invoices.ts.
+const ITEM_DIMENSIONS: readonly Dimension[] = ['product', 'menugroup'];
+const isItemDimension = (d: Dimension) => ITEM_DIMENSIONS.includes(d);
 
 const DIMENSIONS = [
+  { key: 'product', label: 'Produk', heading: 'Per Produk', note: 'Nilai barang/jasa yang tertagih, per produk' },
+  { key: 'menugroup', label: 'Grup Menu', heading: 'Per Grup Menu', note: 'Nilai barang/jasa yang tertagih, per grup menu' },
   { key: 'payment', label: 'Metode Bayar', heading: 'Per Metode Pembayaran', note: 'Uang yang benar-benar diterima pada rentang ini' },
   { key: 'staff', label: 'Sales', heading: 'Per Sales', note: 'Nilai faktur terbit, dikelompokkan per penerbit faktur' },
   { key: 'customer', label: 'Pelanggan', heading: 'Per Pelanggan', note: 'Nilai faktur terbit, dikelompokkan per pelanggan' },
 ] as const satisfies readonly { key: Dimension; label: string; heading: string; note: string }[];
+
+const DETAIL_PAGE_SIZE = 20;
+
+const fmtQty = (n: number) => new Intl.NumberFormat('id-ID', { maximumFractionDigits: 2 }).format(n);
+const fmtDate = (iso: string) =>
+  new Date(iso).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: '2-digit' });
 
 type Report = {
   sales: Side;
@@ -240,34 +291,122 @@ function SideSection({
    customer. Follows the same filter answers as the KPIs above — one popup, one
    window. Sales invoices only; the purchase side has no salesperson or customer. */
 function BreakdownSection({ filters }: { filters: ReportFilters }) {
-  const [dimension, setDimension] = useState<Dimension>('payment');
+  const [dimension, setDimension] = useState<Dimension>('product');
+  const [side, setSide] = useState<InvoiceSide>('sales');
   const [groups, setGroups] = useState<Group[] | null>(null);
+  const [itemTotals, setItemTotals] = useState<ItemTotals | null>(null);
+  // Which bucket the drill-down is narrowed to. null = "Semua", so the rows
+  // always cover exactly what the bucket list above them summed.
+  const [activeKey, setActiveKey] = useState<string | null>(null);
+  const [rows, setRows] = useState<DetailRow[] | null>(null);
+  const [rowTotal, setRowTotal] = useState(0);
+  const [rowPages, setRowPages] = useState(1);
+  const [rowPage, setRowPage] = useState(1);
+  const [loadingRows, setLoadingRows] = useState(false);
   const meta = DIMENSIONS.find((d) => d.key === dimension)!;
+  const item = isItemDimension(dimension);
 
+  const loadRows = useCallback(
+    (key: string | null, page: number) => {
+      setLoadingRows(true);
+      setRows(null);
+      const p = filterParams(filters);
+      p.set('dimension', dimension);
+      p.set('page', String(page));
+      p.set('pageSize', String(DETAIL_PAGE_SIZE));
+      if (isItemDimension(dimension)) p.set('side', side);
+      if (key !== null) p.set('key', key);
+      fetch(`${API_URL}/api/invoices/report/breakdown/rows?${p}`, {
+        credentials: 'include',
+        cache: 'no-store',
+      })
+        .then((r) => r.json())
+        .then((j) => {
+          if (!j?.success) return;
+          setRows(j.rows as DetailRow[]);
+          setRowTotal(j.total);
+          setRowPages(j.totalPages);
+          setRowPage(j.page);
+        })
+        .catch(() => {})
+        .finally(() => setLoadingRows(false));
+    },
+    [filters, dimension, side],
+  );
+
+  // Buckets. Re-fetched when the question changes, never when the row page does.
   useEffect(() => {
     setGroups(null);
+    setItemTotals(null);
+    setActiveKey(null);
     const ctl = new AbortController();
-    fetch(`${API_URL}/api/invoices/report/breakdown?${filterParams(filters)}&dimension=${dimension}`, {
+    const p = filterParams(filters);
+    p.set('dimension', dimension);
+    if (isItemDimension(dimension)) p.set('side', side);
+    fetch(`${API_URL}/api/invoices/report/breakdown?${p}`, {
       credentials: 'include',
       cache: 'no-store',
       signal: ctl.signal,
     })
       .then((r) => r.json())
-      .then((j) => j?.success && setGroups(j.groups as Group[]))
+      .then((j) => {
+        if (!j?.success) return;
+        setGroups(j.groups as Group[]);
+        setItemTotals((j.totals as ItemTotals) ?? null);
+      })
       .catch(() => {});
+    // The rows start at "Semua", page 1, from the same trigger — so they can
+    // never be left describing a different question than the buckets above.
+    loadRows(null, 1);
     return () => ctl.abort();
-  }, [filters, dimension]);
+  }, [filters, dimension, side, loadRows]);
 
-  const total = groups?.reduce((a, g) => a + g.amount, 0) ?? 0;
+
+  const drill = (key: string | null) => {
+    setActiveKey(key);
+    loadRows(key, 1);
+  };
+
+  const total = itemTotals ? itemTotals.amount : (groups?.reduce((a, g) => a + g.amount, 0) ?? 0);
+  const activeLabel =
+    activeKey === null
+      ? 'Semua'
+      : (groups?.find((g) => g.key === activeKey)?.label ?? activeKey);
 
   return (
     <section className="rounded-3xl border border-border/60 bg-card p-4 shadow-sm sm:p-5">
-      <div className="mb-3">
-        <h3 className="text-lg font-black tracking-tight">Rincian Faktur Penjualan</h3>
-        <p className="text-xs text-muted-foreground">{meta.note}</p>
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h3 className="text-lg font-black tracking-tight">
+            {item ? 'Rincian Faktur' : 'Rincian Faktur Penjualan'}
+          </h3>
+          <p className="text-xs text-muted-foreground">{meta.note}</p>
+        </div>
+        {/* Only the item dimensions have a purchase side — "per sales" and
+            "per pelanggan" are meaningless on a supplier bill. */}
+        {item && (
+          <div className="flex gap-1 rounded-xl bg-muted p-1">
+            {([
+              { k: 'sales', label: 'Jual' },
+              { k: 'purchase', label: 'Beli' },
+            ] as const).map((o) => (
+              <button
+                key={o.k}
+                onClick={() => setSide(o.k)}
+                className={`rounded-lg px-2.5 py-1 text-[11px] font-bold transition-colors ${
+                  side === o.k
+                    ? 'bg-card text-teal-600 shadow-sm dark:text-teal-400'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
-      <div className="grid grid-cols-3 gap-1 rounded-2xl bg-muted p-1">
+      <div className="grid grid-cols-3 gap-1 rounded-2xl bg-muted p-1 sm:grid-cols-5">
         {DIMENSIONS.map((d) => (
           <button
             key={d.key}
@@ -288,8 +427,23 @@ function BreakdownSection({ filters }: { filters: ReportFilters }) {
           <Loader2 className="size-5 animate-spin" />
         </div>
       ) : groups.length === 0 ? (
-        <div className="flex h-32 items-center justify-center text-center text-sm text-muted-foreground">
-          Belum ada data pada rentang ini.
+        /* The tabs answer two different date questions, and an empty one beside
+           a populated "Metode Bayar" reads as a bug unless it says so: payments
+           are windowed on WHEN THE MONEY MOVED, everything else on WHEN THE
+           INVOICE WAS ISSUED. An outlet whose old invoices were settled this
+           month lands in exactly that gap. */
+        <div className="flex h-32 flex-col items-center justify-center gap-1 px-4 text-center text-sm text-muted-foreground">
+          {dimension === 'payment' ? (
+            <p>Tidak ada pembayaran diterima pada rentang ini.</p>
+          ) : (
+            <>
+              <p>Tidak ada faktur terbit pada rentang ini.</p>
+              <p className="text-[11px]">
+                Tab ini mengelompokkan faktur berdasarkan <b>tanggal terbit</b>. Faktur lama yang baru
+                dibayar bulan ini muncul di tab <b>Metode Bayar</b> — coba lebarkan rentang tanggalnya.
+              </p>
+            </>
+          )}
         </div>
       ) : (
         <div className="mt-3 space-y-1">
@@ -297,8 +451,15 @@ function BreakdownSection({ filters }: { filters: ReportFilters }) {
             // Share of the period, so the biggest bucket is obvious without a chart.
             const pct = total > 0 ? Math.round((g.amount / total) * 100) : 0;
             const label = dimension === 'payment' ? methodMeta(g.key).label : g.label;
+            const active = activeKey === g.key;
             return (
-              <div key={g.key} className="rounded-2xl p-2.5 hover:bg-muted/40">
+              <button
+                key={g.key}
+                onClick={() => drill(active ? null : g.key)}
+                className={`w-full rounded-2xl p-2.5 text-left transition-colors ${
+                  active ? 'bg-teal-50 dark:bg-teal-950/40' : 'hover:bg-muted/40'
+                }`}
+              >
                 <div className="flex items-center gap-2">
                   <p className="min-w-0 flex-1 truncate text-sm font-bold">{label}</p>
                   <span className="shrink-0 text-[13px] font-black tabular-nums sm:text-sm">
@@ -314,17 +475,163 @@ function BreakdownSection({ filters }: { filters: ReportFilters }) {
                   </span>
                 </div>
                 <p className="mt-0.5 text-[11px] text-muted-foreground">
-                  {dimension === 'payment'
-                    ? `${g.count} pembayaran · ${g.invoices ?? 0} faktur`
-                    : `${g.count} faktur · dibayar ${fmtIDR(g.paid ?? 0)} · sisa ${fmtIDR(g.outstanding ?? 0)}`}
+                  {item
+                    ? `${fmtQty(g.qty ?? 0)} ${g.unit || 'unit'} · ${g.invoices ?? 0} faktur`
+                    : dimension === 'payment'
+                      ? `${g.count} pembayaran · ${g.invoices ?? 0} faktur`
+                      : `${g.count} faktur · dibayar ${fmtIDR(g.paid ?? 0)} · sisa ${fmtIDR(g.outstanding ?? 0)}`}
                 </p>
-              </div>
+              </button>
             );
           })}
           <div className="flex items-center justify-between border-t pt-2 text-sm font-black">
             <span>Total</span>
             <span className="tabular-nums">{fmtIDR(total)}</span>
           </div>
+          {/* The item tabs total the LINES, which are net of the invoice-level
+              discount and of tax — so this figure is deliberately lower than the
+              "Nilai Faktur" card above. Spelling the identity out is what stops
+              that reading as a bug. */}
+          {itemTotals && (itemTotals.tax > 0 || itemTotals.discount > 0) && (
+            <p className="pt-1 text-[11px] leading-relaxed text-muted-foreground">
+              Di luar pajak {fmtIDR(itemTotals.tax)}
+              {itemTotals.discount > 0 && <> dan setelah diskon faktur {fmtIDR(itemTotals.discount)}</>}. Nilai
+              faktur = {fmtIDR(itemTotals.amount + itemTotals.tax)}.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* ------------------------------------------------ drill-down rows */}
+      {groups && groups.length > 0 && (
+        <div className="mt-5 border-t pt-4">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <h4 className="text-sm font-black tracking-tight">
+              Rincian · <span className="text-teal-600 dark:text-teal-400">{activeLabel}</span>
+            </h4>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-bold text-muted-foreground">{rowTotal} baris</span>
+              {activeKey !== null && (
+                <button
+                  onClick={() => drill(null)}
+                  className="rounded-lg border border-border/60 px-2 py-0.5 text-[11px] font-bold hover:bg-muted/50"
+                >
+                  Semua
+                </button>
+              )}
+            </div>
+          </div>
+
+          {loadingRows ? (
+            <div className="flex h-28 items-center justify-center text-muted-foreground">
+              <Loader2 className="size-5 animate-spin" />
+            </div>
+          ) : !rows || rows.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">Tidak ada rincian.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[44rem] text-sm">
+                <thead>
+                  <tr className="border-b text-left text-[11px] uppercase tracking-widest text-muted-foreground">
+                    <th className="py-2 pr-3 font-bold">Tanggal</th>
+                    <th className="py-2 pr-3 font-bold">No. Faktur</th>
+                    <th className="py-2 pr-3 font-bold">{side === 'purchase' && item ? 'Supplier' : 'Pelanggan'}</th>
+                    {item && <th className="py-2 pr-3 font-bold">Produk</th>}
+                    {item && <th className="py-2 pr-3 text-right font-bold">Qty</th>}
+                    {item && <th className="py-2 pr-3 text-right font-bold">Harga</th>}
+                    {dimension === 'payment' && <th className="py-2 pr-3 font-bold">Metode</th>}
+                    {dimension === 'staff' && <th className="py-2 pr-3 font-bold">Sales</th>}
+                    {!item && dimension !== 'payment' && (
+                      <th className="py-2 pr-3 text-right font-bold">Dibayar</th>
+                    )}
+                    {!item && dimension !== 'payment' && (
+                      <th className="py-2 pr-3 text-right font-bold">Sisa</th>
+                    )}
+                    <th className="py-2 text-right font-bold">
+                      {item ? 'Total' : dimension === 'payment' ? 'Jumlah' : 'Nilai'}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r, i) => (
+                    <tr key={`${r.invoiceId}-${i}`} className="border-b border-border/40 last:border-0">
+                      <td className="py-2 pr-3 whitespace-nowrap text-xs text-muted-foreground">
+                        {fmtDate(r.date)}
+                      </td>
+                      {/* The number opens the invoice itself. There is no
+                          detail page in this app — [id]/print IS the document
+                          view — so that is the honest target for a click. */}
+                      <td className="py-2 pr-3 font-semibold">
+                        <Link
+                          href={`/dashboard/invoice/${side === 'purchase' && item ? 'purchase' : 'sales'}/${r.invoiceId}/print`}
+                          className="hover:text-teal-600 hover:underline dark:hover:text-teal-400"
+                        >
+                          {r.number}
+                        </Link>
+                      </td>
+                      <td className="py-2 pr-3 max-w-40 truncate">{r.party}</td>
+                      {item && <td className="py-2 pr-3 max-w-44 truncate font-semibold">{r.product}</td>}
+                      {item && (
+                        <td className="py-2 pr-3 text-right tabular-nums">
+                          {fmtQty(r.qty ?? 0)}
+                          <span className="ml-1 text-[11px] text-muted-foreground">{r.unit}</span>
+                        </td>
+                      )}
+                      {item && (
+                        <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                          {fmtIDR(r.unitPrice ?? 0)}
+                        </td>
+                      )}
+                      {dimension === 'payment' && (
+                        <td className="py-2 pr-3">{methodMeta(r.method ?? '').label}</td>
+                      )}
+                      {dimension === 'staff' && <td className="py-2 pr-3">{r.staff}</td>}
+                      {!item && dimension !== 'payment' && (
+                        <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                          {fmtIDR(r.paid ?? 0)}
+                        </td>
+                      )}
+                      {!item && dimension !== 'payment' && (
+                        <td
+                          className={`py-2 pr-3 text-right tabular-nums ${
+                            (r.outstanding ?? 0) > 0 ? 'font-bold text-amber-600 dark:text-amber-400' : 'text-muted-foreground'
+                          }`}
+                        >
+                          {fmtIDR(r.outstanding ?? 0)}
+                        </td>
+                      )}
+                      <td className="py-2 text-right font-black tabular-nums">
+                        {fmtIDR(item || dimension === 'payment' ? (r.amount ?? 0) : (r.total ?? 0))}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Server-side paging: each button is a request, never a slice. */}
+          {rowPages > 1 && (
+            <div className="mt-3 flex items-center justify-between">
+              <button
+                disabled={rowPage <= 1 || loadingRows}
+                onClick={() => loadRows(activeKey, rowPage - 1)}
+                className="inline-flex items-center gap-1 rounded-xl border border-border/60 px-3 py-1.5 text-xs font-bold disabled:opacity-40"
+              >
+                <ChevronLeft className="size-4" /> Sebelumnya
+              </button>
+              <span className="text-xs font-bold text-muted-foreground">
+                Hal {rowPage} / {rowPages}
+              </span>
+              <button
+                disabled={rowPage >= rowPages || loadingRows}
+                onClick={() => loadRows(activeKey, rowPage + 1)}
+                className="inline-flex items-center gap-1 rounded-xl border border-border/60 px-3 py-1.5 text-xs font-bold disabled:opacity-40"
+              >
+                Berikutnya <ChevronRight className="size-4" />
+              </button>
+            </div>
+          )}
         </div>
       )}
     </section>
@@ -451,7 +758,10 @@ export default function InvoiceReportsPage() {
       <ReportFilterDialog
         open={filterOpen}
         initial={filters ?? defaultFilters()}
-        onClose={() => filters && setFilterOpen(false)}
+        // Closes even before a report has been run: the empty state behind
+        // it offers "Atur Filter" to reopen. Guarding on `filters` here is what
+        // made the X look broken on first open.
+        onClose={() => setFilterOpen(false)}
         onApply={(f) => {
           setFilters(f);
           setFilterOpen(false);

@@ -12,6 +12,7 @@ import {
   ilike,
   inArray,
   type AnyColumn,
+  type SQL,
 } from "drizzle-orm";
 import { db, reportDb } from "../db";
 import {
@@ -27,6 +28,7 @@ import {
   cashInCategoryTable,
   cashInDetailTable,
   usersTable,
+  menuGroupsTable,
   INVOICE_PAYMENT_METHOD,
 } from "../db/schema";
 import { auth } from "../auth";
@@ -1446,6 +1448,131 @@ export async function invoiceRoutes(app: FastifyInstance) {
     }
   });
 
+  /**
+   * Shared machinery for the ITEM-GRAINED invoice reports (per produk, per grup).
+   *
+   * The three original dimensions group whole INVOICES — one row per payment
+   * method, salesperson or customer. These two group invoice_items, and the
+   * change of grain drags three consequences with it:
+   *
+   * 1. BOTH SIDES ARE MEANINGFUL. "Per sales" and "per pelanggan" only exist on
+   *    the sales side, which is why the older dimensions are hardcoded to it.
+   *    "What did we buy" is as real a question as "what did we sell", so these
+   *    take a `side` and default to sales.
+   * 2. THE PRODUCT / GRUP FILTERS NARROW LINES, not invoices. itemFilter() above
+   *    is an EXISTS that selects whole invoices — right when a row is an
+   *    invoice, wrong here, where picking "Minuman" must mean the drinks lines
+   *    rather than every line of every invoice that happened to contain one.
+   * 3. INVOICE-LEVEL MONEY MUST BE ALLOCATED. total = subtotal - discount +
+   *    tax_amount, so summing line_total alone reports money the customer never
+   *    paid. Each line gives up its proportional share of the discount and, when
+   *    prices are tax-inclusive, of the tax — the same rule netLineRevenue
+   *    applies to orders (lib/money-sql.ts).
+   *
+   *    What the shares sum to is REVENUE NET OF TAX, which is deliberately NOT
+   *    the "Nilai Faktur" KPI above: that one is sum(invoices.total), i.e. what
+   *    was billed. computeTotals() puts tax outside the line under exclusive
+   *    pricing (total = base + tax) and inside it under inclusive (total =
+   *    base), so from either side the identity is the same one:
+   *
+   *        omzet bersih + pajak = nilai faktur
+   *
+   *    `totals.tax` is returned so the UI can show that sum rather than leave
+   *    an unexplained gap between two numbers on one screen. Verified to the
+   *    rupiah on outlets 1 and 19.
+   *
+   * The denominator is the invoice's OWN summed lines rather than the stored
+   * `subtotal` column: self-consistent by construction, so the allocation can
+   * never leak or invent money even if a stored subtotal has drifted.
+   */
+  const BILLED_STATUS = sql`('posted', 'partial', 'paid')`;
+
+  type ItemDimension = "product" | "menugroup";
+  const ITEM_DIMENSIONS = new Set<string>(["product", "menugroup"]);
+  const sideOf = (v?: string) => (v === "purchase" ? "purchase" : "sales");
+
+  /** key / label for the two item dimensions, over the `l` alias below. */
+  function itemDimensionSql(dimension: ItemDimension) {
+    if (dimension === "product") {
+      return {
+        key: sql`coalesce(l.product_id, '-')`,
+        // A line with no product is a real, permanent state — delivery, jasa, a
+        // fee (see invoice_items.product_id). One honest bucket keeps the
+        // column summing to the invoice total instead of quietly dropping them.
+        label: sql`coalesce(min(l.product_name), 'Tanpa Produk (jasa/ongkir)')`,
+        unit: sql`coalesce(min(l.unit), '')`,
+      };
+    }
+    return {
+      key: sql`coalesce(l.menu_group_id::text, '-')`,
+      label: sql`coalesce(min(l.group_name), 'Tanpa Grup')`,
+      unit: sql`''`,
+    };
+  }
+
+  /**
+   * The invoice window + the allocated per-line amount, as CTEs every
+   * item-grained query below starts from. `lineWhere` narrows the LINES.
+   */
+  function invoiceLinesCte(
+    outletId: number,
+    side: "sales" | "purchase",
+    from: Date,
+    to: Date | null,
+    lineWhere: SQL,
+  ) {
+    const window = to
+      ? sql`i.issue_date >= ${from} and i.issue_date < ${to}`
+      : sql`i.issue_date >= ${from}`;
+    return sql`
+      inv as (
+        select i.id, i.number, i.issue_date, i.discount,
+               coalesce(i.tax_amount, 0) as tax_amount,
+               coalesce(nullif(trim(i.party_name), ''), s.name, 'Tanpa Nama') as party,
+               case when i.tax_inclusive then coalesce(i.tax_amount, 0) else 0 end as tax_in_price
+        from invoices i
+        left join suppliers s on s.id = i.supplier_id
+        where i.outlet_id = ${outletId}
+          and i.type = ${side}
+          and i.deleted_at is null
+          and i.status in ${BILLED_STATUS}
+          and ${window}
+      ),
+      gross as (
+        select ii.invoice_id, coalesce(sum(ii.line_total), 0) as g
+        from invoice_items ii
+        where ii.invoice_id in (select id from inv)
+        group by ii.invoice_id
+      ),
+      l as (
+        select inv.id as invoice_id, inv.number, inv.issue_date, inv.party,
+               ii.id as item_id, ii.description, ii.quantity, ii.unit_price,
+               ii.product_id, p.product_name, p.unit, p.menu_group_id,
+               mg.name as group_name,
+               (ii.line_total - case when g.g > 0
+                  then ii.line_total * (inv.discount + inv.tax_in_price) / g.g
+                  else 0 end) as amount
+        from inv
+        join gross g on g.invoice_id = inv.id
+        join invoice_items ii on ii.invoice_id = inv.id
+        left join products p on p.id = ii.product_id
+        left join menu_groups mg on mg.id = p.menu_group_id
+        ${lineWhere}
+      )`;
+  }
+
+  /** Line-level narrowing for the item dimensions. See 2. above. */
+  function itemLineWhere(q: { productId?: string; menuGroupId?: string }): SQL {
+    const parts: SQL[] = [];
+    const productId = q.productId?.trim();
+    const menuGroupId = Number(q.menuGroupId);
+    if (productId) parts.push(sql`ii.product_id = ${productId}`);
+    else if (Number.isFinite(menuGroupId) && menuGroupId > 0) {
+      parts.push(sql`p.menu_group_id = ${menuGroupId}`);
+    }
+    return parts.length ? sql`where ${sql.join(parts, sql` and `)}` : sql``;
+  }
+
   // Segmented invoice report: the same period window as /report, sliced three
   // ways. Sales invoices only — "per sales" (who issued it) and "per pelanggan"
   // are meaningless on the purchase side, and mixing the two would double-count
@@ -1472,6 +1599,64 @@ export async function invoiceRoutes(app: FastifyInstance) {
 
     // Capped reports pool: see the sibling handler above.
     try {
+      // Per produk / per grup: a different grain, and therefore its own query
+      // rather than another key expression below. See itemDimensionSql.
+      if (ITEM_DIMENSIONS.has(dimension)) {
+        const dim = dimension as ItemDimension;
+        const side = sideOf((q as { side?: string }).side);
+        const { key, label, unit } = itemDimensionSql(dim);
+        const result = await reportDb.execute(sql`
+          with ${invoiceLinesCte(outlet.id, side, from, to, itemLineWhere(q))}
+          select ${key}                                as key,
+                 ${label}                              as label,
+                 ${unit}                               as unit,
+                 count(distinct l.invoice_id)::int     as invoices,
+                 coalesce(sum(l.quantity), 0)::float8  as qty,
+                 coalesce(sum(l.amount), 0)::float8    as amount,
+                 -- Window functions run after the grouping and before the
+                 -- LIMIT, so these cover every bucket while only 50 come back.
+                 count(*) over ()::int                     as total_buckets,
+                 sum(sum(l.amount)) over ()::float8        as total_amount,
+                 sum(sum(l.quantity)) over ()::float8      as total_qty,
+                 -- Invoice-level facts, so they are read off the inv CTE
+                 -- rather than summed per bucket (which would multiply them by
+                 -- the number of distinct products on each invoice).
+                 (select coalesce(sum(inv.tax_amount), 0) from inv)::float8 as total_tax,
+                 (select coalesce(sum(inv.discount), 0) from inv)::float8   as total_discount,
+                 (select count(*) from inv)::int                            as total_invoices
+          from l
+          group by ${key}
+          order by amount desc
+          limit 50
+        `);
+        const bucketRows = result.rows as Record<string, unknown>[];
+        const head = bucketRows[0];
+        return {
+          success: true,
+          dimension,
+          side,
+          groups: bucketRows.map((r) => ({
+            key: String(r.key),
+            label: String(r.label),
+            unit: String(r.unit ?? ""),
+            count: Number(r.invoices),
+            invoices: Number(r.invoices),
+            qty: Number(r.qty),
+            amount: Number(r.amount),
+          })),
+          totals: {
+            buckets: head ? Number(head.total_buckets) : 0,
+            invoices: head ? Number(head.total_invoices) : 0,
+            qty: head ? Number(head.total_qty) : 0,
+            // Net of the invoice-level discount and of tax. See the note above:
+            // amount + tax = the "Nilai Faktur" KPI.
+            amount: head ? Number(head.total_amount) : 0,
+            tax: head ? Number(head.total_tax) : 0,
+            discount: head ? Number(head.total_discount) : 0,
+          },
+        };
+      }
+
       const BILLED = ["posted", "partial", "paid"] as const;
       const base = [
         eq(invoicesTable.outlet_id, outlet.id),
@@ -1567,6 +1752,219 @@ export async function invoiceRoutes(app: FastifyInstance) {
       return reply
         .status(500)
         .send({ success: false, error: "Gagal memuat laporan" });
+    }
+  });
+
+  /**
+   * THE ROWS BEHIND A BUCKET — the "detail" half of the invoice report.
+   *
+   * Every dimension on the page can now be opened up, and what a row IS depends
+   * on the grain of the bucket it came from:
+   *
+   *   product / menugroup -> one invoice LINE  (which goods, how many, for how much)
+   *   payment             -> one PAYMENT       (money that actually moved)
+   *   staff / customer    -> one INVOICE       (billed / paid / sisa)
+   *
+   * Paginated server-side, and `total` rides along as a window function so the
+   * count and the page come from one scan rather than two — the same shape
+   * /api/reports/breakdown/orders uses.
+   *
+   * `key` narrows to a single bucket; omitting it means "Semua", so the row list
+   * always covers exactly what the bucket list above it summed.
+   */
+  app.get("/api/invoices/report/breakdown/rows", async (request, reply) => {
+    const outlet = await getOwnerOutlet(request, reply, "reports");
+    if (!outlet) return;
+    const q = request.query as {
+      period?: string;
+      from?: string;
+      to?: string;
+      timezone?: string;
+      dimension?: string;
+      side?: string;
+      key?: string;
+      productId?: string;
+      menuGroupId?: string;
+      page?: string;
+      pageSize?: string;
+    };
+    const dimension = q.dimension ?? "payment";
+    const timezone = q.timezone || "Asia/Jakarta";
+    const { from, to } = rangeWindow(q, timezone);
+    const page = Math.max(1, Number(q.page) || 1);
+    const pageSize = Math.min(100, Math.max(5, Number(q.pageSize) || 20));
+    const offset = (page - 1) * pageSize;
+    // Empty string is a legitimate bucket key ("-" is used for the unnamed
+    // ones), so only an ABSENT key means "all buckets".
+    const key = q.key === undefined ? null : q.key;
+
+    // The invoice-grained branches below alias invoices as `i`, so they cannot
+    // reuse itemFilter() — it renders "invoices"."id" from the query builder.
+    const rawItemFilter = (): SQL => {
+      const productId = q.productId?.trim();
+      const menuGroupId = Number(q.menuGroupId);
+      if (productId) {
+        return sql` and exists (select 1 from invoice_items ii
+                    where ii.invoice_id = i.id and ii.product_id = ${productId})`;
+      }
+      if (Number.isFinite(menuGroupId) && menuGroupId > 0) {
+        return sql` and exists (select 1 from invoice_items ii
+                    join products p2 on p2.id = ii.product_id
+                    where ii.invoice_id = i.id and p2.menu_group_id = ${menuGroupId})`;
+      }
+      return sql``;
+    };
+
+    const paged = <T>(rows: T[], totalRows: number) => ({
+      success: true,
+      dimension,
+      page,
+      pageSize,
+      total: totalRows,
+      totalPages: Math.max(1, Math.ceil(totalRows / pageSize)),
+      rows,
+    });
+
+    try {
+      // ---------------------------------------------------------- item rows
+      if (ITEM_DIMENSIONS.has(dimension)) {
+        const dim = dimension as ItemDimension;
+        const side = sideOf(q.side);
+        const { key: keyExpr } = itemDimensionSql(dim);
+        const narrow = key === null ? sql`` : sql`where ${keyExpr} = ${key}`;
+        const result = await reportDb.execute(sql`
+          with ${invoiceLinesCte(outlet.id, side, from, to, itemLineWhere(q))}
+          select l.invoice_id,
+                 l.number,
+                 to_json(l.issue_date) #>> '{}'          as issue_date,
+                 l.party,
+                 -- A line with no product still has its free-text description,
+                 -- which is the only name a delivery or jasa line ever had.
+                 coalesce(l.product_name, l.description)  as product,
+                 coalesce(l.unit, '')                     as unit,
+                 l.quantity::float8                       as qty,
+                 l.unit_price::float8                     as unit_price,
+                 l.amount::float8                         as amount,
+                 count(*) over ()::int                    as total
+          from l
+          ${narrow}
+          order by l.issue_date desc, l.item_id desc
+          limit ${pageSize} offset ${offset}
+        `);
+        const rows = result.rows as Record<string, unknown>[];
+        return paged(
+          rows.map((r) => ({
+            invoiceId: Number(r.invoice_id),
+            number: String(r.number),
+            date: r.issue_date as string,
+            party: String(r.party),
+            product: String(r.product ?? ""),
+            unit: String(r.unit ?? ""),
+            qty: Number(r.qty),
+            unitPrice: Number(r.unit_price),
+            amount: Number(r.amount),
+          })),
+          rows.length ? Number(rows[0].total) : 0,
+        );
+      }
+
+      const window = to
+        ? (col: SQL) => sql`${col} >= ${from} and ${col} < ${to}`
+        : (col: SQL) => sql`${col} >= ${from}`;
+
+      // ------------------------------------------------------- payment rows
+      if (dimension === "payment") {
+        const narrow = key === null ? sql`` : sql`and ip.method = ${key}`;
+        const result = await reportDb.execute(sql`
+          select ip.id,
+                 i.id                                     as invoice_id,
+                 i.number,
+                 to_json(ip.created_at) #>> '{}'          as paid_at,
+                 coalesce(nullif(trim(i.party_name), ''), 'Tanpa Nama') as party,
+                 ip.method,
+                 ip.amount::float8                        as amount,
+                 count(*) over ()::int                    as total
+          from invoice_payments ip
+          join invoices i on i.id = ip.invoice_id
+          where i.outlet_id = ${outlet.id}
+            and i.type = 'sales'
+            and i.deleted_at is null
+            and ${window(sql`ip.created_at`)}
+            ${narrow}${rawItemFilter()}
+          order by ip.created_at desc, ip.id desc
+          limit ${pageSize} offset ${offset}
+        `);
+        const rows = result.rows as Record<string, unknown>[];
+        return paged(
+          rows.map((r) => ({
+            paymentId: Number(r.id),
+            invoiceId: Number(r.invoice_id),
+            number: String(r.number),
+            date: r.paid_at as string,
+            party: String(r.party),
+            method: String(r.method),
+            amount: Number(r.amount),
+          })),
+          rows.length ? Number(rows[0].total) : 0,
+        );
+      }
+
+      // ------------------------------------------------------- invoice rows
+      // staff / customer: same shape, different bucket key.
+      const isStaff = dimension === "staff";
+      const keyExpr = isStaff
+        ? sql`coalesce(i.created_by, '-')`
+        : sql`coalesce(nullif(trim(i.party_name), ''), '-')`;
+      const narrow = key === null ? sql`` : sql`and ${keyExpr} = ${key}`;
+      const result = await reportDb.execute(sql`
+        select i.id,
+               i.number,
+               to_json(i.issue_date) #>> '{}'            as issue_date,
+               to_json(i.due_date) #>> '{}'              as due_date,
+               coalesce(nullif(trim(i.party_name), ''), 'Tanpa Nama') as party,
+               coalesce(u.name, 'Tanpa Nama')            as staff,
+               i.status::text                            as status,
+               i.total::float8                           as total_amount,
+               i.amount_paid::float8                     as paid,
+               (i.total - i.amount_paid)::float8         as outstanding,
+               count(*) over ()::int                     as total
+        from invoices i
+        left join users u on u.id = i.created_by
+        where i.outlet_id = ${outlet.id}
+          and i.type = 'sales'
+          and i.deleted_at is null
+          and i.status in ${BILLED_STATUS}
+          and ${window(sql`i.issue_date`)}
+          ${narrow}${rawItemFilter()}
+        order by i.issue_date desc, i.id desc
+        limit ${pageSize} offset ${offset}
+      `);
+      const rows = result.rows as Record<string, unknown>[];
+      return paged(
+        rows.map((r) => ({
+          invoiceId: Number(r.id),
+          number: String(r.number),
+          date: r.issue_date as string,
+          dueDate: (r.due_date as string) ?? null,
+          party: String(r.party),
+          staff: String(r.staff),
+          status: String(r.status),
+          total: Number(r.total_amount),
+          paid: Number(r.paid),
+          outstanding: Number(r.outstanding),
+        })),
+        rows.length ? Number(rows[0].total) : 0,
+      );
+    } catch (error) {
+      request.log.error(error);
+      const busy = loadFailure(error);
+      if (busy)
+        return reply
+          .status(busy.status)
+          .send({ success: false, error: busy.error });
+      return reply
+        .status(500)
+        .send({ success: false, error: "Gagal memuat rincian" });
     }
   });
 
