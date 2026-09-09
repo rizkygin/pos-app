@@ -632,6 +632,9 @@ function MemberDrawer({
 
 // ── Promos ──────────────────────────────────────────────────────────────────
 
+/** Numeric promo fields are typed by hand: "Rp 10.000" must mean 10000. */
+const digits = (s: string) => s.replace(/\D/g, '');
+
 const EMPTY_PROMO = {
   code: '',
   title: '',
@@ -670,6 +673,16 @@ function PromosTab({
 
   const save = async () => {
     if (!form) return;
+    if (!Number(form.discount_value)) {
+      setMessage({
+        ok: false,
+        text:
+          form.discount_type === 'percent'
+            ? 'Isi besar diskon dalam persen, contoh 10.'
+            : 'Isi besar diskon dalam rupiah, contoh 10.000.',
+      });
+      return;
+    }
     setBusy(true);
     const res = await fetch(`${API_URL}/api/membership/promos`, {
       method: 'POST',
@@ -753,14 +766,14 @@ function PromosTab({
             <Field label={form.discount_type === 'percent' ? 'Besar diskon (%)' : 'Besar diskon (Rp)'}>
               <Input
                 value={form.discount_value}
-                onChange={(e) => setForm({ ...form, discount_value: e.target.value })}
+                onChange={(e) => setForm({ ...form, discount_value: digits(e.target.value) })}
                 inputMode="numeric"
               />
             </Field>
             <Field label="Minimal belanja (Rp)">
               <Input
                 value={form.min_order}
-                onChange={(e) => setForm({ ...form, min_order: e.target.value })}
+                onChange={(e) => setForm({ ...form, min_order: digits(e.target.value) })}
                 inputMode="numeric"
                 placeholder="0"
               />
@@ -769,7 +782,7 @@ function PromosTab({
               <Field label="Maksimal potongan (Rp)">
                 <Input
                   value={form.max_discount}
-                  onChange={(e) => setForm({ ...form, max_discount: e.target.value })}
+                  onChange={(e) => setForm({ ...form, max_discount: digits(e.target.value) })}
                   inputMode="numeric"
                   placeholder="tanpa batas"
                 />
@@ -785,7 +798,7 @@ function PromosTab({
             <Field label="Kuota total">
               <Input
                 value={form.usage_limit}
-                onChange={(e) => setForm({ ...form, usage_limit: e.target.value })}
+                onChange={(e) => setForm({ ...form, usage_limit: digits(e.target.value) })}
                 inputMode="numeric"
                 placeholder="tanpa batas"
               />
@@ -793,7 +806,7 @@ function PromosTab({
             <Field label="Kuota per member">
               <Input
                 value={form.per_member_limit}
-                onChange={(e) => setForm({ ...form, per_member_limit: e.target.value })}
+                onChange={(e) => setForm({ ...form, per_member_limit: digits(e.target.value) })}
                 inputMode="numeric"
                 placeholder="tanpa batas"
               />

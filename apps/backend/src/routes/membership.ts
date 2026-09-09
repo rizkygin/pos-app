@@ -336,8 +336,15 @@ export async function membershipRoutes(app: FastifyInstance) {
     const title = String(body.title ?? "").trim();
     if (!title) throw new Error("Judul promo wajib diisi");
     const type = body.discount_type === "amount" ? "amount" : "percent";
-    const value = Math.trunc(Number(body.discount_value));
-    if (!Number.isFinite(value) || value < 1) throw new Error("Nilai diskon tidak valid");
+    // Typed by hand at the counter, so "10.000" and "Rp 10.000" both mean 10000.
+    const value = Math.trunc(Number(String(body.discount_value ?? "").replace(/[^\d]/g, "")));
+    if (!Number.isFinite(value) || value < 1) {
+      throw new Error(
+        type === "percent"
+          ? "Besar diskon persen wajib diisi, minimal 1"
+          : "Besar diskon rupiah wajib diisi, minimal 1",
+      );
+    }
     if (type === "percent" && value > 100) throw new Error("Diskon persen maksimal 100");
 
     const tiers = Array.isArray(body.tiers)
