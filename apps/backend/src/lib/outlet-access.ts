@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { db } from "../db";
 import {
+  adminsTable,
   employeesTable,
   outletsTable,
   subscriptionsTable,
@@ -318,4 +319,79 @@ export async function requireOutletAccess(
     return null;
   }
   return { ...access, userId: session.user.id, gate };
+}
+
+/**
+ * Guard for a route that names its outlet in the URL rather than reading the
+ * active-outlet cookie: the outlet's OWNER, or a platform admin.
+ *
+ * `requireOutletAccess` resolves whichever outlet the caller is currently
+ * switched to, which is right for the dashboard but wrong — and unsafe — for a
+ * link someone can be sent: getOutletAccess() falls back to the caller's FIRST
+ * outlet when the requested id isn't theirs, so an owner of outlet 7 asking for
+ * outlet 43 would silently be served their own data under someone else's id.
+ * The identity check below is what makes the URL mean what it says.
+ *
+ * Platform admins are resolved FIRST and by a different path, because they
+ * typically own no outlet at all — getOutletAccess() returns null for them, so
+ * the owner branch below can never let them through for any outlet. They get
+ * the named outlet directly. `isOwner` stays honest (false when they are merely
+ * an admin) and `isPlatformAdmin` says how they got in, so a page can disclose
+ * that it is showing another merchant's books.
+ *
+ * Employees never pass, regardless of their permission map.
+ */
+export async function requireOutletOwnerOrAdmin(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  outletId: number,
+): Promise<
+  (OutletAccess & { userId: string; gate: SubscriptionGate; isPlatformAdmin: boolean }) | null
+> {
+  const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+  if (!session?.user) {
+    reply.status(401).send({ success: false, error: "Unauthorized" });
+    return null;
+  }
+
+  // A row in `admins` IS the admin role everywhere in this codebase — /api/me
+  // and routes/admin.ts both test exactly this, with no deleted_at filter.
+  // Diverging here would make an account that passes the proxy's admin gate
+  // fail this one, which is the kind of split nobody can debug from a 403.
+  const [admin] = await db
+    .select({ id: adminsTable.id })
+    .from(adminsTable)
+    .where(eq(adminsTable.user_id, session.user.id))
+    .limit(1);
+
+  if (admin) {
+    const [outlet] = await db
+      .select()
+      .from(outletsTable)
+      .where(eq(outletsTable.id, outletId))
+      .limit(1);
+    if (!outlet) {
+      reply.status(404).send({ success: false, error: "Outlet tidak ditemukan" });
+      return null;
+    }
+    // The gate belongs to the outlet's OWNER, never to the admin reading it.
+    const gate = await getSubscriptionGate(outlet.user_id);
+    return {
+      outlet,
+      isOwner: outlet.user_id === session.user.id,
+      permissions: null,
+      employeeId: null,
+      userId: session.user.id,
+      gate,
+      isPlatformAdmin: true,
+    };
+  }
+
+  const access = await getOutletAccess(session.user.id, outletId);
+  if (!access || !access.isOwner || access.outlet.id !== outletId) {
+    reply.status(403).send({ success: false, error: "Halaman ini hanya untuk pemilik outlet" });
+    return null;
+  }
+  const gate = await getSubscriptionGate(access.outlet.user_id);
+  return { ...access, userId: session.user.id, gate, isPlatformAdmin: false };
 }

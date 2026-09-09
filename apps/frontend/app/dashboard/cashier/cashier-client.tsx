@@ -454,6 +454,21 @@ export const CashierClient = ({
   // clicks / Cmd+Enter key-repeat), state drives the disabled button UI.
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submittingRef = useRef(false);
+  // Idempotency key for the sale currently being rung up. The ref above only
+  // stops a double CLICK; it cannot stop the real duplicate: the POST commits
+  // server-side, the response is lost (flaky counter wifi), the catch below
+  // shows an error and leaves the cart intact, and the cashier — reasonably —
+  // taps Checkout again. Without a key the server has no way to tell that
+  // retry apart from a second customer ordering the same thing.
+  //
+  // Minted on the first attempt and held across retries so every retry carries
+  // the SAME id; /api/add-order-detail uses it as orders.id and replays instead
+  // of ringing the sale up twice. Cleared only once the server has confirmed,
+  // so the next sale starts a new key.
+  //
+  // Reusing the key after a genuine failure is safe: if nothing committed the
+  // id is still free, and if something did commit the sale already happened.
+  const pendingOrderIdRef = useRef<string | null>(null);
 
   // Lazy mode: a per-device cashier preference (localStorage, never the DB).
   // When on, cash received is assumed to exactly equal the amount due (uang
@@ -1373,6 +1388,13 @@ export const CashierClient = ({
     if (submittingRef.current) return;
     submittingRef.current = true;
     setIsSubmitting(true);
+    // Held across retries — see pendingOrderIdRef. A retry of a sale the server
+    // already committed must carry the id it was committed under, or it rings
+    // up twice.
+    if (!pendingOrderIdRef.current) {
+      pendingOrderIdRef.current = crypto.randomUUID();
+    }
+    const idempotencyKey = pendingOrderIdRef.current;
     // Capture snapshot before any async work so state changes mid-flight don't corrupt it
     const snapshot = [...cart];
     const snapshotTotal = cartTotal;
@@ -1408,6 +1430,8 @@ export const CashierClient = ({
         credentials: 'include',
         body: JSON.stringify({
           outletId,
+          // The server uses this as orders.id and treats a repeat as a replay.
+          orderId: idempotencyKey,
           cart: snapshot,
           total: snapshotFinalTotal,
           customerName: snapshotCustomerName,
@@ -1432,6 +1456,10 @@ export const CashierClient = ({
             `Server error: ${response.status}`,
         );
       }
+      // Confirmed by the server (a fresh sale or a replay of one it already
+      // has, both of which mean this sale is recorded exactly once). Release
+      // the key so the next sale mints its own.
+      pendingOrderIdRef.current = null;
       setCartOpen(false);
       // The sale just changed what should be in the drawer, so re-read the
       // shift strip. Cheap: one small indexed query, only after a real sale.
@@ -1443,7 +1471,9 @@ export const CashierClient = ({
         variant: 'customer',
         heading: 'Order Placed!',
         data: {
-          orderId: data.orderId ?? crypto.randomUUID(),
+          // Falls back to the key we posted under: on a replay that IS the id
+          // the order was committed with, so the slip still matches the record.
+          orderId: data.orderId ?? idempotencyKey,
           customerName: snapshotCustomerName,
           pagerNumber: snapshotPagerNumber,
           items: snapshot.map((i) => ({

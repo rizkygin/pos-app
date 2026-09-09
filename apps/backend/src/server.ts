@@ -27,6 +27,7 @@ import { pushRoutes } from "./routes/push";
 import { routingRoutes } from "./routes/routing";
 import { maintenanceRoutes } from "./routes/maintenance";
 import { reportRoutes } from "./routes/reports";
+import { auditRoutes } from "./routes/audit";
 import { shiftRoutes } from "./routes/shifts";
 import { membershipRoutes } from "./routes/membership";
 import { startDispatchScheduler } from "./lib/dispatch-scheduler";
@@ -123,6 +124,7 @@ async function main() {
   await app.register(routingRoutes);
   await app.register(maintenanceRoutes);
   await app.register(reportRoutes);
+  await app.register(auditRoutes);
   await app.register(shiftRoutes);
   await app.register(membershipRoutes);
 

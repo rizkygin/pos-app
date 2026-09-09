@@ -40,3 +40,30 @@ export function LocalDateTime({
 
   return <>{text}</>;
 }
+
+/**
+ * Clock time only, in the VIEWER's timezone — "19:00:31".
+ *
+ * Separate from LocalDateTime because `toLocaleDateString` cannot render a
+ * bare time: given only time options it still adds the date defaults back, so
+ * asking it for "19:00:31" returns "5/9/2026, 19.00.31". Same effect-not-render
+ * reasoning as above: server and first client pass must agree.
+ */
+export function LocalTime({
+  value,
+  options = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false },
+  locale = 'id-ID',
+}: {
+  value: string | number | Date;
+  options?: Intl.DateTimeFormatOptions;
+  locale?: string;
+}) {
+  const [text, setText] = useState('');
+
+  useEffect(() => {
+    const d = new Date(value);
+    if (!isNaN(d.getTime())) setText(d.toLocaleTimeString(locale, options));
+  }, [value, locale, JSON.stringify(options)]);
+
+  return <>{text}</>;
+}
