@@ -48,6 +48,31 @@ const WINDOW_SECONDS = 90;
 // firmly at a retry: nothing but a cashier re-entering the sale produces those.
 const REVIEW_GAP_SECONDS = 30;
 
+/**
+ * The customer name, when the cashier typed one, settles the question the rules
+ * above can only guess at.
+ *
+ * A retry re-posts the SAME snapshot — cashier-client.tsx freezes the name
+ * before the request and reuses it on the second attempt — so two notes bearing
+ * one name are one sale. Two DIFFERENT names are two people who each said their
+ * name, which no retry can produce.
+ *
+ * Compared case- and space-insensitively: "budi" and "Budi " are the same
+ * walk-in. Returns null when either note has no name, which is the common case
+ * and means "no opinion" — the pair falls back to the item/gap/payment rules.
+ */
+function customerVerdict(a: string | null, b: string | null): "same" | "different" | null {
+  if (!a || !b) return null;
+  const norm = (v: string) => v.trim().toLowerCase().replace(/\s+/g, " ");
+  return norm(a) === norm(b) ? "same" : "different";
+}
+
+/** Trim to null: older notes carry "" where the cashier typed nothing. */
+function name(v: unknown): string | null {
+  const s = typeof v === "string" ? v.trim() : "";
+  return s === "" ? null : s;
+}
+
 const ORDER_DISCOUNT = orderDiscount(sql`o`);
 
 type Pair = {
@@ -65,6 +90,9 @@ type Pair = {
   /** True when the second note was booked as cash, i.e. it moved the drawer. */
   affectsDrawer: boolean;
   items: { name: string; qty: number; note: string | null }[];
+  /** "Nama Pelanggan" as typed at the counter, per note. Usually null. */
+  firstCustomer: string | null;
+  secondCustomer: string | null;
   cashierName: string | null;
   shiftId: number | null;
   /** "likely" = almost certainly a duplicate; "review" = confirm before cancelling. */
@@ -115,6 +143,7 @@ export async function auditRoutes(app: FastifyInstance) {
                  o.shift_id,
                  o.note ->> 'paymentMethod' as payment,
                  o.note ->> 'cashierName'   as cashier,
+                 o.note ->> 'customerName'  as customer,
                  ${ORDER_DISCOUNT} as discount
           from orders o
           where o.outlet_id = ${outletId}
@@ -155,7 +184,7 @@ export async function auditRoutes(app: FastifyInstance) {
           group by od.order_id
         ),
         enriched as (
-          select pos.id, pos.created_at, pos.shift_id, pos.payment, pos.cashier,
+          select pos.id, pos.created_at, pos.shift_id, pos.payment, pos.cashier, pos.customer,
                  f.fp,
                  (f.gross - pos.discount) as total,
                  coalesce(i.items, '[]'::jsonb) as items,
@@ -173,7 +202,8 @@ export async function auditRoutes(app: FastifyInstance) {
           select e.*,
                  lag(e.id)         over w as prev_id,
                  lag(e.created_at) over w as prev_at,
-                 lag(e.payment)    over w as prev_payment
+                 lag(e.payment)    over w as prev_payment,
+                 lag(e.customer)   over w as prev_customer
           from enriched e
           window w as (partition by e.fp, round(e.total) order by e.created_at)
         )
@@ -183,6 +213,8 @@ export async function auditRoutes(app: FastifyInstance) {
                id                                             as second_id,
                to_json(created_at) #>> '{}'                   as second_at,
                payment                                        as second_payment,
+               prev_customer                                  as first_customer,
+               customer                                       as second_customer,
                extract(epoch from (created_at - prev_at))::int as gap_seconds,
                total::float8                                  as amount,
                items,
@@ -201,6 +233,9 @@ export async function auditRoutes(app: FastifyInstance) {
         const firstPayment = r.first_payment ?? null;
         const secondPayment = r.second_payment ?? null;
         const samePayment = firstPayment === secondPayment;
+        const firstCustomer = name(r.first_customer);
+        const secondCustomer = name(r.second_customer);
+        const customer = customerVerdict(firstCustomer, secondCustomer);
         return {
           firstId: String(r.first_id),
           firstAt: r.first_at,
@@ -215,12 +250,23 @@ export async function auditRoutes(app: FastifyInstance) {
           // booked it twice, but only the transfer leg is fake.
           affectsDrawer: secondPayment === "cash",
           items: Array.isArray(r.items) ? r.items : [],
+          firstCustomer,
+          secondCustomer,
           cashierName: r.cashier ?? null,
           shiftId: r.shift_id === null ? null : Number(r.shift_id),
+          // Two named customers outrank every other signal in BOTH directions:
+          // one name twice is a retry even when the cart is a single coffee
+          // 40s apart, and two names is two buyers even when the carts match
+          // to the rupiah. Only when at least one note is anonymous — most of
+          // them — does the item/gap/payment heuristic decide.
           confidence:
-            Number(r.line_count) === 1 && gapSeconds > REVIEW_GAP_SECONDS && samePayment
+            customer === "different"
               ? "review"
-              : "likely",
+              : customer === "same"
+                ? "likely"
+                : Number(r.line_count) === 1 && gapSeconds > REVIEW_GAP_SECONDS && samePayment
+                  ? "review"
+                  : "likely",
         };
       });
 

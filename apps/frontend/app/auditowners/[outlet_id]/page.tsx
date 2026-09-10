@@ -37,6 +37,8 @@ type Pair = {
   amount: number;
   affectsDrawer: boolean;
   items: { name: string; qty: number; note: string | null }[];
+  firstCustomer: string | null;
+  secondCustomer: string | null;
   cashierName: string | null;
   shiftId: number | null;
   confidence: 'likely' | 'review';
@@ -326,12 +328,31 @@ export default async function Page({
             item tunggal, jeda lebih dari 30 detik, dan metode bayarnya sama — pesanan seperti itu
             masih mungkin memang dua pembeli berbeda, jadi mohon dipastikan dulu.
           </p>
+          <p className="max-w-[62ch] text-sm text-muted-foreground">
+            Bila kasir sempat mengetik{' '}
+            <strong className="font-semibold text-foreground">Nama Pelanggan</strong>, nama itulah
+            yang menentukan: <strong className="font-semibold text-foreground">nama yang sama</strong>{' '}
+            pada kedua nota berarti satu pesanan yang terkirim dua kali, sedangkan{' '}
+            <strong className="font-semibold text-foreground">dua nama berbeda</strong> berarti dua
+            pembeli dan nota keduanya jangan dibatalkan. Tanda “—” berarti namanya memang tidak
+            diisi, jadi penilaian kembali memakai item, jeda, dan metode bayar.
+          </p>
+          <p className="max-w-[62ch] text-sm text-muted-foreground">
+            <strong className="font-semibold text-foreground">Kode nota bisa diklik</strong> dan
+            terbuka di tab baru, langsung ke rincian pesanannya — kode merah adalah nota kedua yang
+            perlu dibatalkan. Kode yang tertulis sama dengan yang Anda lihat di Riwayat Pesanan,
+            jadi bisa langsung dicocokkan. Halaman rincian mengikuti{' '}
+            <strong className="font-semibold text-foreground">outlet aktif</strong> Anda, jadi bila
+            Anda mengelola lebih dari satu outlet, pindah dulu ke {audit.outlet.name} lewat menu
+            Outlet — kalau tidak, rinciannya akan tertulis tidak ditemukan.
+          </p>
           <div className="overflow-x-auto rounded-md border">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b bg-muted/50 text-[0.68rem] uppercase tracking-wider text-muted-foreground">
                   <th className="px-3 py-2 text-left font-semibold">Jam</th>
                   <th className="px-3 py-2 text-left font-semibold">Item &amp; kode nota</th>
+                  <th className="px-3 py-2 text-left font-semibold">Pelanggan</th>
                   <th className="px-3 py-2 text-right font-semibold">Nilai</th>
                   <th className="px-3 py-2 text-left font-semibold">Bayar</th>
                   <th className="px-3 py-2 text-left font-semibold">Kasir / shift</th>
@@ -353,9 +374,14 @@ export default async function Page({
                     </td>
                     <td className="min-w-[15rem] px-3 py-2 text-muted-foreground">
                       {p.items.map((i) => itemLabel(i)).join(', ')}
-                      <span className="mt-0.5 block font-mono text-[0.68rem] text-muted-foreground/80">
-                        {p.firstId.slice(0, 8)} / {p.secondId.slice(0, 8)}
+                      <span className="mt-0.5 block font-mono text-[0.68rem]">
+                        <OrderLink id={p.firstId} />
+                        <span className="text-muted-foreground/80"> / </span>
+                        <OrderLink id={p.secondId} second />
                       </span>
+                    </td>
+                    <td className="px-3 py-2 text-xs">
+                      <CustomerCell first={p.firstCustomer} second={p.secondCustomer} />
                     </td>
                     <td className="px-3 py-2 text-right font-mono tabular-nums whitespace-nowrap">
                       {formatCurrency(p.amount)}
@@ -453,6 +479,79 @@ function itemLabel(i: { name: string; qty: number; note: string | null }): strin
   const note = i.note?.trim() ?? '';
   const hasNote = /[\p{L}\p{N}]/u.test(note);
   return `${i.name}${hasNote ? ` (${note})` : ''} x${i.qty}`;
+}
+
+/**
+ * The "Nama Pelanggan" on each of the two notes.
+ *
+ * Three states, and the difference between them is the whole point of the
+ * column. One name shown once means both notes carry it — the same buyer, so
+ * the second note is a retry. Two names means two people, and the second note
+ * is a real sale that must NOT be cancelled, so it is drawn the way a mismatched
+ * payment method is. An em dash means nobody typed a name, which is the ordinary
+ * case at a busy counter and carries no signal either way.
+ */
+function CustomerCell({ first, second }: { first: string | null; second: string | null }) {
+  if (!first && !second) return <span className="text-muted-foreground">—</span>;
+
+  // Same comparison the backend scores on, so the cell can never disagree with
+  // the "Status" column beside it.
+  const norm = (v: string) => v.trim().toLowerCase().replace(/\s+/g, ' ');
+  if (first && second && norm(first) === norm(second)) {
+    return <span className="whitespace-nowrap text-foreground">{first}</span>;
+  }
+
+  return (
+    <span className="flex flex-wrap items-center gap-1">
+      <span className="text-muted-foreground">{first ?? '—'}</span>
+      <span className="text-muted-foreground">→</span>
+      <span className="rounded-sm border border-destructive/40 bg-destructive/10 px-1.5 py-0.5 text-destructive">
+        {second ?? '—'}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * A note code, linking to the order it names.
+ *
+ * Opens in a new tab on purpose: this page is worked as a checklist — open a
+ * note, confirm it, cancel it, come back for the next row — and navigating in
+ * place would throw away the scroll position and the chosen date range every
+ * single time.
+ *
+ * Rendered as the LAST 8 characters, uppercased, behind a "#" — the same short
+ * code every other screen in the app prints for an order (the Order Lobby, the
+ * history lists, the detail page's own header, the code a courier types to
+ * search). Order ids are uuid v4, whose leading characters are the random ones
+ * but whose formatting makes the head easy to misread across rows; either end
+ * is equally unique, so the one that matches the rest of the product wins. An
+ * owner must be able to read a code here and recognise it there.
+ *
+ * The target resolves the order against the reader's ACTIVE outlet cookie
+ * (get-outlet-order-detail in routes/owner.ts), NOT the outlet in this page's
+ * URL, so it 404s for anyone reading an outlet they are not currently switched
+ * to — a multi-outlet owner, or a platform admin. The paragraph above the table
+ * says so; fixing it properly means widening that route's scoping, which is a
+ * decision about authorisation and not one to make from a link.
+ */
+function OrderLink({ id, second }: { id: string; second?: boolean }) {
+  return (
+    <a
+      href={`/dashboard/order-outlet/${id}`}
+      target="_blank"
+      rel="noopener noreferrer"
+      // The cell shows the short code every other screen shows; the tooltip
+      // carries the full uuid, which is what someone pasting into a support
+      // chat actually needs.
+      title={id}
+      className={`underline decoration-dotted underline-offset-2 hover:decoration-solid ${
+        second ? 'text-destructive' : 'text-muted-foreground'
+      }`}
+    >
+      #{id.slice(-8).toUpperCase()}
+    </a>
+  );
 }
 
 const DAY_ONLY: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'long', year: 'numeric' };
