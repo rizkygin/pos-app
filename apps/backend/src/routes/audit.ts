@@ -11,19 +11,32 @@ import { loadFailure } from "./reports";
  * Duplicate-order audit: the in-app version of the one-off "Laporan Transaksi
  * Ganda" that was previously produced by hand and mailed out as a PDF.
  *
- * What it finds: a counter sale committed TWICE. The web cashier posts a
- * checkout without an idempotency key, so when the network drops the response
- * the sale is already saved, the cashier sees a failure and taps Checkout
- * again — a second, identical order. The customer only ever paid once, so the
- * second order is revenue that never happened, and when it is booked as CASH it
- * inflates the shift's expected drawer and the physical count reads SHORT.
- * See routes/mutations.ts (/api/add-order-detail) for the `orderId` key the
- * desktop cashier already sends.
+ * What it finds: a counter sale committed TWICE. The network drops the
+ * response after the sale is already saved, the cashier sees a failure with the
+ * cart still full, and taps Checkout again — a second, identical order. The
+ * customer only ever paid once, so the second order is revenue that never
+ * happened, and when it is booked as CASH it inflates the shift's expected
+ * drawer and the physical count reads SHORT.
  *
- * Owner-only, and scoped to the outlet in the URL rather than the active-outlet
- * cookie: this names a specific cashier's mistakes and reconciles a drawer, so
- * an employee with the "reports" permission must not reach it — not even the
- * cashier whose shift it is about.
+ * THE CAUSE IS FIXED; THIS REPORT IS NOT OBSOLETE. The web cashier now sends a
+ * per-tab idempotency key and the server replays it (routes/mutations.ts,
+ * /api/add-order-detail), but that only reached production on 2026-09-10.
+ * Every pair before that date is still in the books and still has to be found
+ * and cancelled by hand, which is what this endpoint is for. It also stays the
+ * check on whether the fix held: if pairs keep forming at the same rate for
+ * dates AFTER it shipped, the retry loop was not the whole story.
+ *
+ * Worth stating plainly because the report reads like an accusation: pressing
+ * Checkout again was the correct response to a screen that said the sale had
+ * failed. The defect was the app's, not the cashier's — a client-generated
+ * UUID fixed it, which no amount of care at the counter could have.
+ *
+ * Scoped to the outlet in the URL rather than the active-outlet cookie, and
+ * limited to that outlet's OWNER or a platform admin (requireOutletOwnerOrAdmin;
+ * the response carries viewedAsAdmin so the page can say whose books these
+ * are). It reconciles a named cashier's drawer, so an employee with the
+ * "reports" permission must not reach it — not even the cashier whose shift it
+ * is about.
  */
 
 // Same cap and reasoning as the segmented reports: an uncapped window over a

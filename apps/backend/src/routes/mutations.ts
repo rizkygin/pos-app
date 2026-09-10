@@ -109,13 +109,21 @@ export async function mutationRoutes(app: FastifyInstance) {
       const body = (request.body as any) || {};
       body.outletId = access.outlet.id;
 
-      // Idempotency: the desktop cashier (offline-queue capable) sends its own
-      // client-generated orderId so a retried request — e.g. the response was
-      // lost after the server already committed — replays as a no-op instead
-      // of ringing up the sale twice. The web cashier sends no orderId; that
-      // path is untouched (server mints one as before). orders.id is a real
-      // PRIMARY KEY, so a genuine duplicate is caught below even if this
-      // pre-check loses a race.
+      // Idempotency: BOTH cashiers send their own client-generated orderId, so
+      // a retried request — e.g. the response was lost after the server already
+      // committed — replays as a no-op instead of ringing up the sale twice.
+      // The desktop cashier has done this since it gained an offline queue; the
+      // web cashier joined it in b68bba3, holding one key per held tab so a
+      // failed tab's id can never leak onto the next tab's checkout (that leak
+      // would replay a DIFFERENT cart and silently drop a real sale — see
+      // cashier-client.tsx pendingOrderIdsRef).
+      //
+      // orderId stays OPTIONAL: /api/add-pos-to-cashflowin calls this path with
+      // none, and older clients may still be running. Without one the server
+      // mints the id as before and there is no replay protection — which is
+      // exactly the window the duplicate audit in routes/audit.ts exists to
+      // find. orders.id is a real PRIMARY KEY, so a genuine duplicate is caught
+      // below even if this pre-check loses a race.
       const clientOrderId: string | undefined =
         typeof body.orderId === "string" && body.orderId.length > 0 ? body.orderId : undefined;
       if (clientOrderId) {
