@@ -454,7 +454,7 @@ export const CashierClient = ({
   // clicks / Cmd+Enter key-repeat), state drives the disabled button UI.
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submittingRef = useRef(false);
-  // Idempotency key for the sale currently being rung up. The ref above only
+  // Idempotency keys for sales being rung up, KEYED BY TAB. The ref above only
   // stops a double CLICK; it cannot stop the real duplicate: the POST commits
   // server-side, the response is lost (flaky counter wifi), the catch below
   // shows an error and leaves the cart intact, and the cashier — reasonably —
@@ -463,12 +463,81 @@ export const CashierClient = ({
   //
   // Minted on the first attempt and held across retries so every retry carries
   // the SAME id; /api/add-order-detail uses it as orders.id and replays instead
-  // of ringing the sale up twice. Cleared only once the server has confirmed,
-  // so the next sale starts a new key.
+  // of ringing the sale up twice. Released once the server has confirmed, so
+  // the next sale on that tab starts a new key.
   //
   // Reusing the key after a genuine failure is safe: if nothing committed the
   // id is still free, and if something did commit the sale already happened.
-  const pendingOrderIdRef = useRef<string | null>(null);
+  //
+  // PER TAB, and not one key for the whole screen, because the counter juggles
+  // several carts. A single shared key leaks the failed tab's id onto the NEXT
+  // tab's checkout: if that first sale had in fact committed, the server sees a
+  // known id, replays, and answers success — so the second customer's cart is
+  // never booked at all while the cashier is told it was. That loses a real
+  // sale and leaves the drawer reading OVER, which is the same bug as the
+  // duplicate, only inverted and harder to spot.
+  //
+  // Persisted, because the hole this closes is a lost RESPONSE — and a reload
+  // or a crashed tab right after one would otherwise mint a fresh key and ring
+  // the sale up a second time, which is exactly what the key exists to prevent.
+  const pendingKeysStorageKey = `pos_pending_orders_${outletId}`;
+  const pendingOrderIdsRef = useRef<Record<string, string>>({});
+
+  // Deliberately a ref plus its own localStorage entry rather than a field on
+  // HeldTab: the tab-sync effect below rebuilds every tab from live editing
+  // state, and a key written mid-checkout could be clobbered by a render that
+  // was already holding a stale copy of the tabs array. Nothing here goes
+  // through React state, so nothing can race it.
+  const writePendingKeys = useCallback(
+    (next: Record<string, string>) => {
+      pendingOrderIdsRef.current = next;
+      try {
+        localStorage.setItem(pendingKeysStorageKey, JSON.stringify(next));
+      } catch {
+        /* ignore quota / serialization errors */
+      }
+    },
+    [pendingKeysStorageKey],
+  );
+
+  /** Take (or mint) this tab's key. Same id for every retry of the same tab. */
+  const claimPendingKey = useCallback(
+    (tabId: string): string => {
+      const existing = pendingOrderIdsRef.current[tabId];
+      if (existing) return existing;
+      const minted = crypto.randomUUID();
+      writePendingKeys({ ...pendingOrderIdsRef.current, [tabId]: minted });
+      return minted;
+    },
+    [writePendingKeys],
+  );
+
+  /** Drop a tab's key: the sale is recorded, or the tab is gone. */
+  const releasePendingKey = useCallback(
+    (tabId: string) => {
+      if (!(tabId in pendingOrderIdsRef.current)) return;
+      const next = { ...pendingOrderIdsRef.current };
+      delete next[tabId];
+      writePendingKeys(next);
+    },
+    [writePendingKeys],
+  );
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(pendingKeysStorageKey);
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        pendingOrderIdsRef.current = Object.fromEntries(
+          Object.entries(parsed as Record<string, unknown>).filter(
+            ([, v]) => typeof v === 'string' && v !== '',
+          ),
+        ) as Record<string, string>;
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [pendingKeysStorageKey]);
 
   // Lazy mode: a per-device cashier preference (localStorage, never the DB).
   // When on, cash received is assumed to exactly equal the amount due (uang
@@ -661,6 +730,10 @@ export const CashierClient = ({
         )
       )
         return;
+      // The tab is being thrown away, so nothing will ever retry under its key.
+      // Anything that DID commit server-side stays committed — that is what the
+      // duplicate audit is for — this only stops the map growing forever.
+      releasePendingKey(id);
       const remaining = tabsRef.current.filter((x) => x.id !== id);
       const next = remaining.length ? remaining : [newHeldTab('Pesanan 1')];
       setTabs(next);
@@ -673,7 +746,7 @@ export const CashierClient = ({
         persistTabs(next, activeIdRef.current);
       }
     },
-    [applyTab, persistTabs],
+    [applyTab, persistTabs, releasePendingKey],
   );
 
   // ── Reconciling carts against the live catalogue ──────────────────────────
@@ -1388,13 +1461,16 @@ export const CashierClient = ({
     if (submittingRef.current) return;
     submittingRef.current = true;
     setIsSubmitting(true);
-    // Held across retries — see pendingOrderIdRef. A retry of a sale the server
+    // Held across retries — see pendingOrderIdsRef. A retry of a sale the server
     // already committed must carry the id it was committed under, or it rings
-    // up twice.
-    if (!pendingOrderIdRef.current) {
-      pendingOrderIdRef.current = crypto.randomUUID();
-    }
-    const idempotencyKey = pendingOrderIdRef.current;
+    // up twice. Scoped to THIS tab, so the next cart cannot inherit it and be
+    // waved through as a replay of a sale that was never its own.
+    //
+    // Captured now, not read again later: completeActiveTab() moves the active
+    // tab out from under us on success, so releasing by the live id would clear
+    // the wrong tab's key — or, when this was the last tab, a brand-new one's.
+    const checkoutTabId = activeIdRef.current;
+    const idempotencyKey = claimPendingKey(checkoutTabId);
     // Capture snapshot before any async work so state changes mid-flight don't corrupt it
     const snapshot = [...cart];
     const snapshotTotal = cartTotal;
@@ -1459,7 +1535,7 @@ export const CashierClient = ({
       // Confirmed by the server (a fresh sale or a replay of one it already
       // has, both of which mean this sale is recorded exactly once). Release
       // the key so the next sale mints its own.
-      pendingOrderIdRef.current = null;
+      releasePendingKey(checkoutTabId);
       setCartOpen(false);
       // The sale just changed what should be in the drawer, so re-read the
       // shift strip. Cheap: one small indexed query, only after a real sale.
@@ -1552,6 +1628,8 @@ export const CashierClient = ({
     outletLogo,
     cashierName,
     completeActiveTab,
+    claimPendingKey,
+    releasePendingKey,
   ]);
 
   // Adds a keyboard shortcut (CMD/Ctrl + Enter) for Checkout
