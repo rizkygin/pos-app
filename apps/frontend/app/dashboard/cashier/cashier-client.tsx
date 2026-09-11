@@ -44,6 +44,7 @@ import {
 import { API_URL } from '@/lib/api-url';
 import { POS_PAYMENT_OPTIONS, type PosPaymentMethod } from '@/lib/pos-payment';
 import { ShiftBar } from './shift-bar';
+import { isSameDay } from '@/lib/date-calender';
 import { LabelPreviewModal } from './label-preview-modal';
 import { OptionPickerModal, priceOf } from './option-picker-modal';
 import { computeTax, taxLineLabel, type TaxConfig } from '@/lib/tax';
@@ -220,11 +221,12 @@ const newHeldTab = (label: string): HeldTab => ({
 /**
  * A checkout attempted in this session, for the toolbar's read-only list.
  *
- * Kept in component state only: it answers "did that last one actually go
- * through?" at the counter, not what the day's sales were — the reports do
- * that from the server. `pending` is a POST that threw, so the gap is on screen
- * instead of in the cashier's memory. A retry carries the same idempotency key
- * and so the same `id`, and replaces its row rather than adding another.
+ * Kept on this device (localStorage) for the length of the shift, so a reload
+ * doesn't wipe it: it answers "did that last one actually go through?" at the
+ * counter, not what the day's sales were — the reports do that from the
+ * server. `pending` is a POST that threw, so the gap is on screen instead of in
+ * the cashier's memory. A retry carries the same idempotency key and so the
+ * same `id`, and replaces its row rather than adding another.
  */
 type PlacedOrder = {
   id: string;
@@ -236,6 +238,10 @@ type PlacedOrder = {
   status: 'placed' | 'pending';
   receipt: ReceiptData;
 };
+
+// Each row carries a whole receipt, so the persisted list is capped: a shift
+// that never gets closed must not grow it until localStorage runs out.
+const MAX_PLACED_ORDERS = 200;
 
 /** Viewer-local 24h clock, e.g. "09:05". */
 const clockTime = (d: Date) =>
@@ -468,8 +474,65 @@ export const CashierClient = ({
     detail?: string;
     canRetry: boolean;
   } | null>(null);
-  // This session's checkouts, newest first — see PlacedOrder.
-  const [placedOrders, setPlacedOrders] = useState<PlacedOrder[]>([]);
+  // This shift's checkouts on this device, newest first — see PlacedOrder.
+  // `shiftId` is the shift they were rung up under; the list ends with it.
+  const placedKey = `pos_placed_${outletId}`;
+  const [placedLog, setPlacedLog] = useState<{
+    shiftId: number | null;
+    orders: PlacedOrder[];
+  }>({ shiftId: null, orders: [] });
+  const placedOrders = placedLog.orders;
+  const [placedHydrated, setPlacedHydrated] = useState(false);
+  // Hydrate once, client-side, like the held tabs (avoids SSR mismatch).
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(placedKey);
+      const parsed = raw ? JSON.parse(raw) : null;
+      const shiftId = typeof parsed?.shiftId === 'number' ? parsed.shiftId : null;
+      // A list with no shift behind it has no close to end it, so it ends
+      // with the day instead of piling up across a week.
+      if (
+        Array.isArray(parsed?.orders) &&
+        (shiftId !== null || isSameDay(new Date(parsed.savedAt), new Date()))
+      ) {
+        setPlacedLog({
+          shiftId,
+          // JSON turned both Dates into strings, and the list and the
+          // reprinted slip both call Date methods on them.
+          orders: parsed.orders.map((o: PlacedOrder) => ({
+            ...o,
+            time: new Date(o.time),
+            receipt: { ...o.receipt, date: new Date(o.receipt.date) },
+          })),
+        });
+      }
+    } catch {
+      /* ignore */
+    }
+    setPlacedHydrated(true);
+  }, [placedKey]);
+  useEffect(() => {
+    if (!placedHydrated) return;
+    try {
+      localStorage.setItem(
+        placedKey,
+        JSON.stringify({ ...placedLog, savedAt: new Date().toISOString() }),
+      );
+    } catch {
+      /* ignore quota / serialization errors */
+    }
+  }, [placedKey, placedLog, placedHydrated]);
+  // The shift strip reports which shift the server says is open. Moving off
+  // the list's shift — closed here, closed on another device, or a new one
+  // opened — ends the list. Sales rung up before any shift was open are
+  // adopted by the next one to open, and clear with its close.
+  const handleShiftChange = useCallback((shiftId: number | null) => {
+    setPlacedLog((prev) =>
+      prev.shiftId === shiftId
+        ? prev
+        : { shiftId, orders: prev.shiftId === null ? prev.orders : [] },
+    );
+  }, []);
   const [placedListOpen, setPlacedListOpen] = useState(false);
   // The toolbar icon the slip flies into, and the sale still travelling there
   // (flash, then slip). That one stays out of the badge until it lands, so the
@@ -1649,19 +1712,22 @@ export const CashierClient = ({
     // Newest first. Drops any earlier row for the same key: a retry that went
     // through should turn its "Belum" into "Tercatat", not sit beside it.
     const logAttempt = (orderId: string, status: PlacedOrder['status'], receiptData: ReceiptData) =>
-      setPlacedOrders((prev) => [
-        {
-          id: orderId,
-          shortId: orderId.split('-')[0].toUpperCase(),
-          customerName: snapshotCustomerName,
-          time: snapshotTime,
-          itemCount: snapshot.reduce((n, i) => n + i.quantity, 0),
-          total: snapshotGrandTotal,
-          status,
-          receipt: receiptData,
-        },
-        ...prev.filter((o) => o.id !== orderId && o.id !== idempotencyKey),
-      ]);
+      setPlacedLog((prev) => ({
+        ...prev,
+        orders: [
+          {
+            id: orderId,
+            shortId: orderId.split('-')[0].toUpperCase(),
+            customerName: snapshotCustomerName,
+            time: snapshotTime,
+            itemCount: snapshot.reduce((n, i) => n + i.quantity, 0),
+            total: snapshotGrandTotal,
+            status,
+            receipt: receiptData,
+          },
+          ...prev.orders.filter((o) => o.id !== orderId && o.id !== idempotencyKey),
+        ].slice(0, MAX_PLACED_ORDERS),
+      }));
     try {
       const response = await fetch(`${API_URL}/api/add-order-detail`, {
         method: 'POST',
@@ -2029,7 +2095,7 @@ export const CashierClient = ({
                   </div>
                 )}
                 <p className="px-1 text-[11px] text-muted-foreground">
-                  Status tidak bisa diubah dari sini — hanya cetak ulang struk.
+                  Status tidak bisa diubah dari sini, hanya cetak ulang struk.
                 </p>
               </PopoverContent>
             </Popover>
@@ -2039,6 +2105,7 @@ export const CashierClient = ({
             cashierName={cashierName}
             refreshSignal={shiftRefresh}
             canUseShift={canUseShift}
+            onShiftChange={handleShiftChange}
           />
 
           {/* Categories */}

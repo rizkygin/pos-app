@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ClipboardCheck,
@@ -65,13 +65,26 @@ type Props = {
    * `canOpen` for the same reason.
    */
   canUseShift: boolean;
+  /**
+   * Told which shift is open (null: none) whenever the server says so. Never
+   * called when the check itself fails: an offline counter hasn't learned that
+   * the shift closed, and the cashier screen clears its order list on a close.
+   */
+  onShiftChange?: (shiftId: number | null) => void;
 };
 
 export function ShiftBar({
   cashierName,
   refreshSignal = 0,
   canUseShift,
+  onShiftChange,
 }: Props) {
+  // A ref, so an inline callback from the parent can't re-run load() on every
+  // render.
+  const onShiftChangeRef = useRef(onShiftChange);
+  useEffect(() => {
+    onShiftChangeRef.current = onShiftChange;
+  });
   const [shift, setShift] = useState<ShiftReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [dialog, setDialog] = useState<'open' | 'close' | null>(null);
@@ -94,6 +107,7 @@ export function ShiftBar({
       }
       const body = await res.json();
       setShift(body.shift ?? null);
+      onShiftChangeRef.current?.(body.shift?.shift.id ?? null);
     } catch {
       // Offline or backend down. The bar goes quiet rather than throwing a
       // dialog over a screen someone is trying to sell from.
@@ -126,11 +140,15 @@ export function ShiftBar({
       if (!res.ok) {
         // 409 carries the shift that already exists, so a second tap lands the
         // cashier on the running shift instead of an error they can't act on.
-        if (body?.shift) setShift(body.shift);
+        if (body?.shift) {
+          setShift(body.shift);
+          onShiftChangeRef.current?.(body.shift.shift.id);
+        }
         setError(body?.error ?? 'Gagal membuka shift');
         return;
       }
       setShift(body.shift);
+      onShiftChangeRef.current?.(body.shift.shift.id);
       setDialog(null);
       setFloatInput('');
     } catch {
@@ -159,6 +177,7 @@ export function ShiftBar({
         return;
       }
       setShift(null);
+      onShiftChangeRef.current?.(null);
       setDialog(null);
       setCountInput('');
       setNoteInput('');
