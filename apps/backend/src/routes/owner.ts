@@ -26,6 +26,7 @@ import { getOutletAccess, hasPermission, parseActiveOutletId, getSubscriptionGat
 import { attachOrderItems } from "../lib/utils/order-items";
 import { APP_TIMEZONE, getUTCRangeFromLocalDate, getUTCRangeFromLocalMonth } from "../lib/timezone";
 import { getOpenShiftId } from "../lib/shift";
+import { CATEGORY_POS_SALE, CATEGORY_POS_CANCELLATION } from "../lib/cashflow-categories";
 import { money, netLineRevenue } from "../lib/money-sql";
 import { lineCogsSql, orderCogsSql } from "../lib/cogs";
 
@@ -913,11 +914,15 @@ export async function ownerRoutes(app: FastifyInstance) {
           in_amount: cashInDetailTable.money_amount,
           in_date: cashInDetailTable.created_at,
           in_explanation: cashInDetailTable.explanation,
+          in_method: cashInDetailTable.type,
           out_category: cashOutCategoryTable.category,
           out_amount: cashOutDetailTable.money_amount,
           out_date: cashOutDetailTable.created_at,
           out_explanation: cashOutDetailTable.explanation,
+          out_method: cashOutDetailTable.type,
           invoice_number: invoicesTable.number,
+          // Set on a POS sale's cash-in and on its cancellation's cash-out.
+          order_id: cashFlows.order_id,
         })
         .from(cashFlows)
         .leftJoin(cashInDetailTable, eq(cashFlows.cash_in_detail_id, cashInDetailTable.id))
@@ -960,6 +965,10 @@ export async function ownerRoutes(app: FastifyInstance) {
           time: timeFormatter.format(date),
           note: row.invoice_number ?? "",
           explanation: (row.in_explanation ?? row.out_explanation) ?? "",
+          // NOT NULL, defaulting to cash — so a hand entry made before the form
+          // asked reads "cash" here whether or not it really was.
+          method: (row.in_method ?? row.out_method) ?? null,
+          orderId: row.order_id ?? null,
         };
       });
 
@@ -977,10 +986,20 @@ export async function ownerRoutes(app: FastifyInstance) {
       const outlet = await outletFor(session.user.id, "cashflow", request);
       if (!outlet) return reply.status(401).send({ success: false });
 
-      const { type, category, amount, date, explanation, timezone = "Asia/Jakarta" } = request.body as Record<string, any>;
+      const { type, category, amount, date, explanation, method, timezone = "Asia/Jakarta" } = request.body as Record<string, any>;
 
       if (!type || !category || !amount || !date) return reply.status(400).send({ error: "Missing required fields" });
       if (isNaN(Number(amount)) || Number(amount) <= 0) return reply.status(400).send({ error: "Invalid amount" });
+      // Asked, never assumed. Every hand entry used to be stored as cash, so a
+      // supplier paid by transfer while a shift was open came off that drawer's
+      // expected cash and the count read "lebih" by money that was never in it.
+      if (method !== "cash" && method !== "transfer") return reply.status(400).send({ error: "Metode wajib dipilih (tunai/transfer)" });
+      // Written by the POS alone, each against a real order (see
+      // cashflow-categories.ts). The form no longer offers either; this keeps
+      // a hand-built request from slipping one in among real counter sales.
+      if (category === CATEGORY_POS_SALE || category === CATEGORY_POS_CANCELLATION) {
+        return reply.status(400).send({ error: "Kategori ini hanya dicatat otomatis oleh kasir" });
+      }
 
       const { startUTC, endUTC } = getUTCRangeFromLocalDate(date, timezone);
       const now = new Date();
@@ -994,8 +1013,12 @@ export async function ownerRoutes(app: FastifyInstance) {
       // describes a day that is over, and hanging it on today's open drawer
       // would make that drawer come up short against a count that was already
       // correct.
+      //
+      // And only for cash. A transfer moved money between bank accounts and
+      // never passed through the till, so it has no business on the drawer's
+      // closing report either.
       const isBackdated = created_at !== now;
-      const shift_id = isBackdated ? null : await getOpenShiftId(db, outlet.id);
+      const shift_id = isBackdated || method !== "cash" ? null : await getOpenShiftId(db, outlet.id);
 
       const timeFormatter = new Intl.DateTimeFormat("en-GB", { timeZone: timezone, hour: "2-digit", minute: "2-digit", hour12: false });
 
@@ -1008,10 +1031,10 @@ export async function ownerRoutes(app: FastifyInstance) {
 
         if (!cat) return reply.status(400).send({ error: "Unknown category" });
 
-        const [detail] = await db.insert(cashInDetailTable).values({ category_id: cat.id, money_amount: String(amount), type: "cash", explanation: explanation ?? null, created_at }).returning();
+        const [detail] = await db.insert(cashInDetailTable).values({ category_id: cat.id, money_amount: String(amount), type: method, explanation: explanation ?? null, created_at }).returning();
         const [cf] = await db.insert(cashFlows).values({ outlet_id: outlet.id, cash_in_detail_id: detail.id, shift_id }).returning();
 
-        return { data: { id: String(cf.id), type: "IN", category, amount: Number(amount), date, time: timeFormatter.format(detail.created_at), note: "", explanation: explanation ?? "" } };
+        return { data: { id: String(cf.id), type: "IN", category, amount: Number(amount), date, time: timeFormatter.format(detail.created_at), note: "", explanation: explanation ?? "", method } };
       }
 
       if (type === "OUT") {
@@ -1023,10 +1046,10 @@ export async function ownerRoutes(app: FastifyInstance) {
 
         if (!cat) return reply.status(400).send({ error: "Unknown category" });
 
-        const [detail] = await db.insert(cashOutDetailTable).values({ category_id: cat.id, money_amount: String(amount), type: "cash", explanation: explanation ?? null, created_at }).returning();
+        const [detail] = await db.insert(cashOutDetailTable).values({ category_id: cat.id, money_amount: String(amount), type: method, explanation: explanation ?? null, created_at }).returning();
         const [cf] = await db.insert(cashFlows).values({ outlet_id: outlet.id, cash_out_detail_id: detail.id, shift_id }).returning();
 
-        return { data: { id: String(cf.id), type: "OUT", category, amount: Number(amount), date, time: timeFormatter.format(detail.created_at), note: "", explanation: explanation ?? "" } };
+        return { data: { id: String(cf.id), type: "OUT", category, amount: Number(amount), date, time: timeFormatter.format(detail.created_at), note: "", explanation: explanation ?? "", method } };
       }
 
       return reply.status(400).send({ error: "Invalid type" });

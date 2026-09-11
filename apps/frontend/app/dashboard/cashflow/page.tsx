@@ -14,11 +14,20 @@ import {
 } from 'lucide-react';
 import {
   Card,
+  CardAction,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -48,21 +57,37 @@ import { formatCurrency } from '@/lib/utils/format';
 import { API_URL } from '@/lib/api-url';
 import { exportMonthlyPDF, type Transaction } from './export-pdf';
 import { SummaryCards } from './summary-cards';
+import { CategoryPicker } from './category-picker';
 
 type TransactionType = 'IN' | 'OUT';
+type PaymentMethod = 'cash' | 'transfer';
+
+const METHOD_OPTIONS: { value: PaymentMethod; label: string }[] = [
+  { value: 'cash', label: 'Tunai' },
+  { value: 'transfer', label: 'Transfer' },
+];
 
 export default function CashflowPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
   const [type, setType] = useState<TransactionType>('IN');
-  const [category, setCategory] = useState<string>(CATEGORY_IN[1]);
+  // Empty until picked, like Metode — see CategoryPicker.
+  const [category, setCategory] = useState<string>('');
   const [amount, setAmount] = useState<string>('');
   const [explanation, setExplanation] = useState<string>('');
+  // No default, and cleared after every entry: the choice decides whether the
+  // money counts against an open shift's drawer, so it is made each time
+  // rather than inherited from whatever the last entry happened to be.
+  const [method, setMethod] = useState<PaymentMethod | ''>('');
+  const [formOpen, setFormOpen] = useState(false);
+  // Shown inside the dialog: it stays open on a failed save, and without a
+  // message that would look like the button did nothing.
+  const [formError, setFormError] = useState<string | null>(null);
 
   const handleTypeChange = (newType: TransactionType) => {
     setType(newType);
-    setCategory(newType === 'IN' ? CATEGORY_IN[1] : CATEGORY_OUT[0]);
+    setCategory('');
   };
 
   const handleDelete = async (id: string) => {
@@ -76,6 +101,7 @@ export default function CashflowPage() {
   const handleAddTransaction = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) return;
+    if (!method || !category) return;
 
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const res = await fetch(`${API_URL}/api/cashflow`, {
@@ -88,14 +114,20 @@ export default function CashflowPage() {
         amount: Number(amount),
         date: formatDateInput(selectedDate),
         explanation: explanation.trim() || undefined,
+        method,
         timezone,
       }),
     });
-    const json = await res.json();
+    const json = await res.json().catch(() => ({}));
     if (res.ok) {
       setTransactions((prev) => [json.data, ...prev]);
       setAmount('');
       setExplanation('');
+      setMethod('');
+      setCategory('');
+      setFormOpen(false);
+    } else {
+      setFormError(json.error ?? 'Gagal menyimpan. Coba lagi.');
     }
   };
 
@@ -249,276 +281,322 @@ export default function CashflowPage() {
         formatCurrency={formatCurrency}
       />
 
-      <div className="grid lg:gap-4 lg:grid-cols-7">
-        {/* Form Section */}
-        <Card className="col-span-full lg:col-span-3 mb-5">
-          <CardHeader>
-            <CardTitle>Tambahkan Arus Kas</CardTitle>
-            <CardDescription>Catat Arus Kas Pian</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleAddTransaction} className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
-                  Tipe Transaksi
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <Button
-                    type="button"
-                    variant={type === 'IN' ? 'default' : 'outline'}
-                    className={
-                      type === 'IN'
-                        ? 'bg-green-600 hover:bg-green-700 text-white'
-                        : ''
-                    }
-                    onClick={() => handleTypeChange('IN')}
-                  >
-                    <ArrowUpRight className="mr-2 h-4 w-4" /> Uang Masuk
-                  </Button>
-                  <Button
-                    type="button"
-                    variant={type === 'OUT' ? 'default' : 'outline'}
-                    className={
-                      type === 'OUT'
-                        ? 'bg-red-600 hover:bg-red-700 text-white'
-                        : ''
-                    }
-                    onClick={() => handleTypeChange('OUT')}
-                  >
-                    <ArrowDownRight className="mr-2 h-4 w-4" /> Uang Keluar
-                  </Button>
-                </div>
-              </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Transaksi Terbaru</CardTitle>
+          <CardDescription>Arus kas Pian per </CardDescription>
+          {/* The entry form opens from here as a dialog, so the table keeps
+              the page's full width instead of sharing it with a form. */}
+          <CardAction>
+            <Dialog
+              open={formOpen}
+              onOpenChange={(open) => {
+                setFormOpen(open);
+                if (open) setFormError(null);
+              }}
+            >
+              <DialogTrigger asChild>
+                <Button>
+                  <PlusCircle className="mr-2 h-4 w-4" />
+                  Catat Arus Kas
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle>Tambahkan Arus Kas</DialogTitle>
+                  <DialogDescription>Catat Arus Kas Pian</DialogDescription>
+                </DialogHeader>
+                <form onSubmit={handleAddTransaction} className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                      Tipe Transaksi
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button
+                        type="button"
+                        variant={type === 'IN' ? 'default' : 'outline'}
+                        className={
+                          type === 'IN'
+                            ? 'bg-green-600 hover:bg-green-700 text-white'
+                            : ''
+                        }
+                        onClick={() => handleTypeChange('IN')}
+                      >
+                        <ArrowUpRight className="mr-2 h-4 w-4" /> Uang Masuk
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={type === 'OUT' ? 'default' : 'outline'}
+                        className={
+                          type === 'OUT'
+                            ? 'bg-red-600 hover:bg-red-700 text-white'
+                            : ''
+                        }
+                        onClick={() => handleTypeChange('OUT')}
+                      >
+                        <ArrowDownRight className="mr-2 h-4 w-4" /> Uang Keluar
+                      </Button>
+                    </div>
+                  </div>
 
-              <div className="space-y-2">
-                <label className="text-sm font-medium leading-none">
-                  Kategori
-                </label>
-                <select
-                  value={category}
-                  onChange={(e) => setCategory(e.target.value)}
-                  className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                  required
-                >
-                  {type === 'IN'
-                    ? CATEGORY_IN.filter((c) => c !== CATEGORY_IN[0]).map(
-                        (c) => (
-                          <option key={c} value={c}>
-                            {c}
-                          </option>
-                        ),
-                      )
-                    : CATEGORY_OUT.filter((c) => c !== CATEGORY_OUT[1]).map(
-                        (c) => (
-                          <option key={c} value={c}>
-                            {c}
-                          </option>
-                        ),
-                      )}
-                </select>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-medium leading-none">
-                  Jumlah (Rp)
-                </label>
-                <div className="relative">
-                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm font-medium text-muted-foreground">
-                    Rp
-                  </span>
-                  <Input
-                    type="text"
-                    inputMode="numeric"
-                    placeholder="0"
-                    className="pl-9"
-                    value={
-                      amount
-                        ? new Intl.NumberFormat('id-ID').format(Number(amount))
-                        : ''
-                    }
-                    onChange={(e) => {
-                      const raw = e.target.value.replace(/\D/g, '');
-                      setAmount(raw);
-                    }}
-                    required
+                  <CategoryPicker
+                    type={type}
+                    value={category}
+                    onChange={setCategory}
                   />
-                </div>
-              </div>
 
-              <div className="space-y-2">
-                <label className="text-sm font-medium leading-none">
-                  Penjelasan (Opsional)
-                </label>
-                <Input
-                  type="text"
-                  placeholder="Contoh: karyawan toni, ahsan, bobi tersisa amrul dan huda"
-                  value={explanation}
-                  onChange={(e) => setExplanation(e.target.value)}
-                />
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-medium leading-none">
-                  Tanggal
-                </label>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button
-                      variant={'outline'}
-                      className="w-full justify-start text-left font-normal px-3"
+                  <div className="space-y-2">
+                    <span
+                      id="cashflow-method-label"
+                      className="block text-sm font-medium leading-none"
                     >
-                      <CalendarIcon className="mr-2 h-4 w-4" />
-                      {formatReadableDate(selectedDate)}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0" align="start">
-                    <Calendar
-                      mode="single"
-                      selected={selectedDate}
-                      onSelect={(d) => {
-                        if (d) setSelectedDate(d);
-                      }}
-                    />
-                  </PopoverContent>
-                </Popover>
-              </div>
-
-              <Button type="submit" className="w-full mt-2">
-                <PlusCircle className="mr-2 h-4 w-4" />
-                Catat Arus Kas
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
-
-        {/* History Section */}
-        <Card className="col-span-full lg:col-span-4">
-          <CardHeader>
-            <CardTitle>Transaksi Terbaru</CardTitle>
-            <CardDescription>Arus kas Pian per </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {isLoading ? (
-              <div className="flex items-center justify-center h-64 text-muted-foreground">
-                <p className="text-sm">Loading transactions...</p>
-              </div>
-            ) : displayList.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
-                <Wallet className="h-12 w-12 mb-4 opacity-20" />
-                <p>No transactions yet.</p>
-                <p className="text-sm">Add one using the form.</p>
-              </div>
-            ) : (
-              <div className="rounded-md border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Type</TableHead>
-                      <TableHead>Category</TableHead>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Time</TableHead>
-                      <TableHead className="text-right">Amount</TableHead>
-                      <TableHead className="text-right">Balance</TableHead>
-                      <TableHead />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {displayList
-                      .reduce<{ t: Transaction; balance: number }[]>(
-                        (acc, t) => {
-                          const prev =
-                            acc.length > 0 ? acc[acc.length - 1].balance : 0;
-                          const amt = isFinite(Number(t.amount))
-                            ? Number(t.amount)
-                            : 0;
-                          return [
-                            ...acc,
-                            {
-                              t,
-                              balance: prev + (t.type === 'IN' ? amt : -amt),
-                            },
-                          ];
-                        },
-                        [],
-                      )
-                      .map(({ t, balance }) => (
-                        <TableRow key={t.id}>
-                          <TableCell>
-                            <Badge
-                              variant={
-                                t.type === 'IN' ? 'default' : 'destructive'
-                              }
-                              className={
-                                t.type === 'IN'
-                                  ? 'bg-green-500 hover:bg-green-600'
-                                  : ''
-                              }
-                            >
-                              {t.type}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            <div className="font-medium text-sm">
-                              {t.category}
-                            </div>
-                            {t.note && (
-                              <div className="text-xs text-muted-foreground">
-                                {t.note}
-                              </div>
-                            )}
-                            {t.explanation && (
-                              <div className="text-xs text-muted-foreground">
-                                {t.explanation}
-                              </div>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-sm text-muted-foreground">
-                            {t.date
-                              .split('-')
-                              .reverse()
-                              .join('/')
-                              .replace(
-                                /(\d+)\/(\d+)\/(\d{4})/,
-                                (_, d, m, y) => `${d}/${m}/${y.slice(2)}`,
-                              )}
-                          </TableCell>
-                          <TableCell className="text-sm text-muted-foreground">
-                            {t.time ?? '—'}
-                          </TableCell>
-                          <TableCell
-                            className={`text-right font-bold ${t.type === 'IN' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}
-                          >
-                            {t.type === 'IN' ? '+' : '-'}
-                            {formatCurrency(t.amount)}
-                          </TableCell>
-                          <TableCell
-                            className={`text-right font-semibold ${balance >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}
-                          >
-                            {formatCurrency(balance)}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            {t.category !== CATEGORY_IN[0] &&
-                              t.category !== CATEGORY_IN[13] &&
-                              t.category !== CATEGORY_OUT[1] && (
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                                  onClick={() => handleDelete(t.id)}
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </Button>
-                              )}
-                          </TableCell>
-                        </TableRow>
+                      Metode <span className="text-red-600 dark:text-red-400">*</span>
+                    </span>
+                    {/* Native radios so `required` is the browser's own: the form
+                        won't submit until one is picked. */}
+                    <div
+                      role="radiogroup"
+                      aria-labelledby="cashflow-method-label"
+                      aria-required="true"
+                      className="flex flex-wrap gap-x-6 gap-y-2 pt-1"
+                    >
+                      {METHOD_OPTIONS.map((m) => (
+                        <label
+                          key={m.value}
+                          className="flex cursor-pointer items-center gap-2 text-sm"
+                        >
+                          <input
+                            type="radio"
+                            name="cashflow-method"
+                            value={m.value}
+                            checked={method === m.value}
+                            onChange={() => setMethod(m.value)}
+                            required
+                            className="h-4 w-4 cursor-pointer accent-primary"
+                          />
+                          {m.label}
+                        </label>
                       ))}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium leading-none">
+                      Jumlah (Rp)
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm font-medium text-muted-foreground">
+                        Rp
+                      </span>
+                      <Input
+                        type="text"
+                        inputMode="numeric"
+                        placeholder="0"
+                        className="pl-9"
+                        value={
+                          amount
+                            ? new Intl.NumberFormat('id-ID').format(Number(amount))
+                            : ''
+                        }
+                        onChange={(e) => {
+                          const raw = e.target.value.replace(/\D/g, '');
+                          setAmount(raw);
+                        }}
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium leading-none">
+                      Penjelasan (Opsional)
+                    </label>
+                    <Input
+                      type="text"
+                      placeholder="Contoh: karyawan toni, ahsan, bobi tersisa amrul dan huda"
+                      value={explanation}
+                      onChange={(e) => setExplanation(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium leading-none">
+                      Tanggal
+                    </label>
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant={'outline'}
+                          className="w-full justify-start text-left font-normal px-3"
+                        >
+                          <CalendarIcon className="mr-2 h-4 w-4" />
+                          {formatReadableDate(selectedDate)}
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-auto p-0" align="start">
+                        <Calendar
+                          mode="single"
+                          selected={selectedDate}
+                          onSelect={(d) => {
+                            if (d) setSelectedDate(d);
+                          }}
+                        />
+                      </PopoverContent>
+                    </Popover>
+                  </div>
+
+                  {formError && (
+                    <p className="text-sm text-red-600 dark:text-red-400">
+                      {formError}
+                    </p>
+                  )}
+
+                  <Button type="submit" className="w-full mt-2">
+                    <PlusCircle className="mr-2 h-4 w-4" />
+                    Catat Arus Kas
+                  </Button>
+                </form>
+              </DialogContent>
+            </Dialog>
+          </CardAction>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <div className="flex items-center justify-center h-64 text-muted-foreground">
+              <p className="text-sm">Loading transactions...</p>
+            </div>
+          ) : displayList.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
+              <Wallet className="h-12 w-12 mb-4 opacity-20" />
+              <p>No transactions yet.</p>
+              <p className="text-sm">Add one with Catat Arus Kas.</p>
+            </div>
+          ) : (
+            <div className="rounded-md border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Category</TableHead>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Time</TableHead>
+                    <TableHead className="text-right">Amount</TableHead>
+                    <TableHead className="text-right">Balance</TableHead>
+                    <TableHead />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {displayList
+                    .reduce<{ t: Transaction; balance: number }[]>(
+                      (acc, t) => {
+                        const prev =
+                          acc.length > 0 ? acc[acc.length - 1].balance : 0;
+                        const amt = isFinite(Number(t.amount))
+                          ? Number(t.amount)
+                          : 0;
+                        return [
+                          ...acc,
+                          {
+                            t,
+                            balance: prev + (t.type === 'IN' ? amt : -amt),
+                          },
+                        ];
+                      },
+                      [],
+                    )
+                    .map(({ t, balance }) => (
+                      <TableRow key={t.id}>
+                        <TableCell>
+                          <Badge
+                            variant={
+                              t.type === 'IN' ? 'default' : 'destructive'
+                            }
+                            className={
+                              t.type === 'IN'
+                                ? 'bg-green-500 hover:bg-green-600'
+                                : ''
+                            }
+                          >
+                            {t.type}
+                          </Badge>
+                          {t.method && (
+                            <div className="mt-1 text-[11px] text-muted-foreground">
+                              {t.method === 'cash' ? 'Tunai' : 'Transfer'}
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <div className="font-medium text-sm">
+                            {t.category}
+                          </div>
+                          {/* The same short code the struk prints as
+                              "Order #", so a row can be matched to its
+                              receipt at a glance. */}
+                          {t.orderId && (
+                            <div className="text-xs text-muted-foreground">
+                              Order #
+                              <span className="font-mono font-semibold">
+                                {t.orderId.split('-')[0].toUpperCase()}
+                              </span>
+                            </div>
+                          )}
+                          {t.note && (
+                            <div className="text-xs text-muted-foreground">
+                              {t.note}
+                            </div>
+                          )}
+                          {t.explanation && (
+                            <div className="text-xs text-muted-foreground">
+                              {t.explanation}
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {t.date
+                            .split('-')
+                            .reverse()
+                            .join('/')
+                            .replace(
+                              /(\d+)\/(\d+)\/(\d{4})/,
+                              (_, d, m, y) => `${d}/${m}/${y.slice(2)}`,
+                            )}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {t.time ?? '—'}
+                        </TableCell>
+                        <TableCell
+                          className={`text-right font-bold ${t.type === 'IN' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}
+                        >
+                          {t.type === 'IN' ? '+' : '-'}
+                          {formatCurrency(t.amount)}
+                        </TableCell>
+                        <TableCell
+                          className={`text-right font-semibold ${balance >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}
+                        >
+                          {formatCurrency(balance)}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {t.category !== CATEGORY_IN[0] &&
+                            t.category !== CATEGORY_IN[13] &&
+                            t.category !== CATEGORY_OUT[1] && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                                onClick={() => handleDelete(t.id)}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

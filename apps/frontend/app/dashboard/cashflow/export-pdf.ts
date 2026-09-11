@@ -11,6 +11,13 @@ export interface Transaction {
     time?: string;
     note: string;
     explanation?: string;
+    /**
+     * Tunai or transfer. Hand entries made before the form asked were all
+     * stored as cash, so on those this says "cash" whatever really happened.
+     */
+    method?: "cash" | "transfer" | null;
+    /** The POS order behind a Kasir sale or its cancellation, else null. */
+    orderId?: string | null;
 }
 
 interface ExportParams {
