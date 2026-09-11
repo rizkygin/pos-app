@@ -29,6 +29,10 @@ import {
   Tag,
   Eye,
   UserRound,
+  ReceiptText,
+  Check,
+  Clock,
+  User,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatCurrency } from '@/lib/utils/format';
@@ -47,6 +51,8 @@ import { resolveProductImage, isBackendImage } from '@/lib/image-src';
 import { MembershipPanel } from './membership-panel';
 import { TIER_BADGE, TIER_LABEL, type MembershipQuote } from '@/lib/membership';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { OrderPlacedFlash, PLACED_HOLD_MS } from './order-placed-flash';
+import { OrderFailedPopup } from './order-failed-popup';
 
 export type Product = {
   id: string;
@@ -210,6 +216,30 @@ const newHeldTab = (label: string): HeldTab => ({
   promoCode: '',
   pointsToRedeem: 0,
 });
+
+/**
+ * A checkout attempted in this session, for the toolbar's read-only list.
+ *
+ * Kept in component state only: it answers "did that last one actually go
+ * through?" at the counter, not what the day's sales were — the reports do
+ * that from the server. `pending` is a POST that threw, so the gap is on screen
+ * instead of in the cashier's memory. A retry carries the same idempotency key
+ * and so the same `id`, and replaces its row rather than adding another.
+ */
+type PlacedOrder = {
+  id: string;
+  shortId: string;
+  customerName: string;
+  time: Date;
+  itemCount: number;
+  total: number;
+  status: 'placed' | 'pending';
+  receipt: ReceiptData;
+};
+
+/** Viewer-local 24h clock, e.g. "09:05". */
+const clockTime = (d: Date) =>
+  `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 
 type CashierClientProps = {
   outletId: number;
@@ -414,12 +444,50 @@ export const CashierClient = ({
     };
   }, [refreshCatalogue]);
   // One modal serves both slips; `variant` picks the customer receipt or the
-  // money-free kitchen ticket.
+  // money-free kitchen ticket. `placed` marks a slip for a recorded sale (the
+  // checkout's own, or a reprint of one): only those fly into the placed-orders
+  // icon on close. A pre-checkout struk or kitchen ticket is for an order that
+  // isn't in the ledger yet, and filing it there would say otherwise.
   const [receipt, setReceipt] = useState<{
     data: ReceiptData;
     variant: 'customer' | 'kitchen';
     heading: string;
+    placed?: boolean;
   } | null>(null);
+  // "Order Placed" card shown between the server's confirmation and the slip.
+  // One timer for the hand-over, so an unmount mid-hold can't open a modal on
+  // a screen that's gone.
+  const [placedFlash, setPlacedFlash] = useState<{ orderId: string } | null>(null);
+  const placedTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(placedTimerRef.current), []);
+  // A checkout that didn't book the cart on screen. Stays until dismissed;
+  // `canRetry` is false where another tap would only repeat the same answer.
+  const [checkoutFailure, setCheckoutFailure] = useState<{
+    title: string;
+    message: string;
+    detail?: string;
+    canRetry: boolean;
+  } | null>(null);
+  // This session's checkouts, newest first — see PlacedOrder.
+  const [placedOrders, setPlacedOrders] = useState<PlacedOrder[]>([]);
+  const [placedListOpen, setPlacedListOpen] = useState(false);
+  // The toolbar icon the slip flies into, and the sale still travelling there
+  // (flash, then slip). That one stays out of the badge until it lands, so the
+  // count ticks up at the moment the receipt arrives rather than before.
+  const placedIconRef = useRef<HTMLButtonElement>(null);
+  const [inFlightId, setInFlightId] = useState<string | null>(null);
+  // Bumped on every landing; keys the icon's ping so it replays each time.
+  const [landings, setLandings] = useState(0);
+  const placedCount = placedOrders.filter(
+    (o) => o.status === 'placed' && o.id !== inFlightId,
+  ).length;
+  const closeReceipt = () => {
+    if (receipt?.placed) {
+      setInFlightId(null);
+      setLandings((n) => n + 1);
+    }
+    setReceipt(null);
+  };
   const [discountType, setDiscountType] = useState<'percentage' | 'amount'>(
     'percentage',
   );
@@ -488,28 +556,56 @@ export const CashierClient = ({
   // state, and a key written mid-checkout could be clobbered by a render that
   // was already holding a stale copy of the tabs array. Nothing here goes
   // through React state, so nothing can race it.
+  /** The map as it stands on disk right now — another window may have written it. */
+  const readPendingKeys = useCallback((): Record<string, string> => {
+    try {
+      const raw = localStorage.getItem(pendingKeysStorageKey);
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+      return Object.fromEntries(
+        Object.entries(parsed as Record<string, unknown>).filter(
+          ([, v]) => typeof v === 'string' && v !== '',
+        ),
+      ) as Record<string, string>;
+    } catch {
+      return {};
+    }
+  }, [pendingKeysStorageKey]);
+
+  // MERGED over what is on disk, never written flat. This screen can be open in
+  // two browser windows, and each holds its own copy of the map from its own
+  // mount; a flat write from one would drop the OTHER window's in-flight key.
+  // A key lost between a failed post and a reload is precisely the double-post
+  // this whole mechanism exists to prevent. Ours win, theirs survive.
   const writePendingKeys = useCallback(
-    (next: Record<string, string>) => {
+    (next: Record<string, string>, dropped?: string) => {
       pendingOrderIdsRef.current = next;
       try {
-        localStorage.setItem(pendingKeysStorageKey, JSON.stringify(next));
+        const merged = { ...readPendingKeys(), ...next };
+        // A release has to survive the merge, or the entry we just deleted
+        // would come straight back off disk.
+        if (dropped) delete merged[dropped];
+        localStorage.setItem(pendingKeysStorageKey, JSON.stringify(merged));
       } catch {
         /* ignore quota / serialization errors */
       }
     },
-    [pendingKeysStorageKey],
+    [pendingKeysStorageKey, readPendingKeys],
   );
 
   /** Take (or mint) this tab's key. Same id for every retry of the same tab. */
   const claimPendingKey = useCallback(
     (tabId: string): string => {
-      const existing = pendingOrderIdsRef.current[tabId];
-      if (existing) return existing;
-      const minted = crypto.randomUUID();
-      writePendingKeys({ ...pendingOrderIdsRef.current, [tabId]: minted });
-      return minted;
+      // Disk is consulted before minting: a second window may already have
+      // claimed this tab, and minting a fresh id here would post the same cart
+      // under a key the server has never seen — a duplicate, by the exact route
+      // the key was introduced to close.
+      const existing = pendingOrderIdsRef.current[tabId] ?? readPendingKeys()[tabId];
+      const key = existing ?? crypto.randomUUID();
+      writePendingKeys({ ...pendingOrderIdsRef.current, [tabId]: key });
+      return key;
     },
-    [writePendingKeys],
+    [readPendingKeys, writePendingKeys],
   );
 
   /** Drop a tab's key: the sale is recorded, or the tab is gone. */
@@ -518,26 +614,14 @@ export const CashierClient = ({
       if (!(tabId in pendingOrderIdsRef.current)) return;
       const next = { ...pendingOrderIdsRef.current };
       delete next[tabId];
-      writePendingKeys(next);
+      writePendingKeys(next, tabId);
     },
     [writePendingKeys],
   );
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(pendingKeysStorageKey);
-      const parsed = raw ? JSON.parse(raw) : null;
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        pendingOrderIdsRef.current = Object.fromEntries(
-          Object.entries(parsed as Record<string, unknown>).filter(
-            ([, v]) => typeof v === 'string' && v !== '',
-          ),
-        ) as Record<string, string>;
-      }
-    } catch {
-      /* ignore */
-    }
-  }, [pendingKeysStorageKey]);
+    pendingOrderIdsRef.current = readPendingKeys();
+  }, [readPendingKeys]);
 
   // Lazy mode: a per-device cashier preference (localStorage, never the DB).
   // When on, cash received is assumed to exactly equal the amount due (uang
@@ -1461,6 +1545,9 @@ export const CashierClient = ({
     if (submittingRef.current) return;
     submittingRef.current = true;
     setIsSubmitting(true);
+    // A new attempt answers the last failure, whether it came from the card's
+    // Coba Lagi or from Cmd+Enter behind it.
+    setCheckoutFailure(null);
     // Held across retries — see pendingOrderIdsRef. A retry of a sale the server
     // already committed must carry the id it was committed under, or it rings
     // up twice. Scoped to THIS tab, so the next cart cannot inherit it and be
@@ -1499,6 +1586,82 @@ export const CashierClient = ({
       0,
       snapshotAmountPaid - snapshotGrandTotal,
     );
+    const snapshotTime = new Date();
+    // The slip for this cart. `membership` is what the server echoed back; a
+    // sale that never reached it (the pending row below) prints the quote.
+    const slipFor = (
+      orderId: string,
+      membership?: {
+        memberName?: string;
+        tier?: ReceiptData['memberTier'];
+        promoCode?: string;
+        promoDiscount?: number;
+        pointsRedeemed?: number;
+        pointsDiscount?: number;
+        pointsEarned?: number;
+        pointsBalance?: number;
+      },
+    ): ReceiptData => ({
+      orderId,
+      customerName: snapshotCustomerName,
+      pagerNumber: snapshotPagerNumber,
+      items: snapshot.map((i) => ({
+        product_name: i.product.product_name,
+        quantity: i.quantity,
+        price: i.product.price,
+        price_mark_down: i.product.price_mark_down,
+        variant_name: i.product.variant_name,
+        addons: (i.addons ?? []).map((a) => ({
+          product_name: a.name,
+          quantity: a.quantity,
+          price: a.price,
+        })),
+      })),
+      subtotal: snapshotTotal,
+      discountAmount: snapshotDiscountAmount,
+      discountLabel: snapshotDiscountLabel,
+      // What the SERVER did, falling back to the quote for the fields it
+      // doesn't echo. The points figures especially: the screen predicted
+      // them, the server credited them, and the slip is a record of the
+      // second thing.
+      memberName: membership?.memberName ?? snapshotQuote?.member?.name ?? undefined,
+      memberTier: membership?.tier ?? snapshotQuote?.member?.tier ?? undefined,
+      promoCode: membership?.promoCode ?? undefined,
+      promoDiscount: membership?.promoDiscount || undefined,
+      pointsRedeemed: membership?.pointsRedeemed || undefined,
+      pointsDiscount: membership?.pointsDiscount || undefined,
+      pointsEarned: membership?.pointsEarned || undefined,
+      pointsBalance: membership?.pointsBalance ?? undefined,
+      taxLabel: snapshotTax.applies ? taxLineLabel(taxConfig) : undefined,
+      taxAmount: snapshotTax.applies ? snapshotTax.amount : undefined,
+      taxInclusive: taxConfig.inclusive,
+      total: snapshotGrandTotal,
+      paymentMethod: snapshotPaymentMethod,
+      amountPaid: snapshotAmountPaid,
+      changeDue: snapshotChangeDue,
+      date: snapshotTime,
+      outletName,
+      outletAddress,
+      outletPhone,
+      outletLogo,
+      cashierName,
+    });
+    // Newest first. Drops any earlier row for the same key: a retry that went
+    // through should turn its "Belum" into "Tercatat", not sit beside it.
+    const logAttempt = (orderId: string, status: PlacedOrder['status'], receiptData: ReceiptData) =>
+      setPlacedOrders((prev) => [
+        {
+          id: orderId,
+          shortId: orderId.split('-')[0].toUpperCase(),
+          customerName: snapshotCustomerName,
+          time: snapshotTime,
+          itemCount: snapshot.reduce((n, i) => n + i.quantity, 0),
+          total: snapshotGrandTotal,
+          status,
+          receipt: receiptData,
+        },
+        ...prev.filter((o) => o.id !== orderId && o.id !== idempotencyKey),
+      ]);
     try {
       const response = await fetch(`${API_URL}/api/add-order-detail`, {
         method: 'POST',
@@ -1532,8 +1695,49 @@ export const CashierClient = ({
             `Server error: ${response.status}`,
         );
       }
-      // Confirmed by the server (a fresh sale or a replay of one it already
-      // has, both of which mean this sale is recorded exactly once). Release
+      // A replay means the server already holds an order under this tab's key.
+      // For a retry of the SAME cart that is the happy path — the sale is
+      // recorded exactly once and the slip below is honest. But the key is held
+      // across cart EDITS too, so it can equally mean this tab committed a
+      // different sale before its response was lost, and this cart was never
+      // booked at all. The server hands back what it actually committed;
+      // anything that doesn't match what is on screen gets said out loud,
+      // because printing a slip for a cart that is in no ledger is how money
+      // ends up in the drawer with nothing behind it.
+      if (data.replay) {
+        if (data.cancelled) {
+          // The earlier order was voided, so nothing stands for this cart.
+          // Free the key: the next tap should ring it up for real rather than
+          // replay a sale that no longer counts.
+          releasePendingKey(checkoutTabId);
+          setCheckoutFailure({
+            title: 'Order Belum Tercatat',
+            message:
+              `Order sebelumnya (${data.orderId}) sudah dibatalkan, jadi keranjang ini belum tercatat.\n\n` +
+              'Tekan Coba Lagi untuk memprosesnya.',
+            canRetry: true,
+          });
+          return;
+        }
+        if (Math.round(Number(data.grandTotal) || 0) !== Math.round(snapshotGrandTotal)) {
+          // Deliberately keeps the cart, the tab AND the key: retrying is now
+          // harmless (it replays again) and the cashier needs the cart in front
+          // of them to work out which of the two is right. No retry on the
+          // card for the same reason: it would only replay this answer.
+          setCheckoutFailure({
+            title: 'Total Tidak Cocok',
+            message:
+              `Keranjang ini sudah tercatat sebagai order ${data.orderId} sebesar ` +
+              `${formatCurrency(Number(data.grandTotal) || 0)}, berbeda dari ` +
+              `${formatCurrency(snapshotGrandTotal)} di layar.\n\n` +
+              'Periksa order tersebut sebelum menerima pembayaran.',
+            canRetry: false,
+          });
+          return;
+        }
+      }
+      // Confirmed by the server (a fresh sale, or a replay of the same cart it
+      // already has — both mean this sale is recorded exactly once). Release
       // the key so the next sale mints its own.
       releasePendingKey(checkoutTabId);
       setCartOpen(false);
@@ -1543,59 +1747,44 @@ export const CashierClient = ({
       // Order is paid: drop this tab and jump to the next / a fresh one. This
       // resets cart, customer, discount, and payment for the new active tab.
       completeActiveTab();
-      setReceipt({
-        variant: 'customer',
-        heading: 'Order Placed!',
-        data: {
-          // Falls back to the key we posted under: on a replay that IS the id
-          // the order was committed with, so the slip still matches the record.
-          orderId: data.orderId ?? idempotencyKey,
-          customerName: snapshotCustomerName,
-          pagerNumber: snapshotPagerNumber,
-          items: snapshot.map((i) => ({
-            product_name: i.product.product_name,
-            quantity: i.quantity,
-            price: i.product.price,
-            price_mark_down: i.product.price_mark_down,
-            variant_name: i.product.variant_name,
-            addons: (i.addons ?? []).map((a) => ({
-              product_name: a.name,
-              quantity: a.quantity,
-              price: a.price,
-            })),
-          })),
-          subtotal: snapshotTotal,
-          discountAmount: snapshotDiscountAmount,
-          discountLabel: snapshotDiscountLabel,
-          // What the SERVER did, falling back to the quote for the fields it
-          // doesn't echo. The points figures especially: the screen predicted
-          // them, the server credited them, and the slip is a record of the
-          // second thing.
-          memberName: data.membership?.memberName ?? snapshotQuote?.member?.name ?? undefined,
-          memberTier: data.membership?.tier ?? snapshotQuote?.member?.tier ?? undefined,
-          promoCode: data.membership?.promoCode ?? undefined,
-          promoDiscount: data.membership?.promoDiscount || undefined,
-          pointsRedeemed: data.membership?.pointsRedeemed || undefined,
-          pointsDiscount: data.membership?.pointsDiscount || undefined,
-          pointsEarned: data.membership?.pointsEarned || undefined,
-          pointsBalance: data.membership?.pointsBalance ?? undefined,
-          taxLabel: snapshotTax.applies ? taxLineLabel(taxConfig) : undefined,
-          taxAmount: snapshotTax.applies ? snapshotTax.amount : undefined,
-          taxInclusive: taxConfig.inclusive,
-          total: snapshotGrandTotal,
-          paymentMethod: snapshotPaymentMethod,
-          amountPaid: snapshotAmountPaid,
-          changeDue: snapshotChangeDue,
-          date: new Date(),
-          outletName,
-          outletAddress,
-          outletPhone,
-          outletLogo,
-          cashierName,
-        },
-      });
+      // Falls back to the key we posted under: on a replay that IS the id the
+      // order was committed with, so the slip still matches the record.
+      const placedId: string = data.orderId ?? idempotencyKey;
+      const receiptData = slipFor(placedId, data.membership);
+      logAttempt(placedId, 'placed', receiptData);
+      setInFlightId(placedId);
+      // Confirmation first, then the slip. The slip is the same one as before;
+      // it just waits PLACED_HOLD_MS behind a card that says the sale is booked.
+      setPlacedFlash({ orderId: placedId });
+      clearTimeout(placedTimerRef.current);
+      placedTimerRef.current = setTimeout(() => {
+        setPlacedFlash(null);
+        setReceipt({
+          variant: 'customer',
+          heading: 'Order Placed!',
+          placed: true,
+          data: receiptData,
+        });
+      }, PLACED_HOLD_MS);
     } catch (error: any) {
-      alert(error.message);
+      // Nothing confirmed it, so as far as this screen knows the sale isn't in
+      // the ledger. Listed as "Belum" under the key a retry will reuse.
+      logAttempt(idempotencyKey, 'pending', slipFor(idempotencyKey));
+      // "Belum tercatat" can't be promised: a lost response may have followed a
+      // commit. What CAN be promised is that retrying won't book it twice.
+      setCheckoutFailure({
+        title: 'Order Gagal',
+        message:
+          'Server belum mengonfirmasi pesanan ini. Keranjang masih utuh, dan ' +
+          'mencoba lagi aman — pesanan tidak akan tercatat dua kali.',
+        // fetch() rejects with a TypeError when the request never got an
+        // answer; its "Failed to fetch" says nothing to a cashier on its own.
+        detail:
+          error instanceof TypeError
+            ? `Tidak bisa terhubung ke server. (${error.message})`
+            : error?.message,
+        canRetry: true,
+      });
     } finally {
       submittingRef.current = false;
       setIsSubmitting(false);
@@ -1745,6 +1934,105 @@ export const CashierClient = ({
                 </p>
               )}
             </div>
+            {/* This session's checkouts. Read-only on purpose: the only thing
+                it can do to an order is print it again. Voids and status
+                changes live where they're audited, not behind a toolbar icon. */}
+            <Popover open={placedListOpen} onOpenChange={setPlacedListOpen}>
+              <PopoverTrigger asChild>
+                <button
+                  ref={placedIconRef}
+                  type="button"
+                  aria-label="Pesanan tercatat"
+                  title="Pesanan tercatat"
+                  className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border bg-background/90 text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  <ReceiptText className="h-4 w-4" />
+                  {landings > 0 && (
+                    <span
+                      key={landings}
+                      aria-hidden
+                      className="placed-ping pointer-events-none absolute inset-0 rounded-xl border-2 border-green-600"
+                    />
+                  )}
+                  {placedCount > 0 && (
+                    // Keyed by the count so each new sale re-mounts it and pops.
+                    <span
+                      key={placedCount}
+                      className="badge-pop absolute -right-1.5 -top-1.5 flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-green-600 px-1 text-[11px] font-extrabold leading-none text-white"
+                    >
+                      {placedCount}
+                    </span>
+                  )}
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-80 p-2.5">
+                {placedOrders.length === 0 ? (
+                  <p className="px-1 py-3 text-center text-xs text-muted-foreground">
+                    Belum ada pesanan di sesi ini.
+                  </p>
+                ) : (
+                  <div className="max-h-65 space-y-1.5 overflow-y-auto">
+                    {placedOrders.map((o) => (
+                      <div
+                        key={o.id}
+                        className="flex items-center gap-2 rounded-lg border px-2.5 py-2"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex min-w-0 items-center gap-1.5">
+                            <span className="shrink-0 font-mono text-[13px] font-bold">
+                              #{o.shortId}
+                            </span>
+                            {o.customerName && (
+                              <span className="inline-flex min-w-0 items-center gap-1 rounded-full bg-muted px-1.5 py-px text-[11px] font-semibold text-muted-foreground">
+                                <User className="h-2.5 w-2.5 shrink-0" />
+                                <span className="truncate">{o.customerName}</span>
+                              </span>
+                            )}
+                          </div>
+                          <p className="mt-0.5 text-[11px] tabular-nums text-muted-foreground">
+                            {clockTime(o.time)} · {o.itemCount} item · {formatCurrency(o.total)}
+                          </p>
+                        </div>
+                        {o.status === 'placed' ? (
+                          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-bold text-green-700 dark:bg-green-950/60 dark:text-green-300">
+                            <Check className="h-3 w-3" />
+                            Tercatat
+                          </span>
+                        ) : (
+                          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-700 dark:bg-amber-950/60 dark:text-amber-300">
+                            <Clock className="h-3 w-3" />
+                            Belum
+                          </span>
+                        )}
+                        {o.status === 'placed' && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon-sm"
+                            aria-label={`Cetak ulang struk #${o.shortId}`}
+                            title="Cetak ulang struk"
+                            onClick={() => {
+                              setPlacedListOpen(false);
+                              setReceipt({
+                                variant: 'customer',
+                                heading: 'Cetak Ulang Struk',
+                                placed: true,
+                                data: o.receipt,
+                              });
+                            }}
+                          >
+                            <Printer className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <p className="px-1 text-[11px] text-muted-foreground">
+                  Status tidak bisa diubah dari sini — hanya cetak ulang struk.
+                </p>
+              </PopoverContent>
+            </Popover>
           </div>
 
           <ShiftBar
@@ -2664,12 +2952,23 @@ export const CashierClient = ({
       </div>
 
       {/* Receipt / kitchen ticket modal */}
+      {placedFlash && <OrderPlacedFlash orderId={placedFlash.orderId} />}
+      {checkoutFailure && (
+        <OrderFailedPopup
+          title={checkoutFailure.title}
+          message={checkoutFailure.message}
+          detail={checkoutFailure.detail}
+          onRetry={checkoutFailure.canRetry ? () => void handleCheckout() : undefined}
+          onClose={() => setCheckoutFailure(null)}
+        />
+      )}
       {receipt && (
         <ReceiptModal
           data={receipt.data}
           variant={receipt.variant}
           heading={receipt.heading}
-          onClose={() => setReceipt(null)}
+          flyToRef={receipt.placed ? placedIconRef : undefined}
+          onClose={closeReceipt}
         />
       )}
 

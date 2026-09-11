@@ -22,6 +22,7 @@ import { applyOrderStockReturn, applySaleStockOut, applySaleStockReturn } from "
 import { lineUnitCostSql } from "../lib/cogs";
 import { CATEGORY_POS_SALE, CATEGORY_POS_CANCELLATION } from "../lib/cashflow-categories";
 import { parsePosPaymentMethod, posCashflowTypeFor } from "../lib/pos-payment";
+import { money, orderDiscount } from "../lib/money-sql";
 import { getOpenShiftId } from "../lib/shift";
 import { computeTax, taxConfigFrom } from "../lib/tax";
 import { resolveAddons } from "../lib/addons";
@@ -97,6 +98,56 @@ async function addPosToCashflowin(
   });
 }
 
+/**
+ * What a replayed sale actually turned out to be, read back off the order that
+ * was committed the first time round.
+ *
+ * A replay used to answer nothing but "already processed". That is true and it
+ * is not enough: a tab holds ONE idempotency key across every retry, so a
+ * cashier who edits the cart after a failed attempt — the customer adds a drink
+ * while the alert is still on screen — retries under the id the FIRST cart was
+ * committed with. The server replays, answers success, and the drink is never
+ * booked: money in the drawer, nothing in the books, and no duplicate pair for
+ * routes/audit.ts to find, because a lost sale leaves no second note. Handing
+ * back what was really committed is what lets the client notice and say so.
+ *
+ * There is no stored total column, so it is rebuilt the way every other reader
+ * rebuilds it: the line sum (add-on child rows are ordinary lines and belong in
+ * it) less the order-level discount, plus the tax only when it was charged ON
+ * TOP — under inclusive pricing the line prices already contain it.
+ */
+async function describeCommittedOrder(orderId: string) {
+  const lineSum = sql`coalesce((
+    select sum(${money(sql`d.summary_price`)})
+    from "orderDetails" d where d.order_id = ${ordersTable.id}
+  ), 0)`;
+  const net = sql`(${lineSum} - ${orderDiscount(sql`${ordersTable}`)})`;
+
+  const [row] = await db
+    .select({
+      createdAt: ordersTable.createdAt,
+      deletedAt: ordersTable.deletedAt,
+      total: net,
+      grandTotal: sql`(${net} + case
+        when ${ordersTable.tax_inclusive} is true then 0
+        else coalesce(${ordersTable.tax_amount}, 0) end)`,
+    })
+    .from(ordersTable)
+    .where(eq(ordersTable.id, orderId))
+    .limit(1);
+
+  if (!row) return null;
+  return {
+    total: Number(row.total) || 0,
+    grandTotal: Number(row.grandTotal) || 0,
+    // Rung up and then voided. The client releases the tab's key on this, so
+    // the cashier can ring the cart up for real instead of retrying forever
+    // into the replay of an order that no longer counts for anything.
+    cancelled: row.deletedAt !== null,
+    createdAt: row.createdAt,
+  };
+}
+
 export async function mutationRoutes(app: FastifyInstance) {
   app.post("/api/add-order-detail", async (request, reply) => {
     try {
@@ -108,6 +159,18 @@ export async function mutationRoutes(app: FastifyInstance) {
 
       const body = (request.body as any) || {};
       body.outletId = access.outlet.id;
+
+      // A sale with no lines is not a sale, and it used to be worse than a
+      // no-op: the cashflow at the end of this handler is booked whether or not
+      // an order row was written, so an empty cart booked cash against NO
+      // order. That consumed no idempotency key — there is no row for a retry
+      // to collide with — so every retry booked it again, phantom cash that the
+      // duplicate audit can never surface because it joins orders. Both shipped
+      // clients block this at the button; nothing should reach it by hand
+      // either.
+      if (!Array.isArray(body.cart) || body.cart.length === 0) {
+        return reply.status(400).send({ error: { message: "Keranjang kosong" } });
+      }
 
       // Idempotency: BOTH cashiers send their own client-generated orderId, so
       // a retried request — e.g. the response was lost after the server already
@@ -127,13 +190,15 @@ export async function mutationRoutes(app: FastifyInstance) {
       const clientOrderId: string | undefined =
         typeof body.orderId === "string" && body.orderId.length > 0 ? body.orderId : undefined;
       if (clientOrderId) {
-        const [already] = await db
-          .select({ id: ordersTable.id })
-          .from(ordersTable)
-          .where(eq(ordersTable.id, clientOrderId))
-          .limit(1);
-        if (already) {
-          return { success: true, message: "Order already processed", orderId: clientOrderId, replay: true };
+        const committed = await describeCommittedOrder(clientOrderId);
+        if (committed) {
+          return {
+            success: true,
+            message: "Order already processed",
+            orderId: clientOrderId,
+            replay: true,
+            ...committed,
+          };
         }
       }
 
@@ -241,6 +306,8 @@ export async function mutationRoutes(app: FastifyInstance) {
           // drawer to reconcile them against.
           const shiftId = await getOpenShiftId(tx, body.outletId);
 
+          // Always true now (the empty cart was rejected up top); kept as the
+          // structural guard for the block that mints the order id.
           if (body.cart && body.cart.length > 0) {
             new_order_id = clientOrderId ?? crypto.randomUUID();
             await tx.insert(ordersTable).values({
@@ -427,7 +494,21 @@ export async function mutationRoutes(app: FastifyInstance) {
         // processed), instead of surfacing a raw constraint-violation 500.
         const pgCode = err?.code ?? err?.cause?.code;
         if (clientOrderId && pgCode === "23505") {
-          return { success: true, message: "Order already processed", orderId: clientOrderId, replay: true };
+          // Only the orders PK means "already committed". A 23505 raised by any
+          // OTHER unique constraint in this transaction (a promo use, a
+          // membership row) rolled the whole sale back, and answering success
+          // there would tell the cashier a sale happened that did not — so the
+          // read-back is the test, not the error code alone.
+          const committed = await describeCommittedOrder(clientOrderId);
+          if (committed) {
+            return {
+              success: true,
+              message: "Order already processed",
+              orderId: clientOrderId,
+              replay: true,
+              ...committed,
+            };
+          }
         }
         throw err; // anything else: let the outer catch handle it, unchanged
       }

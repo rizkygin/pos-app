@@ -1,10 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { Printer, X, CheckCircle } from "lucide-react";
 import { resolveOutletImage } from "@/lib/image-src";
 import { posPaymentLabel } from "@/lib/pos-payment";
 import { buildOrderLabelBatch, openOrderLabelApp, type OrderLabel } from "@/lib/labelbridge";
+
+/** How long the closing receipt takes to fly into `flyToRef`. */
+const FLIGHT_MS = 700;
 
 type ReceiptAddon = {
     product_name: string;
@@ -113,7 +116,17 @@ type Props = {
      * have to read past, and it invites the ticket being handed over as a bill.
      */
     variant?: "customer" | "kitchen";
+    /**
+     * Where the receipt goes when it's done with: on close, and after a print
+     * that was actually handed off, the card shrinks into this element before
+     * `onClose` fires. Without it the modal closes on the spot and printing
+     * leaves it open, as it always has.
+     */
+    flyToRef?: RefObject<HTMLElement | null>;
 };
+
+/** The ghost's starting rect plus the transform that lands it on the target. */
+type Flight = { top: number; left: number; width: number; height: number; transform: string };
 
 const fmt = (n: number) =>
     new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 0 }).format(n);
@@ -496,9 +509,67 @@ function buildKitchenEscposBase64(data: ReceiptData, paper: PaperWidth): string 
  */
 const SHOW_ORDER_LABELS: boolean = false;
 
-export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant = "customer" }: Props) {
+export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant = "customer", flyToRef }: Props) {
     const isKitchen = variant === "kitchen";
     const shortId = data.orderId.split("-")[0].toUpperCase();
+
+    // ── Exit flight: the card leaves as a text-free ghost that shrinks into
+    // `flyToRef`, so the cashier sees where the order went (and where to find
+    // it again for a reprint). The real modal is gone the moment it starts.
+    const cardRef = useRef<HTMLDivElement>(null);
+    const ghostRef = useRef<HTMLDivElement>(null);
+    const [flight, setFlight] = useState<Flight | null>(null);
+    const flightTimerRef = useRef<number | undefined>(undefined);
+
+    const flyAway = () => {
+        if (flight) return;
+        const card = cardRef.current;
+        const target = flyToRef?.current;
+        const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        if (!card || !target || reduced) {
+            onClose();
+            return;
+        }
+        const from = card.getBoundingClientRect();
+        const to = target.getBoundingClientRect();
+        // A target with no box (display:none, detached) has nowhere to land.
+        if (!to.width || !from.width) {
+            onClose();
+            return;
+        }
+        const dx = to.left + to.width / 2 - (from.left + from.width / 2);
+        const dy = to.top + to.height / 2 - (from.top + from.height / 2);
+        setFlight({
+            top: from.top,
+            left: from.left,
+            width: from.width,
+            height: from.height,
+            transform: `translate(${dx}px, ${dy}px) scale(${to.width / from.width}) rotate(-8deg)`,
+        });
+        flightTimerRef.current = window.setTimeout(onClose, FLIGHT_MS);
+    };
+
+    // Once the ghost has painted at the card's rect, point it at the target.
+    // Two frames: the first only guarantees the start position is committed;
+    // setting the transform in it would let the browser skip the transition.
+    useEffect(() => {
+        if (!flight) return;
+        let second = 0;
+        const first = requestAnimationFrame(() => {
+            second = requestAnimationFrame(() => {
+                const ghost = ghostRef.current;
+                if (!ghost) return;
+                ghost.style.transform = flight.transform;
+                ghost.style.opacity = "0.15";
+            });
+        });
+        return () => {
+            cancelAnimationFrame(first);
+            cancelAnimationFrame(second);
+        };
+    }, [flight]);
+
+    useEffect(() => () => window.clearTimeout(flightTimerRef.current), []);
 
     const handlePrintOrderLabels = () => {
         const orderLabels: OrderLabel[] = data.items.map((item) => ({
@@ -535,8 +606,9 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
 
     // Desktop/iOS fallback: a self-contained, thermal-sized receipt built from
     // the data (NOT from the Tailwind-styled modal markup, which wouldn't carry
-    // over to the print window). Monospace; auto-prints then closes.
-    const printViaBrowser = () => {
+    // over to the print window). Monospace; auto-prints then closes. Returns
+    // false when the popup was blocked and nothing printed.
+    const printViaBrowser = (): boolean => {
         const mm = `${paperWidth}mm`;
         const itemsHtml = data.items
             .map((item) => {
@@ -646,15 +718,16 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
         const w = window.open("", "_blank", "width=360,height=640");
         if (!w) {
             alert("Popup diblokir. Izinkan popup untuk situs ini agar struk bisa dicetak.");
-            return;
+            return false;
         }
         w.document.write(html);
         w.document.close();
+        return true;
     };
 
     // Desktop/iOS fallback for the kitchen ticket. Mirrors the ESC/POS layout
     // above: no logo, no prices, no totals.
-    const printKitchenViaBrowser = () => {
+    const printKitchenViaBrowser = (): boolean => {
         const mm = `${paperWidth}mm`;
         const itemsHtml = data.items
             .map(
@@ -707,10 +780,11 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
         const w = window.open("", "_blank", "width=360,height=640");
         if (!w) {
             alert("Popup diblokir. Izinkan popup untuk situs ini agar struk bisa dicetak.");
-            return;
+            return false;
         }
         w.document.write(html);
         w.document.close();
+        return true;
     };
 
     // Prefer ThermalBridge, fall back to RawBT. Navigating to a custom scheme
@@ -741,15 +815,16 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
     // (thermalbridge://print?data=<base64url>, back=1 returns to the browser
     // after printing) or RawBT (rawbt:base64,<base64>) — either relays them to
     // the paired Bluetooth/USB thermal printer. Other platforms have no such
-    // handler, so use the browser print dialog.
-    const handlePrint = async () => {
+    // handler, so use the browser print dialog. Resolves to whether the job was
+    // handed off — a blocked popup is the one way it isn't.
+    const handlePrint = async (): Promise<boolean> => {
         if (/android/i.test(navigator.userAgent)) {
             // Kitchen ticket carries no logo, so it skips the raster step entirely.
             if (isKitchen) {
                 const b64 = buildKitchenEscposBase64(data, paperWidth);
                 const b64url = b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
                 openPrintApp(`thermalbridge://print?back=1&data=${b64url}`, `rawbt:base64,${b64}`);
-                return;
+                return true;
             }
             let logoBytes: number[] = [];
             if (logoSrc) {
@@ -763,23 +838,57 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
             // base64url: query-string safe ("+" would decode to a space).
             const b64url = b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
             openPrintApp(`thermalbridge://print?back=1&data=${b64url}`, `rawbt:base64,${b64}`);
-        } else if (isKitchen) {
-            printKitchenViaBrowser();
-        } else {
-            printViaBrowser();
+            return true;
         }
+        return isKitchen ? printKitchenViaBrowser() : printViaBrowser();
     };
+
+    // With a destination, a printed receipt is done with and files itself away
+    // (it can be reprinted from there). Without one, the modal stays up as it
+    // always has, ready for a second copy.
+    const printAndFile = async () => {
+        const handedOff = await handlePrint();
+        if (handedOff && flyToRef) flyAway();
+    };
+
+    if (flight) {
+        // Stand-in for the card on its way out: the same white sheet, no text.
+        // Starts exactly over the card, so the swap is invisible.
+        return (
+            <div
+                ref={ghostRef}
+                aria-hidden
+                className="fixed z-50 overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl pointer-events-none"
+                style={{
+                    top: flight.top,
+                    left: flight.left,
+                    width: flight.width,
+                    height: flight.height,
+                    transition: `transform ${FLIGHT_MS}ms cubic-bezier(.6,.02,.3,1), opacity ${FLIGHT_MS}ms cubic-bezier(.7,0,.9,.6)`,
+                }}
+            >
+                <div className="h-14 bg-green-600" />
+                <div className="space-y-3 p-5">
+                    <div className="h-3 w-2/3 rounded-full bg-gray-200" />
+                    <div className="h-3 w-full rounded-full bg-gray-200" />
+                    <div className="h-3 w-5/6 rounded-full bg-gray-200" />
+                    <div className="h-3 w-full rounded-full bg-gray-200" />
+                    <div className="h-3 w-1/2 rounded-full bg-gray-200" />
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm flex flex-col max-h-[90vh]">
+            <div ref={cardRef} className="bg-white rounded-2xl shadow-2xl w-full max-w-sm flex flex-col max-h-[90vh]">
                 {/* Modal header */}
                 <div className="flex items-center justify-between px-5 py-4 border-b">
                     <div className="flex items-center gap-2 text-green-600">
                         <CheckCircle className="h-5 w-5" />
                         <span className="font-bold text-base">{heading}</span>
                     </div>
-                    <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1">
+                    <button onClick={flyAway} className="text-gray-400 hover:text-gray-600 p-1">
                         <X className="h-5 w-5" />
                     </button>
                 </div>
@@ -1072,7 +1181,7 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
                 </div>
                 <div className="flex gap-3 px-5 py-4">
                     <button
-                        onClick={onClose}
+                        onClick={flyAway}
                         className="flex-1 h-11 rounded-xl border-2 font-semibold text-sm text-gray-600 hover:bg-gray-50 transition-colors"
                     >
                         Close
@@ -1087,7 +1196,7 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
                         </button>
                     )}
                     <button
-                        onClick={handlePrint}
+                        onClick={printAndFile}
                         className="flex-1 h-11 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm flex items-center justify-center gap-2 transition-colors"
                     >
                         <Printer className="h-4 w-4" />
