@@ -332,7 +332,7 @@ export const OwnerDashboard = ({
         {/* Served from GitHub Releases (CDN, resumable) — not self-hosted:
             Railway's single origin made the 29MB download slow and flaky. */}
         <a
-          href="https://github.com/rizkygin/thermalbridge-releases/releases/latest/download/thermalbridge.apk"
+          href="https://github.com/rizkygin/thermalbridge-releases/releases/download/v1.1/thermalbridge.apk"
           className="group flex items-center gap-4 rounded-3xl border border-border/60 bg-card p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
         >
           <div className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-linear-to-br from-slate-700 to-slate-900 text-white shadow-lg">
