@@ -40,7 +40,12 @@ const nextConfig: NextConfig = {
       { protocol: "https", hostname: apiHost, pathname: "/**" },
     ],
   },
-  allowedDevOrigins: ['192.168.1.7', 'breeder-enduring-manpower.ngrok-free.dev'],
+  allowedDevOrigins: [
+    'breeder-enduring-manpower.ngrok-free.dev',
+    // This machine's current LAN IP, set by `npm run devlocal` so a phone on
+    // the same Wi-Fi can load the dev server. Looked up per run: DHCP moves it.
+    ...(process.env.DEV_LAN_HOST ? [process.env.DEV_LAN_HOST] : []),
+  ],
   devIndicators: false,
   experimental: {
     // The dashboard is auth-gated, so every page is dynamically rendered. By

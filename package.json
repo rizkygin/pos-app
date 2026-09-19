@@ -7,6 +7,7 @@
   "scripts": {
     "dev:backend": "npm run dev -w backend",
     "dev:frontend": "npm run dev -w frontend",
+    "devlocal": "node scripts/dev-local.mjs",
     "build:backend": "npm run build -w backend",
     "build:frontend": "npm run build -w frontend",
     "start:frontend": "npm run start -w frontend",
