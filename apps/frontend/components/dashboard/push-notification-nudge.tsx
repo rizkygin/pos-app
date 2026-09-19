@@ -12,7 +12,7 @@ const DISMISSED_KEY = 'pos_push_nudge_dismissed';
  * Only shows for `state === 'default'` (permission never asked) — once
  * answered either way (granted, denied, or dismissed) it never reappears, so
  * this is not a nag banner. The permanent on/off control lives in Settings
- * (push-notification-card.tsx) for whenever the owner wants to change it later.
+ * (Notifikasi section of owner-setting.tsx) for whenever the owner wants to change it later.
  */
 export function PushNotificationNudge() {
   const { state, busy, subscribe } = usePushSubscription();
