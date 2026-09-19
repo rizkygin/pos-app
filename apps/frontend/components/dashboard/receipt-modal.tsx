@@ -145,6 +145,56 @@ const LINE_CHARS: Record<PaperWidth, number> = { "58": 32, "80": 48 };
 // (many are 512), which is why the 80mm logo isn't padded to it.
 const PAPER_DOTS: Record<PaperWidth, number> = { "58": 384, "80": 576 };
 
+// A logo pixel prints black below this luminance (0-255). Shared by the raster
+// and inkBounds so the crop is taken around exactly what reaches the paper.
+const INK_LUM = 160;
+
+/**
+ * Bounding box of the logo's actual ink, in source pixels.
+ *
+ * Uploaded logos are routinely a small mark sitting in a large transparent or
+ * white square. That padding is not free: it rasterizes into the GS v 0 block
+ * as blank rows that still cost a full bytesPerRow each on the wire, and the
+ * wire is the constraint (see buildLogoEscposBytes). Cropping to the ink first
+ * is what stops a padded square PNG from tripling the payload.
+ *
+ * "Ink" means exactly what the raster will print: composited over white, then
+ * darker than INK_LUM. A looser test would count a pale shadow or glow that
+ * never reaches paper, and centering that wider box shifts the printed mark
+ * away from the shadow's side.
+ *
+ * Throws on a CORS-tainted canvas, like the caller's own getImageData.
+ */
+function inkBounds(img: HTMLImageElement) {
+    const w = img.naturalWidth || img.width || 1;
+    const h = img.naturalHeight || img.height || 1;
+    const scratch = document.createElement("canvas");
+    scratch.width = w;
+    scratch.height = h;
+    const sctx = scratch.getContext("2d");
+    if (!sctx) return { sx: 0, sy: 0, sw: w, sh: h };
+    // Same white ground as the raster, so faint alpha reads as the paper it prints as.
+    sctx.fillStyle = "#fff";
+    sctx.fillRect(0, 0, w, h);
+    sctx.drawImage(img, 0, 0);
+    const { data } = sctx.getImageData(0, 0, w, h);
+    let minX = w, minY = h, maxX = -1, maxY = -1;
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            const i = (y * w + x) * 4;
+            const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+            if (lum >= INK_LUM) continue; // prints as paper
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+        }
+    }
+    // Nothing dark enough to print: use it as given.
+    if (maxX < 0) return { sx: 0, sy: 0, sw: w, sh: h };
+    return { sx: minX, sy: minY, sw: maxX - minX + 1, sh: maxY - minY + 1 };
+}
+
 // Rasterize the outlet logo into an ESC/POS "GS v 0" raster block (1-bit).
 //
 // On 58mm the bitmap spans the full paper width with the logo centered in white
@@ -172,11 +222,29 @@ async function buildLogoEscposBytes(src: string, paper: PaperWidth): Promise<num
         el.src = src;
     });
 
+    // Crop to the logo's ink before scaling — see inkBounds.
+    const { sx, sy, sw, sh } = inkBounds(img);
+
     const logoWidth = 192; // dots (~24mm at 203dpi) — header-sized on both papers
+    // Hard ceiling on the raster's height. The printer's input buffer is a few
+    // KB and the Bluetooth write is paced rather than flow-controlled, so an
+    // oversized GS v 0 block overruns the buffer mid-transfer, drops the RFCOMM
+    // link, and leaves the logo on the paper with the whole receipt missing
+    // under it. A tall logo is scaled down to fit, never cropped.
+    const MAX_LOGO_ROWS = 128;
+    const naturalRows = (sh / sw) * logoWidth;
+    // Keep the drawn width a multiple of 8: bytesPerRow below divides by 8.
+    // Round DOWN: rounding up can push the height past MAX_LOGO_ROWS, and the
+    // clamp below would then squash the logo instead of scaling it.
+    const drawWidth =
+        naturalRows <= MAX_LOGO_ROWS
+            ? logoWidth
+            : Math.max(8, Math.floor((logoWidth * MAX_LOGO_ROWS) / naturalRows / 8) * 8);
+    const height = Math.max(8, Math.min(MAX_LOGO_ROWS, Math.round((sh / sw) * drawWidth)));
+
     // 58mm: pad to the full head width and bake the centering into the pixels.
     // 80mm: no padding, the printer centers the block itself (see above).
-    const width = paper === "80" ? logoWidth : PAPER_DOTS[paper];
-    const height = Math.max(8, Math.round(((img.height || logoWidth) / (img.width || logoWidth)) * logoWidth));
+    const width = paper === "80" ? drawWidth : PAPER_DOTS[paper];
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
@@ -185,7 +253,7 @@ async function buildLogoEscposBytes(src: string, paper: PaperWidth): Promise<num
     // Composite over white so transparent pixels print as paper, not black.
     ctx.fillStyle = "#fff";
     ctx.fillRect(0, 0, width, height);
-    ctx.drawImage(img, (width - logoWidth) / 2, 0, logoWidth, height);
+    ctx.drawImage(img, sx, sy, sw, sh, (width - drawWidth) / 2, 0, drawWidth, height);
     const { data: px } = ctx.getImageData(0, 0, width, height);
 
     const bytesPerRow = width / 8;
@@ -200,7 +268,7 @@ async function buildLogoEscposBytes(src: string, paper: PaperWidth): Promise<num
             for (let bit = 0; bit < 8; bit++) {
                 const i = (y * width + bx * 8 + bit) * 4;
                 const lum = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
-                if (lum < 160) byte |= 0x80 >> bit;
+                if (lum < INK_LUM) byte |= 0x80 >> bit;
             }
             out.push(byte);
         }
@@ -255,7 +323,9 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
         // 80mm: the bitmap is only as wide as the logo (the head width can't be
         // assumed there), so the printer has to do the centering.
         align(paper === "80" ? 1 : 0);
-        push(...logoBytes);
+        // One byte at a time: push(...logoBytes) spreads the whole raster as
+        // call arguments, which is a RangeError once the logo gets big.
+        for (const b of logoBytes) bytes.push(b);
         push(0x0a);
     }
     align(1);
