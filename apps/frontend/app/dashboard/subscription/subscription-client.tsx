@@ -18,6 +18,8 @@ import {
   ClipboardCheck,
   Bell,
   Percent,
+  Armchair,
+  ChefHat,
   History,
   Smartphone,
   Receipt,
@@ -54,6 +56,8 @@ type Plan = {
     cashierShift?: boolean;
     pager?: boolean;
     tax?: boolean;
+    tableManagement?: boolean;
+    kitchenDisplay?: boolean;
     membership?: boolean;
   };
 };
@@ -651,6 +655,12 @@ export function SubscriptionClient() {
                     </FeatureRow>
                     <FeatureRow ok={!!f.tax} icon={Percent}>
                       Pajak kasir (PB1 / PPN)
+                    </FeatureRow>
+                    <FeatureRow ok={!!f.tableManagement} icon={Armchair}>
+                      Manajemen meja &amp; bill meja
+                    </FeatureRow>
+                    <FeatureRow ok={!!f.kitchenDisplay} icon={ChefHat}>
+                      Layar dapur (KDS)
                     </FeatureRow>
                     <FeatureRow ok={!!f.membership} icon={Crown}>
                       Membership, poin &amp; promo outlet

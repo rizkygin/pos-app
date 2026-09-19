@@ -141,6 +141,7 @@ const TRIAL_FEATURES: Record<string, unknown> = {
   recipeExplorer: true,
   membership: true,
   tableManagement: true,
+  kitchenDisplay: true,
 };
 const NO_FEATURES: Record<string, unknown> = {};
 

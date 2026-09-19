@@ -1,8 +1,8 @@
 'use client';
 
 /**
- * The shared body of the four segmented reports (payment method, cashier,
- * customer, online order).
+ * The shared body of the segmented reports (payment method, cashier, customer,
+ * online order, per table, Dine In / Take Away).
  *
  * Two rules shape this component:
  *
@@ -18,9 +18,10 @@
 import { useCallback, useState } from 'react';
 import { Loader2, SlidersHorizontal, ChevronLeft, ChevronRight, Inbox } from 'lucide-react';
 import { API_URL } from '@/lib/api-url';
+import { SERVICE_TYPE_LABEL } from '@/lib/service-type';
 import { ReportFilterDialog, type ReportFilters, defaultFilters } from './report-filter-dialog';
 
-export type Dimension = 'payment' | 'cashier' | 'customer' | 'online';
+export type Dimension = 'payment' | 'cashier' | 'customer' | 'online' | 'table' | 'service';
 
 // `cogs` is the cost of goods sold, from the cost ledger where the sale moved
 // stock and from the price frozen on the line where it structurally could not
@@ -84,9 +85,22 @@ const PRETTY: Record<string, string> = {
   delivery: 'Antar Kurir',
   service: 'Layanan Jasa',
   materials: 'Bahan Bangunan',
+  ...SERVICE_TYPE_LABEL,
+  // A counter sale from before Dine In / Take Away was recorded, or from a
+  // client that does not send it. Not take away — nobody knows.
+  unrecorded: 'Tidak Tercatat',
   '-': 'Tanpa Nama',
 };
-const pretty = (v: string) => PRETTY[v] ?? v;
+
+/**
+ * What a bucket reads as. A table label is the owner's own free text ("5",
+ * "A1", "5+6"), so it never goes through PRETTY — a table named "cash" must
+ * not read "Tunai".
+ */
+function labelFor(dimension: Dimension, v: string) {
+  if (dimension === 'table') return `Meja ${v}`;
+  return PRETTY[v] ?? v;
+}
 
 /** Query string shared by the summary and the row list, so they always agree. */
 function filterParams(dimension: Dimension, f: ReportFilters) {
@@ -108,11 +122,14 @@ export function SegmentReport({
   title,
   subtitle,
   groupHeading,
+  emptyHint,
 }: {
   dimension: Dimension;
   title: string;
   subtitle: string;
   groupHeading: string;
+  /** Shown under "no data" — for a report that only fills from one feature. */
+  emptyHint?: string;
 }) {
   const [filterOpen, setFilterOpen] = useState(true);
   const [filters, setFilters] = useState<ReportFilters | null>(null);
@@ -265,7 +282,10 @@ export function SegmentReport({
           <section className="mt-6 rounded-3xl border border-border/60 bg-card p-5 shadow-sm">
             <h3 className="mb-3 text-lg font-black tracking-tight">{groupHeading}</h3>
             {groups.length === 0 ? (
-              <p className="py-8 text-center text-sm text-muted-foreground">Tidak ada data pada rentang ini.</p>
+              <div className="py-8 text-center text-sm text-muted-foreground">
+                <p>Tidak ada data pada rentang ini.</p>
+                {emptyHint && <p className="mt-1 text-xs">{emptyHint}</p>}
+              </div>
             ) : (
               <div className="space-y-2">
                 <button
@@ -285,7 +305,7 @@ export function SegmentReport({
                     }`}
                   >
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-bold">{pretty(g.label)}</p>
+                      <p className="truncate text-sm font-bold">{labelFor(dimension, g.label)}</p>
                       <p className="text-[11px] text-muted-foreground">
                         {g.orders} transaksi · {g.qty} item · HPP {fmtIDR(g.cogs)} · laba{' '}
                         {fmtIDR(g.profit)}
@@ -329,7 +349,7 @@ export function SegmentReport({
                         <td className="py-2 pr-3 whitespace-nowrap text-xs text-muted-foreground">
                           {fmtDateTime(r.createdAt)}
                         </td>
-                        <td className="py-2 pr-3 font-semibold">{pretty(r.label)}</td>
+                        <td className="py-2 pr-3 font-semibold">{labelFor(dimension, r.label)}</td>
                         <td className="py-2 pr-3 text-right tabular-nums">{r.qty}</td>
                         <td className="py-2 pr-3 text-right font-black tabular-nums">{fmtIDR(r.revenue)}</td>
                         <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">

@@ -82,6 +82,11 @@ export const ORDER_STATUS = pgEnum('order_status', [
 // The old email checks are deliberately left in place for now; this column is
 // the identity test for new work only.
 export const ORDER_SOURCE = pgEnum('order_source', ['app', 'pos']);
+// How a counter sale was served (orders.service_type, kitchen_tickets.service_type).
+// A varchar + CHECK rather than a pgEnum, like the table-management columns, so
+// a third way of serving is one constraint swap, not an ALTER TYPE.
+export const SERVICE_TYPES = ['dine_in', 'take_away'] as const;
+export type ServiceType = (typeof SERVICE_TYPES)[number];
 // delivery = courier-fulfilled order (food/drink/mart): goes through the courier
 // lobby + on_delivery leg. service = no courier: owner drives the whole flow and
 // the customer accepts at the end (see the service order endpoints).
@@ -317,6 +322,11 @@ export const outletsTable = pgTable('outlets', {
   // "Lewat Waktu". Per outlet because a warung turns a table in 30 minutes and
   // a restaurant in two hours — see the table management section below.
   table_overtime_minutes: integer('table_overtime_minutes').default(90).notNull(),
+
+  // Whether the counter asks Dine In / Take Away. Off = the switch is hidden and
+  // counter sales record NULL ("not recorded"); a table's bill is dine_in
+  // either way. See counterServiceType in lib/service-type.ts (0079).
+  service_type_enabled: boolean('service_type_enabled').default(true).notNull(),
 
   ...timestamps,
 });
@@ -712,6 +722,22 @@ export const ordersTable = pgTable(
     // App orders never carry one — nobody is standing at the drawer for them.
     shift_id: integer('shift_id').references(() => cashierShiftsTable.id),
 
+    // Dine In / Take Away (migration 0076). POS only — the CHECK below keeps
+    // app orders NULL, since their `fulfillment` already says how they travel.
+    //
+    // NULL means "not recorded", never "take away": counter sales from before
+    // this existed, and any client that does not send one (the desktop cashier,
+    // /api/add-pos-to-cashflowin). A table's bill always settles as dine_in,
+    // set by the server whatever the client sent.
+    service_type: varchar('service_type', { length: 10 }),
+
+    // The table a table bill was served at (migration 0078): "5", or "5+6" for
+    // joined tables — the label the floor called the seating by at checkout.
+    // Frozen, because nothing else remembers it: clearing a table sets
+    // dining_tables.session_id back to NULL. NULL on every counter sale.
+    // Laporan per Meja groups on it.
+    table_label: varchar('table_label', { length: 40 }),
+
     // --- Tax, frozen at the moment of sale ---
     //
     // All three are NULL when no tax applied: every order taken before this
@@ -779,6 +805,15 @@ export const ordersTable = pgTable(
     index('orders_courier_status_idx').on(table.courier_id, table.status),
     // The closing report reads every order of one shift, several ways over.
     index('orders_shift_id_idx').on(table.shift_id),
+    check(
+      'orders_service_type_ck',
+      sql`${table.service_type} is null or (${table.source} = 'pos' and ${table.service_type} in ('dine_in', 'take_away'))`,
+    ),
+    check('orders_table_label_ck', sql`${table.table_label} is null or ${table.source} = 'pos'`),
+    // Laporan per Meja's window scan + drill-down; only table bills are in it.
+    index('orders_report_table_idx')
+      .on(table.outlet_id, table.table_label, table.createdAt)
+      .where(sql`deleted_at is null and table_label is not null`),
   ],
 );
 
@@ -2622,6 +2657,15 @@ export const kitchenTicketsTable = pgTable(
     label: varchar('label', { length: 40 }),
     customer: varchar('customer', { length: 100 }),
     note: varchar('note', { length: 255 }),
+    // Dine In / Take Away (migration 0076) — whether to plate it or pack it.
+    // Table tickets are always dine_in; NULL on a counter ticket from a client
+    // that does not send one.
+    service_type: varchar('service_type', { length: 10 }),
+    // The sale this ticket's dishes were paid in (migration 0077), so the
+    // kitchen can show the receipt's order number beside "#N". NULL until
+    // checkout — a ticket is sent before anything is paid. Stamped after the
+    // sale commits by linkKitchenTickets (lib/kitchen.ts); a label only.
+    order_id: text('order_id').references(() => ordersTable.id, { onDelete: 'set null' }),
     lines: jsonb('lines').default([]).notNull(),
     status: varchar('status', { length: 12 }).default('open').notNull(),
     status_at: timestamp('status_at', { withTimezone: true }).defaultNow().notNull(),
@@ -2640,6 +2684,10 @@ export const kitchenTicketsTable = pgTable(
     check(
       'kitchen_tickets_status_ck',
       sql`${t.status} in ('open', 'in_progress', 'done', 'hold', 'cancelled')`,
+    ),
+    check(
+      'kitchen_tickets_service_type_ck',
+      sql`${t.service_type} is null or ${t.service_type} in ('dine_in', 'take_away')`,
     ),
     index('kitchen_tickets_outlet_created_idx').on(t.outlet_id, t.created_at),
     index('kitchen_tickets_pending_call_idx')

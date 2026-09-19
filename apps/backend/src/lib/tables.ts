@@ -163,6 +163,21 @@ export function lineUnitPrice(product: LineProduct, addons: LineAddon[]): number
   return (Number.isFinite(base) ? base : 0) + extras;
 }
 
+/**
+ * The label the floor calls a seating by: its tables' labels, "5" or "5+6"
+ * for joined tables. Empty when it holds no table.
+ */
+export async function sessionTableLabel(tx: Tx | typeof db, sessionId: string): Promise<string> {
+  const held = await tx
+    .select({ label: diningTablesTable.label })
+    .from(diningTablesTable)
+    .where(eq(diningTablesTable.session_id, sessionId));
+  return held
+    .map((t) => t.label)
+    .sort((a, b) => a.localeCompare(b, "id", { numeric: true }))
+    .join("+");
+}
+
 /** Point every table of `sessionId` at nothing. */
 export async function releaseSessionTables(tx: Tx, sessionId: string) {
   await tx
@@ -208,13 +223,17 @@ export function parseTableCheckoutLink(raw: unknown): TableCheckoutLink | null |
  * charged at all. So the cart has to match the unpaid lines line for line and
  * the version has to be the one the tab last saw; anything else is a 409 the
  * cashier resolves by reloading the bill, never a sale.
+ *
+ * Returns the table label to freeze on the order (orders.table_label), read
+ * here while the seating is locked and still holds its tables — once the host
+ * clears it, nothing remembers where the bill was eaten. NULL if it holds none.
  */
 export async function prepareTableCheckout(
   tx: Tx,
   outletId: number,
   link: TableCheckoutLink,
   cart: unknown[],
-) {
+): Promise<{ tableLabel: string | null }> {
   const [session] = await tx
     .select({
       status: tableSessionsTable.status,
@@ -266,6 +285,9 @@ export async function prepareTableCheckout(
       "TABLE_CONFLICT",
     );
   }
+
+  const label = await sessionTableLabel(tx, link.sessionId);
+  return { tableLabel: label ? label.slice(0, 40) : null };
 }
 
 /**

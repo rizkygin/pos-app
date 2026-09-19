@@ -8,6 +8,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { cn } from '@/lib/utils';
 import { API_URL } from '@/lib/api-url';
 import { useOrderAlarm } from '@/lib/use-order-alarm';
+import type { ServiceType } from '@/lib/service-type';
 import { floorApi } from '../tables/floor-api';
 
 /**
@@ -30,6 +31,10 @@ type Ticket = {
   label: string | null;
   customer: string | null;
   note: string | null;
+  /** Always dine_in on a table ticket; null on a counter ticket from an older till. */
+  serviceType: ServiceType | null;
+  /** The order it was paid in — null until checkout. */
+  orderId: string | null;
   lines: {
     lineId: string;
     qty: number;
@@ -137,6 +142,21 @@ const fmtAge = (ms: number) => {
 const hhmm = (iso: string) => {
   const d = new Date(iso);
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+};
+
+/**
+ * The pill on a ticket: plate or pack. A table is always dine in; a counter
+ * ticket says what the till picked, or just KASIR when an older till sent none.
+ */
+const servicePill = (t: Ticket): { text: string; tone: string } => {
+  const s = t.source === 'table' ? 'dine_in' : t.serviceType;
+  if (s === 'take_away') {
+    return { text: 'TAKE AWAY', tone: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300' };
+  }
+  if (s === 'dine_in') {
+    return { text: 'DINE-IN', tone: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300' };
+  }
+  return { text: 'KASIR', tone: 'bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300' };
 };
 
 /** The name the pass calls out: the table, the pager, or just the till. */
@@ -525,7 +545,7 @@ export function KitchenClient() {
 
       {!board.entitled && (
         <div className="flex flex-wrap items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-          Paket Anda belum termasuk Layar Dapur (mulai Max Lite). Tiket yang sudah masuk tetap bisa diselesaikan.
+          Paket Anda belum termasuk Layar Dapur (mulai Max). Tiket yang sudah masuk tetap bisa diselesaikan.
           <Link href="/dashboard/subscription" className="font-semibold underline">
             Lihat paket
           </Link>
@@ -624,6 +644,15 @@ function TicketCard({
           <strong className="font-mono text-[clamp(16px,1.3vw,20px)] font-semibold tracking-tight">
             #{t.ticketNo}
           </strong>
+          {t.orderId && (
+            // The receipt's "Order #", once the dishes are paid for.
+            <span
+              title="Nomor order"
+              className="shrink-0 rounded-[5px] bg-white/20 px-1.5 py-0.5 font-mono text-[clamp(10px,0.8vw,12px)] font-semibold tracking-wide"
+            >
+              {t.orderId.split('-')[0].toUpperCase()}
+            </span>
+          )}
           <span className="truncate font-mono text-[clamp(10px,0.8vw,12px)] opacity-85">{hhmm(t.createdAt)}</span>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
@@ -645,12 +674,10 @@ function TicketCard({
           <span
             className={cn(
               'rounded-full px-1.75 py-0.75 text-[clamp(9px,0.75vw,11px)] font-extrabold tracking-wide',
-              t.source === 'table'
-                ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300'
-                : 'bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300',
+              servicePill(t).tone,
             )}
           >
-            {t.source === 'table' ? 'DINE-IN' : 'KASIR'}
+            {servicePill(t).text}
           </span>
           {t.call && (
             <span

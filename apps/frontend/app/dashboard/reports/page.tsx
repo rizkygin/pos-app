@@ -37,6 +37,8 @@ import {
   Percent,
   ClipboardCheck,
   Package,
+  Armchair,
+  UtensilsCrossed,
 } from 'lucide-react';
 import { API_URL } from '@/lib/api-url';
 
@@ -77,8 +79,8 @@ function fmtCompact(n: number) {
   return new Intl.NumberFormat('id-ID', { notation: 'compact', maximumFractionDigits: 1 }).format(n);
 }
 
-// The four segmented reports. They live behind their own filter popup rather
-// than on this page because each one groups by free text inside orders.note —
+// The segmented reports. They live behind their own filter popup rather than
+// on this page because most of them group by free text inside orders.note —
 // see components/reports/segment-report.tsx for why that must not auto-run.
 const SUB_REPORTS = [
   // Not a segmented report — it groups product lines, not orders.note text —
@@ -87,6 +89,11 @@ const SUB_REPORTS = [
   { href: '/dashboard/reports/payment-method', label: 'Metode Pembayaran', desc: 'Tunai vs non-tunai', icon: CreditCard, grad: 'from-emerald-400 to-teal-500' },
   { href: '/dashboard/reports/cashier', label: 'Per Kasir', desc: 'Siapa yang melayani', icon: UserCog, grad: 'from-blue-400 to-indigo-500' },
   { href: '/dashboard/reports/customer', label: 'Per Pelanggan', desc: 'Nama pelanggan kasir', icon: Users, grad: 'from-violet-400 to-purple-500' },
+  // Both read real order columns rather than note text. Per Meja only has
+  // rows once an outlet settles bills through Manajemen Meja; the page's empty
+  // state says so rather than the tile being hidden.
+  { href: '/dashboard/reports/table', label: 'Per Meja', desc: 'Omzet tiap meja', icon: Armchair, grad: 'from-fuchsia-400 to-purple-600' },
+  { href: '/dashboard/reports/service-type', label: 'Dine In / Take Away', desc: 'Makan di tempat vs dibawa', icon: UtensilsCrossed, grad: 'from-lime-400 to-green-500' },
   { href: '/dashboard/reports/online-order', label: 'Order Online', desc: 'Pesanan dari aplikasi', icon: Globe, grad: 'from-amber-400 to-orange-500' },
   // Max Lite and up; the page itself shows the upgrade card below that, the
   // same way the tax settings do, so the tile is never hidden.

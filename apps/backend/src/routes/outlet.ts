@@ -265,6 +265,37 @@ export async function outletRoutes(app: FastifyInstance) {
     return reply.send({ success: true, message: "Pengaturan pajak disimpan." });
   });
 
+  /**
+   * Whether the counter asks Dine In / Take Away. Not plan-gated: it only
+   * decides whether a column gets filled in. Owner only to change, like tax —
+   * it decides what the reports can split by, for every till at once.
+   */
+  app.get("/api/outlet/service-type", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, "cashier");
+    if (!access) return;
+    return reply.send({ success: true, enabled: access.outlet.service_type_enabled });
+  });
+
+  app.patch("/api/outlet/service-type", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, "owner");
+    if (!access) return;
+    const enabled = (request.body as Record<string, unknown> | null)?.enabled;
+    if (typeof enabled !== "boolean") {
+      return reply.status(400).send({ success: false, error: "Pengaturan tidak valid." });
+    }
+    await db
+      .update(outletsTable)
+      .set({ service_type_enabled: enabled, updatedAt: new Date() })
+      .where(eq(outletsTable.id, access.outlet.id));
+    return reply.send({
+      success: true,
+      enabled,
+      message: enabled
+        ? "Kasir kembali menanyakan Dine In / Take Away."
+        : "Dine In / Take Away tidak lagi dicatat di kasir.",
+    });
+  });
+
   app.patch("/api/outlet/me", async (request, reply) => {
     const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
     if (!session?.user) return reply.status(401).send({ success: false });

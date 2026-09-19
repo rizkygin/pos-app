@@ -5,6 +5,8 @@ import { kitchenTicketsTable } from "../db/schema";
 import { hasFeature, requireOutletAccess, type SubscriptionGate } from "../lib/outlet-access";
 import { HttpError } from "../lib/tables";
 import {
+  TAB_KEY,
+  TICKET_ACTIVE_WINDOW_MS,
   TICKET_STATUSES,
   insertKitchenTicket,
   lockKitchen,
@@ -12,6 +14,7 @@ import {
   type TicketStatus,
 } from "../lib/kitchen";
 import { publishFloor } from "../lib/floor-events";
+import { counterServiceType } from "../lib/service-type";
 import { APP_TIMEZONE } from "../lib/timezone";
 
 /**
@@ -32,9 +35,11 @@ import { APP_TIMEZONE } from "../lib/timezone";
  * Writing a counter ticket is the till's (`cashier`). Answering a Recall is
  * anyone on the floor, the till or the kitchen.
  *
- * PLAN GATING follows the table rule: what STARTS something is gated (a new
- * counter ticket needs the pager counter feature, the same flag that shows the
- * Dapur button); working through tickets that already exist never is.
+ * PLAN GATING (`kitchenDisplay`, Max and up) follows the table rule: what
+ * STARTS something is gated (a new counter ticket); working through tickets
+ * that already exist never is. The Dapur button's PAPER ticket is the pager
+ * feature (Max Lite) and never comes here without this flag — Max Lite prints,
+ * Max also puts it on the screen.
  */
 
 const KITCHEN = ["kitchen"] as const;
@@ -43,12 +48,8 @@ const ANSWER_CALL = ["tables", "cashier", "kitchen"] as const;
 
 /** A finished or cancelled ticket stays on the screen this long. */
 const FINISHED_VISIBLE_MS = 30 * 60_000;
-/** An open ticket older than this is from an earlier service and drops off. */
-const ACTIVE_WINDOW_MS = 24 * 60 * 60_000;
 
-/** Pager / counter tickets need the counter kitchen feature; tables have their own. */
-const entitled = (gate: SubscriptionGate) =>
-  hasFeature(gate, "pager") || hasFeature(gate, "tableManagement");
+const entitled = (gate: SubscriptionGate) => hasFeature(gate, "kitchenDisplay");
 
 async function handle(reply: FastifyReply, fn: () => Promise<unknown>) {
   try {
@@ -126,6 +127,9 @@ function ticketView(t: typeof kitchenTicketsTable.$inferSelect) {
     label: t.label,
     customer: t.customer,
     note: t.note,
+    serviceType: t.service_type,
+    /** Set once the dishes are paid for; the kitchen shows its short form. */
+    orderId: t.order_id,
     lines: t.lines as KitchenLine[],
     status: t.status,
     statusAt: iso(t.status_at),
@@ -149,7 +153,7 @@ export async function kitchenRoutes(app: FastifyInstance) {
       .where(
         and(
           eq(kitchenTicketsTable.outlet_id, access.outlet.id),
-          gte(kitchenTicketsTable.created_at, new Date(now - ACTIVE_WINDOW_MS)),
+          gte(kitchenTicketsTable.created_at, new Date(now - TICKET_ACTIVE_WINDOW_MS)),
           or(
             inArray(kitchenTicketsTable.status, ["open", "in_progress", "hold"]),
             gte(kitchenTicketsTable.status_at, new Date(now - FINISHED_VISIBLE_MS)),
@@ -180,12 +184,12 @@ export async function kitchenRoutes(app: FastifyInstance) {
       if (!entitled(access.gate)) {
         throw new HttpError(
           403,
-          "Layar Dapur tersedia mulai paket Max Lite — upgrade paket untuk membukanya.",
+          "Layar Dapur tersedia mulai paket Max — upgrade paket untuk membukanya.",
         );
       }
       const body = (request.body as any) ?? {};
       const tabKey = typeof body.tabKey === "string" ? body.tabKey.trim() : "";
-      if (!/^[A-Za-z0-9_-]{1,64}$/.test(tabKey)) throw new HttpError(400, "Tab kasir tidak valid");
+      if (!TAB_KEY.test(tabKey)) throw new HttpError(400, "Tab kasir tidak valid");
       if (!Array.isArray(body.lines) || body.lines.length === 0 || body.lines.length > 300) {
         throw new HttpError(400, "Daftar item tidak valid");
       }
@@ -223,6 +227,7 @@ export async function kitchenRoutes(app: FastifyInstance) {
           label: text(body.label, 40),
           customer: text(body.customer, 100),
           note: text(body.note, 255),
+          serviceType: counterServiceType(access.outlet, body.serviceType),
           lines: fresh,
           createdBy: access.userId,
         });

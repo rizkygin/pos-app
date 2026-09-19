@@ -7,7 +7,8 @@ import { requireOutletAccess, usesCostLedger } from "../lib/outlet-access";
 import { money, orderDiscount } from "../lib/money-sql";
 
 /**
- * Segmented sales reports: the same period sliced four ways.
+ * Segmented sales reports: the same period sliced six ways (the last two,
+ * per table and Dine In / Take Away, group on real order columns).
  *
  * Why four endpoints' worth of shapes behind one handler: payment method,
  * cashier name and customer name are NOT columns. They are free text inside
@@ -73,9 +74,16 @@ export function loadFailure(error: unknown): { status: number; error: string } |
   return null;
 }
 
-export type ReportDimension = "payment" | "cashier" | "customer" | "online";
+export type ReportDimension = "payment" | "cashier" | "customer" | "online" | "table" | "service";
 
-const DIMENSIONS = new Set<ReportDimension>(["payment", "cashier", "customer", "online"]);
+const DIMENSIONS = new Set<ReportDimension>([
+  "payment",
+  "cashier",
+  "customer",
+  "online",
+  "table",
+  "service",
+]);
 
 const ORDERS_ONLY = sql`orders o`;
 
@@ -138,6 +146,30 @@ function dimensionSql(dimension: ReportDimension): {
         key: sql`o.fulfillment::text`,
         label: sql`o.fulfillment::text`,
         scope: sql`o.source = 'app'`,
+        from: ORDERS_ONLY,
+      };
+    case "table":
+      // Laporan per Meja. Real columns from here down, not note text: the
+      // label a table bill was frozen with at checkout (migration 0078), which
+      // orders_report_table_idx covers. Counter sales have none and are out of
+      // scope — their slice is the service report below. A joined seating is
+      // its own bucket ("5+6"): its bill was one sale, not two.
+      return {
+        key: sql`o.table_label`,
+        label: sql`o.table_label`,
+        scope: sql`o.table_label is not null`,
+        from: ORDERS_ONLY,
+      };
+    case "service":
+      // Dine In / Take Away, counter sales only (app orders are always NULL —
+      // their fulfillment says how they travel). NULL is "not recorded" and
+      // gets its own bucket: sales from before the column existed and from
+      // clients that do not send it (desktop cashier). Filing those under
+      // take away is exactly the guess the column was added to stop making.
+      return {
+        key: sql`coalesce(o.service_type, 'unrecorded')`,
+        label: sql`coalesce(o.service_type, 'unrecorded')`,
+        scope: sql`o.source = 'pos'`,
         from: ORDERS_ONLY,
       };
   }

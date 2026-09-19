@@ -533,6 +533,34 @@
       "when": 1789792160259,
       "tag": "0075_kitchen_tickets",
       "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1789817541746,
+      "tag": "0076_service_type",
+      "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1789825750915,
+      "tag": "0077_kitchen_ticket_order",
+      "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1789829751045,
+      "tag": "0078_order_table_label",
+      "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1789834384551,
+      "tag": "0079_outlet_service_type_enabled",
+      "breakpoints": true
     }
   ]
 }

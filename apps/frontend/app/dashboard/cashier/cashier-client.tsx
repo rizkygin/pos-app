@@ -47,6 +47,13 @@ import {
 import { API_URL } from '@/lib/api-url';
 import { viewerTimezone } from '@/app/dashboard/tables/floor-api';
 import { POS_PAYMENT_OPTIONS, type PosPaymentMethod } from '@/lib/pos-payment';
+import {
+  DEFAULT_SERVICE_TYPE,
+  SERVICE_TYPES,
+  SERVICE_TYPE_LABEL,
+  isServiceType,
+  type ServiceType,
+} from '@/lib/service-type';
 import { ShiftBar } from './shift-bar';
 import { isSameDay } from '@/lib/date-calender';
 import { LabelPreviewModal } from './label-preview-modal';
@@ -252,6 +259,11 @@ type HeldTab = {
   pagerNumber: string;
   /** Whole-order kitchen instruction. Device-local, same as the item notes. */
   orderNote: string;
+  /**
+   * Dine In / Take Away, recorded on the order at checkout. Ignored on a
+   * table's tab — the server settles a table's bill as dine_in regardless.
+   */
+  serviceType: ServiceType;
   discountType: 'percentage' | 'amount';
   discountInput: string;
   paymentMethod: PosPaymentMethod;
@@ -275,6 +287,7 @@ const newHeldTab = (label: string): HeldTab => ({
   customerName: '',
   pagerNumber: '',
   orderNote: '',
+  serviceType: DEFAULT_SERVICE_TYPE,
   discountType: 'percentage',
   discountInput: '',
   paymentMethod: 'cash',
@@ -343,6 +356,17 @@ type CashierClientProps = {
    */
   canUseTables: boolean;
   /**
+   * Layar Dapur (Max and up). Without it the Dapur button still prints the
+   * paper ticket (that is the pager feature) but does not post it to the
+   * kitchen screen, which the server would refuse anyway.
+   */
+  canUseKitchen: boolean;
+  /**
+   * The owner's "Dine In / Take Away" setting. Off hides the switch and the
+   * sale records nothing (the server enforces that too).
+   */
+  askServiceType: boolean;
+  /**
    * The outlet's counter tax, already resolved against the plan gate on the
    * server (disabled below Max Lite). Used for DISPLAY only — the server
    * recomputes the stored figure from its own copy of these settings.
@@ -386,6 +410,8 @@ export const CashierClient = ({
   canUsePager,
   canUseMembership,
   canUseTables,
+  canUseKitchen,
+  askServiceType,
   taxConfig,
   initialProducts,
 }: CashierClientProps) => {
@@ -631,6 +657,10 @@ export const CashierClient = ({
   const [customerName, setCustomerName] = useState('');
   const [pagerNumber, setPagerNumber] = useState('');
   const [orderNote, setOrderNote] = useState('');
+  const [serviceType, setServiceType] = useState<ServiceType>(DEFAULT_SERVICE_TYPE);
+  // What this sale records and prints. The tab keeps its own choice even while
+  // the owner has the switch off, so turning it back on changes nothing held.
+  const recordedServiceType = askServiceType ? serviceType : undefined;
   // Which note is being edited, if any: a cart line or the whole order. The
   // draft is held apart from the cart so cancelling leaves nothing behind.
   const [noteTarget, setNoteTarget] = useState<
@@ -826,6 +856,7 @@ export const CashierClient = ({
     setCustomerName(t.customerName);
     setPagerNumber(t.pagerNumber);
     setOrderNote(t.orderNote);
+    setServiceType(t.serviceType);
     setDiscountType(t.discountType);
     setDiscountInput(t.discountInput);
     setPaymentMethod(t.paymentMethod);
@@ -853,6 +884,7 @@ export const CashierClient = ({
           ...t,
           pagerNumber: t.pagerNumber ?? '',
           orderNote: t.orderNote ?? '',
+          serviceType: isServiceType(t.serviceType) ? t.serviceType : DEFAULT_SERVICE_TYPE,
           // Tabs parked before add-ons existed have no lineId, and every cart
           // handler now addresses lines by it. Minted here rather than left
           // undefined, or the first tap on such a tab would edit every line at
@@ -890,6 +922,7 @@ export const CashierClient = ({
             customerName,
             pagerNumber,
             orderNote,
+            serviceType,
             discountType,
             discountInput,
             paymentMethod,
@@ -907,6 +940,7 @@ export const CashierClient = ({
     customerName,
     pagerNumber,
     orderNote,
+    serviceType,
     discountType,
     discountInput,
     paymentMethod,
@@ -1335,12 +1369,17 @@ export const CashierClient = ({
         void openTableBill(sessionId, billNo);
         return;
       }
-      // Take Away from the floor: a fresh counter tab, unless the one on
-      // screen is already blank.
+      // Take Away from the floor: a fresh counter tab. An untouched blank tab
+      // on screen is replaced rather than reused as-is — reusing it kept its
+      // "Pesanan 1" label, so the tap looked like it did nothing.
       const active = tabsRef.current.find((t) => t.id === activeIdRef.current);
-      if (active && !active.table && active.cart.length === 0) return;
-      const t = newHeldTab('Take Away');
-      const next = [...tabsRef.current, t];
+      const blank =
+        active && !active.table && active.cart.length === 0 && !active.customerName.trim();
+      // Stated rather than left to the default, which is free to change.
+      const t: HeldTab = { ...newHeldTab('Take Away'), serviceType: 'take_away' };
+      const next = blank
+        ? tabsRef.current.map((x) => (x.id === active.id ? t : x))
+        : [...tabsRef.current, t];
       tabsRef.current = next;
       setTabs(next);
       setActiveTabId(t.id);
@@ -1719,9 +1758,9 @@ export const CashierClient = ({
   const discountLabel =
     discountAmount > 0
       ? discountType === 'percentage'
-        ? `Discount (${discountValue}%)`
-        : 'Discount'
-      : 'Discount';
+        ? `Diskon (${discountValue}%)`
+        : 'Diskon'
+      : 'Diskon';
   // Net of the manual discount, BEFORE membership and tax. This is what gets
   // posted as `total`: the server applies the promo, the points and the tax to
   // it from its own copy of the settings rather than trusting the client.
@@ -2017,6 +2056,8 @@ export const CashierClient = ({
       // localStorage; the plan says it isn't printed any more.
       pagerNumber: canUsePager ? pagerNumber.trim() : '',
       tableLabel: activeTable?.label,
+      // A table's slip already says where the plate goes.
+      serviceType: activeTable ? undefined : recordedServiceType,
       orderNote: orderNote.trim(),
       items: cart.map((i) => ({
         product_name: i.product.product_name,
@@ -2069,6 +2110,7 @@ export const CashierClient = ({
       cartTotal,
       customerName,
       pagerNumber,
+      recordedServiceType,
       orderNote,
       discountAmount,
       discountLabel,
@@ -2113,7 +2155,7 @@ export const CashierClient = ({
       variant: 'kitchen',
       heading: 'Tiket Dapur',
     });
-    void sendCounterKitchen();
+    if (canUseKitchen) void sendCounterKitchen();
   };
 
   /**
@@ -2144,6 +2186,7 @@ export const CashierClient = ({
             label: canUsePager ? pagerNumber.trim() : '',
             customer: customerName.trim(),
             note: orderNote.trim(),
+            serviceType: recordedServiceType,
             lines,
           }),
         },
@@ -2294,6 +2337,7 @@ export const CashierClient = ({
     const snapshotTax = tax;
     const snapshotCustomerName = customerName.trim();
     const snapshotPagerNumber = canUsePager ? pagerNumber.trim() : '';
+    const snapshotServiceType = recordedServiceType;
     const snapshotPaymentMethod = paymentMethod;
     const snapshotAmountPaid =
       snapshotPaymentMethod === 'cash' && amountPaid > 0
@@ -2323,6 +2367,7 @@ export const CashierClient = ({
       customerName: snapshotCustomerName,
       pagerNumber: snapshotPagerNumber,
       tableLabel: checkoutTable?.label,
+      serviceType: checkoutTable ? undefined : snapshotServiceType,
       items: snapshot.map((i) => ({
         product_name: i.product.product_name,
         quantity: i.quantity,
@@ -2416,9 +2461,14 @@ export const CashierClient = ({
           tableSession,
           // The server uses this as orders.id and treats a repeat as a replay.
           orderId: idempotencyKey,
+          // The tab the Dapur button sent kitchen tickets under, so those
+          // tickets can show this order's number on the kitchen screen.
+          kitchenTabKey: checkoutTabId,
           cart: snapshot,
           total: snapshotFinalTotal,
           customerName: snapshotCustomerName,
+          // The server overrides it with dine_in for a table's bill.
+          serviceType: snapshotServiceType,
           // Without this the order's note carries no cashierName and the
           // cashier report buckets every web sale under "-".
           cashierName,
@@ -2519,7 +2569,7 @@ export const CashierClient = ({
         setPlacedFlash(null);
         setReceipt({
           variant: 'customer',
-          heading: 'Order Placed!',
+          heading: 'Pesanan Berhasil!',
           placed: true,
           data: receiptData,
         });
@@ -2553,6 +2603,7 @@ export const CashierClient = ({
     amountPaid,
     customerName,
     pagerNumber,
+    recordedServiceType,
     discountAmount,
     discountLabel,
     finalTotal,
@@ -3260,9 +3311,41 @@ export const CashierClient = ({
                   placeholder="Nama Pelanggan"
                   className="w-full text-lg font-bold bg-transparent outline-none border-b-2 border-transparent focus:border-blue-500 placeholder:text-foreground placeholder:font-bold transition-colors truncate"
                 />
-                <p className="text-sm text-muted-foreground">
-                  {cart.reduce((acc, item) => acc + item.quantity, 0)} Items
-                </p>
+                <div className="flex items-center gap-2">
+                  <p className="text-sm text-muted-foreground">
+                    {cart.reduce((acc, item) => acc + item.quantity, 0)} Items
+                  </p>
+                  {/* Dine In / Take Away rides on the item-count line rather
+                      than taking a row of its own. Not on a table's tab: the
+                      Meja card below already says where it is eaten, and the
+                      server settles a table's bill as dine in regardless. */}
+                  {askServiceType && !activeTable && (
+                    <div
+                      role="radiogroup"
+                      aria-label="Layanan"
+                      className="flex shrink-0 rounded-full bg-muted p-0.5 text-[11px] font-bold"
+                    >
+                      {SERVICE_TYPES.map((s) => (
+                        <button
+                          key={s}
+                          type="button"
+                          role="radio"
+                          aria-checked={serviceType === s}
+                          onClick={() => setServiceType(s)}
+                          className={`rounded-full px-2 py-0.5 transition-colors ${
+                            serviceType === s
+                              ? s === 'take_away'
+                                ? 'bg-amber-500 text-white'
+                                : 'bg-indigo-600 text-white'
+                              : 'text-muted-foreground hover:text-foreground'
+                          }`}
+                        >
+                          {SERVICE_TYPE_LABEL[s]}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
             {/* Side by side, not stacked. Labelled buttons in a column made
@@ -4073,7 +4156,7 @@ export const CashierClient = ({
               {discountAmount > 0 && (
                 <div className="flex justify-between text-emerald-600">
                   <span>
-                    Diskon{discountLabel ? ` (${discountLabel})` : ''}
+                    {discountLabel}
                   </span>
                   <span className="tabular-nums">
                     -{formatCurrency(discountAmount)}

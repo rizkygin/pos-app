@@ -22,6 +22,7 @@ import { applyOrderStockReturn, applySaleStockOut, applySaleStockReturn } from "
 import { lineUnitCostSql } from "../lib/cogs";
 import { CATEGORY_POS_SALE, CATEGORY_POS_CANCELLATION } from "../lib/cashflow-categories";
 import { parsePosPaymentMethod, posCashflowTypeFor } from "../lib/pos-payment";
+import { counterServiceType } from "../lib/service-type";
 import { money, orderDiscount } from "../lib/money-sql";
 import { getOpenShiftId } from "../lib/shift";
 import { computeTax, taxConfigFrom } from "../lib/tax";
@@ -41,6 +42,7 @@ import {
   prepareTableCheckout,
   settleTableBill,
 } from "../lib/tables";
+import { TAB_KEY, linkKitchenTickets } from "../lib/kitchen";
 import { publishFloor } from "../lib/floor-events";
 
 // Transaction client type (drizzle's tx has the same query builder as `db`).
@@ -258,6 +260,15 @@ export async function mutationRoutes(app: FastifyInstance) {
       // don't add up.
       const paymentMethod = parsePosPaymentMethod(body.paymentMethod);
 
+      // Dine In / Take Away. A table's bill was eaten at the table, whatever
+      // the client says; a counter sale is what the cashier picked, and a
+      // client that sends nothing (desktop cashier, add-pos-to-cashflowin) or
+      // an outlet whose owner turned the switch off writes NULL — "not
+      // recorded", never a guess.
+      const serviceType = tableLink
+        ? "dine_in"
+        : counterServiceType(access.outlet, body.serviceType);
+
       // Tax is computed HERE, from the outlet's own settings, and never taken
       // from the request. The cashier screen works the same sum out for display,
       // but a client is free to send anything and the amount handed to the tax
@@ -296,9 +307,9 @@ export async function mutationRoutes(app: FastifyInstance) {
         await db.transaction(async (tx) => {
           // First, before membership locks anything: a stale table bill is
           // refused outright rather than half way through the sale.
-          if (tableLink) {
-            await prepareTableCheckout(tx, body.outletId, tableLink, body.cart);
-          }
+          const tableLabel = tableLink
+            ? (await prepareTableCheckout(tx, body.outletId, tableLink, body.cart)).tableLabel
+            : null;
 
           // Re-quoted here, inside the transaction, with the member row
           // locked: the preview the cashier screen showed is a preview, and
@@ -344,6 +355,9 @@ export async function mutationRoutes(app: FastifyInstance) {
               status: "delivered",
               outlet_id: body.outletId,
               shift_id: shiftId,
+              service_type: serviceType,
+              // Laporan per Meja reads this; clearing the table forgets it.
+              table_label: tableLabel,
               // Frozen: a rate change tomorrow must not rewrite this sale.
               // All three stay NULL when no tax applied, so a reader can tell
               // "not taxed" from "taxed at zero".
@@ -544,6 +558,26 @@ export async function mutationRoutes(app: FastifyInstance) {
 
       // Committed: the floor's counts moved, and a table bill just settled.
       publishFloor(body.outletId, "order", [tableLink?.sessionId]);
+
+      // The kitchen screen's tickets for this sale learn its order number.
+      // After the commit, because it is only a label: a failure here leaves
+      // a ticket without its number, never a sale undone.
+      if (new_order_id) {
+        try {
+          const linked = await linkKitchenTickets({
+            outletId: body.outletId,
+            orderId: new_order_id,
+            tabKey:
+              typeof body.kitchenTabKey === "string" && TAB_KEY.test(body.kitchenTabKey)
+                ? body.kitchenTabKey
+                : null,
+            tableBill: !!tableLink,
+          });
+          if (linked > 0) publishFloor(body.outletId, "ticket");
+        } catch (err) {
+          app.log.warn({ err, orderId: new_order_id }, "Kitchen tickets not linked to order");
+        }
+      }
 
       // The membership figures go back so the receipt prints what actually
       // happened, not what the screen predicted before checkout.

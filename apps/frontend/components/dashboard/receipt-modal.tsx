@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { Printer, X, CheckCircle } from "lucide-react";
 import { resolveOutletImage } from "@/lib/image-src";
 import { posPaymentLabel } from "@/lib/pos-payment";
+import { SERVICE_TYPE_LABEL, type ServiceType } from "@/lib/service-type";
 import { buildOrderLabelBatch, openOrderLabelApp, type OrderLabel } from "@/lib/labelbridge";
 
 /** How long the closing receipt takes to fly into `flyToRef`. */
@@ -109,6 +110,12 @@ export type ReceiptData = {
      */
     tableLabel?: string;
     /**
+     * Dine In / Take Away on a counter sale. Left unset on a table's slip — the
+     * MEJA line already says it is eaten in. On the kitchen ticket it is
+     * printed large: it is whether the dish gets plated or packed.
+     */
+    serviceType?: ServiceType;
+    /**
      * A pre-bill handed to a table before paying (Cetak Bill). Printed with a
      * "not yet paid" banner so it can never be mistaken for a receipt.
      */
@@ -123,7 +130,7 @@ const shareOf = (total: number, n: number) => Math.ceil(total / n);
 type Props = {
     data: ReceiptData;
     onClose: () => void;
-    /** Modal title. "Order Placed!" is wrong for a courier pickup slip. */
+    /** Modal title. "Pesanan Berhasil!" is wrong for a courier pickup slip. */
     heading?: string;
     /**
      * "kitchen" prints the prep ticket instead of the customer receipt: no logo,
@@ -372,6 +379,7 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
     // still in their hand.
     if (data.pagerNumber) row("Pager", data.pagerNumber);
     if (data.tableLabel) row("Meja", data.tableLabel);
+    if (data.serviceType) row("Layanan", SERVICE_TYPE_LABEL[data.serviceType]);
     divider();
 
     for (const item of data.items) {
@@ -563,6 +571,15 @@ function buildKitchenEscposBase64(data: ReceiptData, paper: PaperWidth): string 
         size(0x00);
         bold(false);
     }
+    if (data.serviceType) {
+        // Plate or pack: double size, one step under the pager, so it is read
+        // before the first dish is started.
+        bold(true);
+        size(0x11);
+        line(SERVICE_TYPE_LABEL[data.serviceType].toUpperCase());
+        size(0x00);
+        bold(false);
+    }
     divider();
 
     align(0);
@@ -617,7 +634,7 @@ function buildKitchenEscposBase64(data: ReceiptData, paper: PaperWidth): string 
  */
 const SHOW_ORDER_LABELS: boolean = false;
 
-export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant = "customer", flyToRef }: Props) {
+export function ReceiptModal({ data, onClose, heading = "Pesanan Berhasil!", variant = "customer", flyToRef }: Props) {
     const isKitchen = variant === "kitchen";
     const shortId = data.orderId.split("-")[0].toUpperCase();
 
@@ -805,6 +822,7 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
   ${data.customerName ? `<div class="row sm"><span>Pelanggan</span><span>${esc(data.customerName)}</span></div>` : ""}
   ${data.pagerNumber ? `<div class="row sm"><span>Pager</span><span class="b">${esc(data.pagerNumber)}</span></div>` : ""}
   ${data.tableLabel ? `<div class="row sm"><span>Meja</span><span class="b">${esc(data.tableLabel)}</span></div>` : ""}
+  ${data.serviceType ? `<div class="row sm"><span>Layanan</span><span class="b">${SERVICE_TYPE_LABEL[data.serviceType]}</span></div>` : ""}
   <div class="dv"></div>
   ${itemsHtml}
   <div class="dv"></div>
@@ -879,6 +897,7 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
   <div class="c b lg">PESANAN DAPUR</div>
   ${data.pagerNumber ? `<div class="c b xl">PAGER ${esc(data.pagerNumber)}</div>` : ""}
   ${data.tableLabel ? `<div class="c b xl">MEJA ${esc(data.tableLabel)}</div>` : ""}
+  ${data.serviceType ? `<div class="c b lg">${SERVICE_TYPE_LABEL[data.serviceType].toUpperCase()}</div>` : ""}
   <div class="dv"></div>
   <div class="row sm"><span>Jam</span><span>${data.date.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}</span></div>
   <div class="row sm"><span>Kasir</span><span>${esc(data.cashierName)}</span></div>
@@ -1020,20 +1039,25 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
                                     MEJA {data.tableLabel}
                                 </p>
                             )}
+                            {data.serviceType && (
+                                <p className="text-center font-black text-xl tracking-wider mt-1">
+                                    {SERVICE_TYPE_LABEL[data.serviceType].toUpperCase()}
+                                </p>
+                            )}
 
                             <div className="border-t border-dashed border-gray-300 my-3" />
 
                             <div className="flex justify-between text-xs mb-1">
-                                <span className="text-gray-500">Time</span>
+                                <span className="text-gray-500">Jam</span>
                                 <span>{data.date.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}</span>
                             </div>
                             <div className="flex justify-between text-xs mb-1">
-                                <span className="text-gray-500">Cashier</span>
+                                <span className="text-gray-500">Kasir</span>
                                 <span>{data.cashierName}</span>
                             </div>
                             {data.customerName && (
                                 <div className="flex justify-between text-xs mb-1">
-                                    <span className="text-gray-500">Customer</span>
+                                    <span className="text-gray-500">Pelanggan</span>
                                     <span className="font-semibold">{data.customerName}</span>
                                 </div>
                             )}
@@ -1101,20 +1125,20 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
                             <span className="font-bold">{shortId}</span>
                         </div>
                         <div className="flex justify-between text-xs mb-1">
-                            <span className="text-gray-500">Date</span>
+                            <span className="text-gray-500">Tanggal</span>
                             <span>{data.date.toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" })}</span>
                         </div>
                         <div className="flex justify-between text-xs mb-1">
-                            <span className="text-gray-500">Time</span>
+                            <span className="text-gray-500">Jam</span>
                             <span>{data.date.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}</span>
                         </div>
                         <div className="flex justify-between text-xs mb-1">
-                            <span className="text-gray-500">Cashier</span>
+                            <span className="text-gray-500">Kasir</span>
                             <span>{data.cashierName}</span>
                         </div>
                         {data.customerName && (
                             <div className="flex justify-between text-xs mb-1">
-                                <span className="text-gray-500">Customer</span>
+                                <span className="text-gray-500">Pelanggan</span>
                                 <span className="font-semibold">{data.customerName}</span>
                             </div>
                         )}
@@ -1128,6 +1152,12 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
                             <div className="flex justify-between text-xs mb-1">
                                 <span className="text-gray-500">Meja</span>
                                 <span className="font-bold">{data.tableLabel}</span>
+                            </div>
+                        )}
+                        {data.serviceType && (
+                            <div className="flex justify-between text-xs mb-1">
+                                <span className="text-gray-500">Layanan</span>
+                                <span className="font-bold">{SERVICE_TYPE_LABEL[data.serviceType]}</span>
                             </div>
                         )}
 
@@ -1158,7 +1188,7 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
                                         </div>
                                         {isDiscount && (
                                             <div className="flex justify-between text-[11px] text-rose-500">
-                                                <span>Item discount</span>
+                                                <span>Diskon item</span>
                                                 <span>-{fmt(itemDiscount)}</span>
                                             </div>
                                         )}
@@ -1245,7 +1275,7 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
                             <>
                                 {data.paymentMethod !== 'cash' ? (
                                     <div className="flex justify-between font-bold text-sm">
-                                        <span>Payment</span>
+                                        <span>Pembayaran</span>
                                         <span className="text-blue-600">
                                             {posPaymentLabel(data.paymentMethod)}
                                         </span>
@@ -1253,11 +1283,11 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
                                 ) : (
                                     <>
                                         <div className="flex justify-between text-xs mb-1">
-                                            <span className="text-gray-500">Cash</span>
+                                            <span className="text-gray-500">Tunai</span>
                                             <span>{fmt(data.amountPaid ?? 0)}</span>
                                         </div>
                                         <div className="flex justify-between font-bold text-sm">
-                                            <span>Change</span>
+                                            <span>Kembali</span>
                                             <span className="text-emerald-600">{fmt(data.changeDue ?? 0)}</span>
                                         </div>
                                     </>
@@ -1298,8 +1328,8 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
                         )}
 
                         {/* Footer */}
-                        <p className="text-center text-xs text-gray-400">Thank you for your purchase!</p>
-                        <p className="text-center text-xs text-gray-400">Please come again 🙏</p>
+                        <p className="text-center text-xs text-gray-400">Terima kasih!</p>
+                        <p className="text-center text-xs text-gray-400">Silakan datang kembali 🙏</p>
                     </div>
                     )}
                 </div>
@@ -1328,7 +1358,7 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
                         onClick={flyAway}
                         className="flex-1 h-11 rounded-xl border-2 font-semibold text-sm text-gray-600 hover:bg-gray-50 transition-colors"
                     >
-                        Close
+                        Tutup
                     </button>
                     {SHOW_ORDER_LABELS && !isKitchen && (
                         <button
@@ -1336,7 +1366,7 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
                             className="flex-1 h-11 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-semibold text-sm flex items-center justify-center gap-2 transition-colors"
                         >
                             <Printer className="h-4 w-4" />
-                            Print Labels
+                            Cetak Label
                         </button>
                     )}
                     <button
@@ -1344,7 +1374,7 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
                         className="flex-1 h-11 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm flex items-center justify-center gap-2 transition-colors"
                     >
                         <Printer className="h-4 w-4" />
-                        Print
+                        Cetak
                     </button>
                 </div>
             </div>

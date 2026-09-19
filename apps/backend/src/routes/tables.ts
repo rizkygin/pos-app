@@ -26,6 +26,7 @@ import {
   lineUnitPrice,
   parseCartLine,
   releaseSessionTables,
+  sessionTableLabel,
   unpaidLines,
   type LineAddon,
   type LineProduct,
@@ -52,7 +53,7 @@ import { normalizeIndonesianPhone } from "../lib/utils/phone";
  * contents can also be edited by `cashier`, because the cashier is who rings
  * the items in; so can reading the floor.
  *
- * PLAN GATING (`tableManagement`, Max Lite and up) follows the shift rule:
+ * PLAN GATING (`tableManagement`, Max and up) follows the shift rule:
  * what STARTS something is gated — editing the layout, seating a table, adding
  * to the waitlist or the book, blocking a table. What winds down a seating
  * that already exists is not: saving and paying its bill, moving it, clearing
@@ -63,7 +64,7 @@ import { normalizeIndonesianPhone } from "../lib/utils/phone";
 
 const FEATURE = "tableManagement";
 const UPGRADE_MESSAGE =
-  "Manajemen Meja tersedia mulai paket Max Lite — upgrade paket untuk membukanya.";
+  "Manajemen Meja tersedia mulai paket Max — upgrade paket untuk membukanya.";
 
 const FLOOR = ["tables"] as const;
 const FLOOR_OR_CASHIER = ["tables", "cashier"] as const;
@@ -415,12 +416,12 @@ export async function tableRoutes(app: FastifyInstance) {
         )
         .orderBy(asc(tableWaitlistTable.created_at)),
       getOpenShift(db, outletId),
-      // Today's counter sales, split by whether a table's bill became them.
+      // Today's counter sales by how they were served, as recorded at checkout
+      // (orders.service_type). A sale that recorded none — an older client —
+      // counts in neither: guessing it was take away is what this replaced.
       db.execute(sql`
-        select count(*)::int as total,
-               count(*) filter (where exists (
-                 select 1 from table_session_lines l where l.order_id = o.id
-               ))::int as dine_in
+        select count(*) filter (where o.service_type = 'dine_in')::int as dine_in,
+               count(*) filter (where o.service_type = 'take_away')::int as take_away
           from orders o
          where o.outlet_id = ${outletId}
            and o.source = 'pos'
@@ -477,7 +478,7 @@ export async function tableRoutes(app: FastifyInstance) {
       if (!holding.has(r.table_id)) holding.set(r.table_id, r);
     }
 
-    const today = (todayRows.rows[0] ?? {}) as { total?: number; dine_in?: number };
+    const today = (todayRows.rows[0] ?? {}) as { dine_in?: number; take_away?: number };
     const tableLabel = new Map(tables.map((t) => [t.id, t.label]));
 
     return {
@@ -505,7 +506,7 @@ export async function tableRoutes(app: FastifyInstance) {
       shift: shift ? { cashierName: shift.cashier_name, openedAt: iso(shift.opened_at) } : null,
       today: {
         dineIn: Number(today.dine_in ?? 0),
-        takeAway: Number(today.total ?? 0) - Number(today.dine_in ?? 0),
+        takeAway: Number(today.take_away ?? 0),
       },
       zones: zones.map((z) => ({
         id: z.id,
@@ -1301,19 +1302,13 @@ export async function tableRoutes(app: FastifyInstance) {
           .filter((l): l is KitchenLine => l !== null);
         let made: { id: number; ticketNo: number } | null = null;
         if (fresh.length) {
-          const held = await tx
-            .select({ label: diningTablesTable.label })
-            .from(diningTablesTable)
-            .where(eq(diningTablesTable.session_id, sessionId));
           made = await insertKitchenTicket(tx, {
             outletId: access.outlet.id,
             timezone: timezoneOf(request),
             source: "table",
             sessionId,
-            label: held
-              .map((t) => t.label)
-              .sort((a, b) => a.localeCompare(b, "id", { numeric: true }))
-              .join("+"),
+            // The same text a paid bill freezes as orders.table_label.
+            label: await sessionTableLabel(tx, sessionId),
             customer: s.guest_name,
             lines: fresh,
             createdBy: access.userId,
