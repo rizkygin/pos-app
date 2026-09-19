@@ -519,6 +519,13 @@
       "when": 1788515327308,
       "tag": "0073_membership",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1789748898324,
+      "tag": "0074_table_management",
+      "breakpoints": true
     }
   ]
 }

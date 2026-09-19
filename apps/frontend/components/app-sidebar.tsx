@@ -53,7 +53,8 @@ import {
   Truck,
   Home,
   ShieldCheck,
-  Wrench
+  Wrench,
+  Armchair
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -110,6 +111,15 @@ const navMain: NavItem[] = [
     icon: Building2,
     iconBg: 'bg-cyan-100 dark:bg-cyan-950',
     iconColor: 'text-cyan-600 dark:text-cyan-400',
+  },
+  {
+    // Listed for every owner, like Membership: the page explains the plan
+    // boundary itself, and a hidden entry is a feature nobody finds.
+    name: 'Manajemen Meja',
+    url: '/dashboard/tables',
+    icon: Armchair,
+    iconBg: 'bg-indigo-100 dark:bg-indigo-950',
+    iconColor: 'text-indigo-600 dark:text-indigo-400',
   },
   {
     name: 'Buku Kas',
@@ -479,7 +489,7 @@ export function AppSidebar({
   const router = useRouter();
   const currentUrl = useCurrentUrl();
   const { data: session } = useSession();
-  const ownerOnlyNames = new Set(['Product', 'Laporan', 'Kasir', 'Buku Kas']);
+  const ownerOnlyNames = new Set(['Product', 'Laporan', 'Kasir', 'Manajemen Meja', 'Buku Kas']);
   // Employees see exactly the pages their permission map allows (set by the
   // owner in /dashboard/employees). Keys mirror backend EMPLOYEE_PERMISSIONS.
   const can = (perm: string) => employeePermissions?.[perm] === true;
@@ -488,6 +498,7 @@ export function AppSidebar({
     Product: 'products',
     Laporan: 'reports',
     Kasir: 'cashier',
+    'Manajemen Meja': 'tables',
     'Buku Kas': 'cashflow',
   };
   const employeeInvoiceSubPerm: Record<string, string> = {

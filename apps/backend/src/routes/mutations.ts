@@ -35,6 +35,13 @@ import {
 } from "../lib/membership";
 import { DEFAULT_COORDS, parseCoordPair } from "../lib/utils/coords";
 import { isWithinServiceArea } from "../lib/service-area";
+import {
+  HttpError,
+  parseTableCheckoutLink,
+  prepareTableCheckout,
+  settleTableBill,
+} from "../lib/tables";
+import { publishFloor } from "../lib/floor-events";
 
 // Transaction client type (drizzle's tx has the same query builder as `db`).
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -172,6 +179,15 @@ export async function mutationRoutes(app: FastifyInstance) {
         return reply.status(400).send({ error: { message: "Keranjang kosong" } });
       }
 
+      // A table's bill being paid (Manajemen Meja). Optional: a counter sale
+      // carries none and takes exactly the path it always has. When present,
+      // the cart must BE that bill, checked under lock inside the transaction
+      // below — see lib/tables.ts.
+      const tableLink = parseTableCheckoutLink(body.tableSession);
+      if (tableLink === "invalid") {
+        return reply.status(400).send({ error: { message: "Data meja tidak valid" } });
+      }
+
       // Idempotency: BOTH cashiers send their own client-generated orderId, so
       // a retried request — e.g. the response was lost after the server already
       // committed — replays as a no-op instead of ringing up the sale twice.
@@ -278,6 +294,12 @@ export async function mutationRoutes(app: FastifyInstance) {
 
       try {
         await db.transaction(async (tx) => {
+          // First, before membership locks anything: a stale table bill is
+          // refused outright rather than half way through the sale.
+          if (tableLink) {
+            await prepareTableCheckout(tx, body.outletId, tableLink, body.cart);
+          }
+
           // Re-quoted here, inside the transaction, with the member row
           // locked: the preview the cashier screen showed is a preview, and
           // two tills redeeming one balance at the same moment must serialise
@@ -472,6 +494,10 @@ export async function mutationRoutes(app: FastifyInstance) {
                 });
               }
             }
+
+            // The table's lines now point at the order they became. Same
+            // transaction, so a sale that rolls back leaves the bill open.
+            if (tableLink) await settleTableBill(tx, tableLink, new_order_id);
           }
 
           // tax.total, not body.total: under exclusive pricing the customer
@@ -493,7 +519,10 @@ export async function mutationRoutes(app: FastifyInstance) {
         // duplicate here — treat it exactly like the pre-check hit (already
         // processed), instead of surfacing a raw constraint-violation 500.
         const pgCode = err?.code ?? err?.cause?.code;
-        if (clientOrderId && pgCode === "23505") {
+        // A table bill adds a second way to lose that race: the loser waits on
+        // the seating's row lock and then finds the bill already paid — by its
+        // own twin. Same read-back decides it.
+        if (clientOrderId && (pgCode === "23505" || err instanceof HttpError)) {
           // Only the orders PK means "already committed". A 23505 raised by any
           // OTHER unique constraint in this transaction (a promo use, a
           // membership row) rolled the whole sale back, and answering success
@@ -513,6 +542,9 @@ export async function mutationRoutes(app: FastifyInstance) {
         throw err; // anything else: let the outer catch handle it, unchanged
       }
 
+      // Committed: the floor's counts moved, and a table bill just settled.
+      publishFloor(body.outletId, "order", [tableLink?.sessionId]);
+
       // The membership figures go back so the receipt prints what actually
       // happened, not what the screen predicted before checkout.
       return {
@@ -524,6 +556,13 @@ export async function mutationRoutes(app: FastifyInstance) {
         membership: applied,
       };
     } catch (error: any) {
+      // A table bill that moved under the cashier: say so, with a status the
+      // client can tell apart from the server falling over.
+      if (error instanceof HttpError) {
+        return reply
+          .status(error.status)
+          .send({ error: { message: error.message }, code: error.code });
+      }
       return reply.status(500).send({ error: { message: error.message || "Internal server error" } });
     }
   });
@@ -724,6 +763,7 @@ export async function mutationRoutes(app: FastifyInstance) {
       if (result.status !== 200) {
         return reply.status(result.status).send({ success: false, error: result.error });
       }
+      publishFloor(access.outlet.id, "order-cancel");
       return { success: true, alreadyCancelled: result.alreadyCancelled ?? false, amount: result.amount ?? 0 };
     } catch (error: any) {
       return reply

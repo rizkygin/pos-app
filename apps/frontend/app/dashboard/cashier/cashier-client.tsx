@@ -33,7 +33,10 @@ import {
   Check,
   Clock,
   User,
+  Armchair,
+  RefreshCw,
 } from 'lucide-react';
+import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { formatCurrency } from '@/lib/utils/format';
 import {
@@ -173,6 +176,65 @@ const unitPriceOf = (item: CartItem) => {
   return base + addons;
 };
 
+/**
+ * Manajemen Meja: a tab that IS one bill of a seated table.
+ *
+ * The bill itself lives on the server (table_session_lines), because the host
+ * moves items between tables and splits bills from another device. The tab is
+ * a local copy of it, so it remembers which version it was built from — saves
+ * and checkout both carry that version and are refused if the table changed
+ * underneath — and what its cart looked like when it last matched the server,
+ * which is how it knows it has edits to save.
+ */
+type TableLink = {
+  sessionId: string;
+  billNo: number;
+  /** "05", or "05+06" for merged tables. */
+  label: string;
+  version: number;
+  /** cartSignature() of the cart as last saved to / loaded from the table. */
+  synced: string;
+  /**
+   * Quantity of each line as saved on the table. For a user who may not void
+   * (Kasir-only — see canVoid), this is a floor: saved items can be added
+   * to, never taken back. The server enforces it; this only locks the buttons.
+   */
+  savedQty?: Record<string, number>;
+  /** Owner or floor staff: may reduce or remove saved items. */
+  canVoid?: boolean;
+};
+
+/** An open table bill as the till's "Meja" picker lists it (GET /api/table-sessions). */
+type OpenTableBill = {
+  id: string;
+  guestName: string | null;
+  pax: number;
+  seatedAt: string;
+  billRequestedAt: string | null;
+  splitCount: number | null;
+  tableLabel: string;
+  total: number;
+  unsentQty: number;
+  bills: { billNo: number; itemCount: number; total: number }[];
+};
+
+/**
+ * What a table bill's contents are, for telling saved from unsaved. The price
+ * is in it on purpose: accepting new menu prices ("Pakai harga baru") changes
+ * no quantity, but the table must hear about it before the bill is paid, or
+ * the order and the table's own record of the bill would disagree.
+ */
+const cartSignature = (items: CartItem[]) =>
+  JSON.stringify(
+    items.map((i) => [
+      i.lineId,
+      i.quantity,
+      i.note ?? '',
+      unitPriceOf(i),
+      lineSignature(i.product.id, i.addons),
+    ]),
+  );
+
 // A parked/held order kept in localStorage so a cashier can juggle several open
 // carts (e.g. one per table) and check out later without losing anything.
 type HeldTab = {
@@ -200,6 +262,8 @@ type HeldTab = {
   memberPhone: string;
   promoCode: string;
   pointsToRedeem: number;
+  /** Set when this tab is a table's bill (Manajemen Meja). */
+  table?: TableLink;
 };
 
 const newHeldTab = (label: string): HeldTab => ({
@@ -271,6 +335,12 @@ type CashierClientProps = {
    */
   canUseMembership: boolean;
   /**
+   * Manajemen Meja. Shows the "Meja" picker of open table bills — how a till
+   * that did not take the order finds the bill to ring up, since held tabs
+   * are per device.
+   */
+  canUseTables: boolean;
+  /**
    * The outlet's counter tax, already resolved against the plan gate on the
    * server (disabled below Max Lite). Used for DISPLAY only — the server
    * recomputes the stored figure from its own copy of these settings.
@@ -313,6 +383,7 @@ export const CashierClient = ({
   canUseShift,
   canUsePager,
   canUseMembership,
+  canUseTables,
   taxConfig,
   initialProducts,
 }: CashierClientProps) => {
@@ -870,7 +941,17 @@ export const CashierClient = ({
     (id: string) => {
       const t = tabsRef.current.find((x) => x.id === id);
       const count = t ? t.cart.reduce((acc, i) => acc + i.quantity, 0) : 0;
-      if (
+      // A table's bill is safe on the server; only edits not yet saved to
+      // the table are at stake when its tab closes.
+      if (t?.table) {
+        if (
+          cartSignature(t.cart) !== t.table.synced &&
+          !window.confirm(
+            `Tutup tab Meja ${t.table.label}? Bill-nya tetap tersimpan, tapi perubahan yang belum disimpan akan hilang.`,
+          )
+        )
+          return;
+      } else if (
         count > 0 &&
         !window.confirm(
           'Tutup tab ini? Keranjang yang belum dibayar akan hilang.',
@@ -1019,6 +1100,253 @@ export const CashierClient = ({
     persistTabs(next, target.id);
   }, [applyTab, persistTabs]);
 
+  // ── Table bills (Manajemen Meja) ──────────────────────────────────────────
+  //
+  // The floor plan sends the cashier here with ?table=<seating>&bill=<n>; that
+  // bill becomes a tab. Everything else about the tab — picking products,
+  // add-ons, notes, discounts, payment — is the counter as it always was.
+  const [tableNotice, setTableNotice] = useState<{
+    ok: boolean;
+    text: string;
+    /** The tab is older than the table: offer to reload it. */
+    conflict?: boolean;
+  } | null>(null);
+  const [tableBusy, setTableBusy] = useState(false);
+
+  useEffect(() => {
+    if (!tableNotice || tableNotice.conflict) return;
+    const t = setTimeout(() => setTableNotice(null), tableNotice.ok ? 2500 : 6000);
+    return () => clearTimeout(t);
+  }, [tableNotice]);
+
+  /** Write a tab's table link, synchronously through the ref (see repriceStaleLines). */
+  const setTabTable = useCallback(
+    (tabId: string, link: TableLink) => {
+      const next = tabsRef.current.map((t) => (t.id === tabId ? { ...t, table: link } : t));
+      tabsRef.current = next;
+      setTabs(next);
+      persistTabs(next, activeIdRef.current);
+    },
+    [persistTabs],
+  );
+
+  type ServerBillLine = {
+    lineId: string;
+    billNo: number;
+    product: Product;
+    quantity: number;
+    addons?: CartAddon[];
+    note?: string;
+    sentQty: number;
+  };
+  type ServerSession = {
+    id: string;
+    guestName: string | null;
+    version: number;
+    closed: boolean;
+    tables: { id: number; label: string }[];
+    lines: ServerBillLine[];
+  };
+
+  /**
+   * Put a table's bill in a tab: the tab that already holds it (replacing its
+   * cart with the server's), or a new one. The server is the truth here — the
+   * host may have moved or split items since — so a tab with unsaved edits
+   * asks before they are thrown away.
+   */
+  const openTableBill = useCallback(
+    async (
+      sessionId: string,
+      billNo: number,
+      opts?: {
+        /** Refresh a tab that already holds this bill; never open a new one. */
+        onlyExisting?: boolean;
+        /** Say this when done, instead of clearing the notice. */
+        notice?: string;
+      },
+    ) => {
+      setTableBusy(true);
+      try {
+        const res = await fetch(
+          `${API_URL}/api/table-sessions/${encodeURIComponent(sessionId)}`,
+          { credentials: 'include' },
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data?.success) {
+          setTableNotice({ ok: false, text: data?.error || 'Bill meja tidak bisa dibuka.' });
+          return;
+        }
+        const s: ServerSession = data.session;
+        if (s.closed) {
+          setTableNotice({ ok: false, text: 'Meja ini sudah dikosongkan.' });
+          return;
+        }
+        const cartFromTable: CartItem[] = s.lines
+          .filter((l) => l.billNo === billNo)
+          .map((l) => ({
+            lineId: l.lineId,
+            product: l.product,
+            quantity: l.quantity,
+            note: l.note || undefined,
+            addons: l.addons ?? [],
+          }));
+        const label = s.tables.map((t) => t.label).join('+') || '?';
+        const link: TableLink = {
+          sessionId: s.id,
+          billNo,
+          label,
+          version: s.version,
+          synced: cartSignature(cartFromTable),
+          savedQty: Object.fromEntries(cartFromTable.map((i) => [i.lineId, i.quantity])),
+          canVoid: data.canVoid === true,
+        };
+        const tabLabel = `Meja ${label}${billNo > 1 ? ` · Bill ${String.fromCharCode(64 + billNo)}` : ''}`;
+
+        const existing = tabsRef.current.find(
+          (t) => t.table?.sessionId === s.id && t.table.billNo === billNo,
+        );
+        let target: HeldTab;
+        let next: HeldTab[];
+        if (existing) {
+          const dirty = cartSignature(existing.cart) !== existing.table!.synced;
+          const keepLocal =
+            dirty &&
+            cartSignature(existing.cart) !== link.synced &&
+            !window.confirm(
+              `Tab ${tabLabel} punya perubahan yang belum disimpan. Ganti dengan bill terbaru?`,
+            );
+          target = keepLocal
+            ? existing
+            : {
+                ...existing,
+                label: tabLabel,
+                cart: cartFromTable,
+                customerName: existing.customerName || s.guestName || '',
+                table: link,
+              };
+          next = tabsRef.current.map((t) => (t.id === existing.id ? target : t));
+        } else {
+          // A live refresh racing a checkout that just closed this tab must
+          // not bring the (now settled) bill back as a fresh tab.
+          if (opts?.onlyExisting) return;
+          target = {
+            ...newHeldTab(tabLabel),
+            cart: cartFromTable,
+            customerName: s.guestName ?? '',
+            table: link,
+          };
+          // An untouched empty tab is replaced rather than left behind, so
+          // hopping between tables doesn't litter the list with blank tabs.
+          const active = tabsRef.current.find((t) => t.id === activeIdRef.current);
+          const blank =
+            active && !active.table && active.cart.length === 0 && !active.customerName.trim();
+          next = blank
+            ? tabsRef.current.map((t) => (t.id === active.id ? target : t))
+            : [...tabsRef.current, target];
+        }
+        tabsRef.current = next;
+        setTabs(next);
+        setActiveTabId(target.id);
+        applyTab(target);
+        persistTabs(next, target.id);
+        setTableNotice(opts?.notice ? { ok: true, text: opts.notice } : null);
+      } catch {
+        setTableNotice({ ok: false, text: 'Tidak bisa terhubung ke server.' });
+      } finally {
+        setTableBusy(false);
+      }
+    },
+    [applyTab, persistTabs],
+  );
+
+  /**
+   * Save the active table tab's cart as its bill. Returns the fresh link and
+   * the server's lines (with what the kitchen already knows), or null when
+   * the save was refused — a conflict leaves the tab untouched and says so.
+   */
+  // Saves in flight. The live stream announces a save the moment it commits,
+  // which can be before this device has read its own reply — see the live
+  // listener below, which waits these out rather than mistake our own save
+  // for someone else's.
+  const tableSavingRef = useRef(0);
+
+  const saveTableBill = useCallback(
+    async (tabId: string, link: TableLink, items: CartItem[]) => {
+      tableSavingRef.current += 1;
+      try {
+        const res = await fetch(
+          `${API_URL}/api/table-sessions/${encodeURIComponent(link.sessionId)}/bills/${link.billNo}/lines`,
+          {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ version: link.version, lines: items }),
+          },
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data?.success) {
+          setTableNotice({
+            ok: false,
+            text: data?.error || `Gagal menyimpan bill (${res.status})`,
+            conflict: res.status === 409,
+          });
+          return null;
+        }
+        const s: ServerSession = data.session;
+        const fresh: TableLink = {
+          ...link,
+          version: s.version,
+          synced: cartSignature(items),
+          // What is saved now becomes the floor a Kasir-only user can't go under.
+          savedQty: Object.fromEntries(
+            s.lines.filter((l) => l.billNo === link.billNo).map((l) => [l.lineId, l.quantity]),
+          ),
+          canVoid: data.canVoid === true,
+        };
+        setTabTable(tabId, fresh);
+        return { link: fresh, lines: s.lines };
+      } finally {
+        tableSavingRef.current -= 1;
+      }
+    },
+    [setTabTable],
+  );
+
+  // Arriving from the floor plan. Read once, after the held tabs are loaded
+  // (a table bill may already have a tab), then dropped from the address bar
+  // so a reload doesn't pull the bill in over edits made since.
+  const tableParamsReadRef = useRef(false);
+  useEffect(() => {
+    if (!hydrated || tableParamsReadRef.current) return;
+    tableParamsReadRef.current = true;
+    const params = new URLSearchParams(window.location.search);
+    const sessionId = params.get('table');
+    const takeaway = params.get('takeaway');
+    if (!sessionId && !takeaway) return;
+    window.history.replaceState(null, '', window.location.pathname);
+    const billNo = Math.max(1, Math.min(20, Number(params.get('bill')) || 1));
+    // Deferred a tick rather than run during the effect; deliberately not
+    // cancelled on cleanup, because the ref above means a dev-mode re-run
+    // would never schedule it again.
+    setTimeout(() => {
+      if (sessionId) {
+        void openTableBill(sessionId, billNo);
+        return;
+      }
+      // Take Away from the floor: a fresh counter tab, unless the one on
+      // screen is already blank.
+      const active = tabsRef.current.find((t) => t.id === activeIdRef.current);
+      if (active && !active.table && active.cart.length === 0) return;
+      const t = newHeldTab('Take Away');
+      const next = [...tabsRef.current, t];
+      tabsRef.current = next;
+      setTabs(next);
+      setActiveTabId(t.id);
+      applyTab(t);
+      persistTabs(next, t.id);
+    }, 0);
+  }, [hydrated, openTableBill, applyTab, persistTabs]);
+
   // Tabs come straight from the products the cashier already has, and prefer
   // the owner's own menu sections over the raw platform category — same
   // arrangement the customer sees on /dashboard/order, so staff and customers
@@ -1092,6 +1420,19 @@ export const CashierClient = ({
       return matchesCategory && matchesSearch;
     });
   }, [catalogue, selectedCategory, searchQuery, variantsByBase]);
+
+  /**
+   * On a table's bill, a Kasir-only user can add to what is saved but never
+   * take it back — a void is the owner's or the floor's call, and the server
+   * refuses it anyway. Returns the saved quantity a line can't go under (0 =
+   * no floor: a counter tab, an unsaved addition, or a user who may void).
+   */
+  const savedFloor = (lineId: string) => {
+    const link = tabsRef.current.find((t) => t.id === activeIdRef.current)?.table;
+    return link && !link.canVoid ? (link.savedQty?.[lineId] ?? 0) : 0;
+  };
+  const VOID_HINT =
+    'Item yang sudah tersimpan di bill meja hanya bisa ditambah. Mengurangi atau menghapusnya butuh izin Manajemen Meja.';
 
   // Cart operations
   const addToCart = (product: Product, addons?: CartAddon[]) => {
@@ -1172,10 +1513,12 @@ export const CashierClient = ({
   }, [barcodeFeedback]);
 
   const updateQuantity = (lineId: string, delta: number) => {
+    const floor = savedFloor(lineId);
     setCart((prev) =>
       prev.map((item) => {
         if (item.lineId === lineId) {
           const newQuantity = item.quantity + delta;
+          if (newQuantity < floor) return item;
           return newQuantity > 0 ? { ...item, quantity: newQuantity } : item;
         }
         return item;
@@ -1201,6 +1544,11 @@ export const CashierClient = ({
     // Blank or junk means "never mind" — keep the previous quantity instead of
     // silently dropping the line. Trash is what the button is for.
     if (!Number.isFinite(parsed) || parsed < 1) return;
+    const floor = savedFloor(lineId);
+    if (parsed < floor) {
+      setTableNotice({ ok: false, text: VOID_HINT });
+      return;
+    }
     setCart((prev) =>
       prev.map((item) =>
         item.lineId === lineId
@@ -1211,10 +1559,20 @@ export const CashierClient = ({
   };
 
   const removeFromCart = (lineId: string) => {
+    if (savedFloor(lineId) > 0) {
+      setTableNotice({ ok: false, text: VOID_HINT });
+      return;
+    }
     setCart((prev) => prev.filter((item) => item.lineId !== lineId));
   };
 
   const clearCart = () => {
+    // Emptying a table's bill is a void of everything on it. What this user
+    // CAN undo — additions not yet saved — is what "Muat ulang bill" is for.
+    if (cart.some((item) => savedFloor(item.lineId) > 0)) {
+      setTableNotice({ ok: false, text: VOID_HINT });
+      return;
+    }
     setCart([]);
     setDiscountInput('');
     setAmountPaidInput('0');
@@ -1493,6 +1851,154 @@ export const CashierClient = ({
     return tabs.some((t) => t.id !== activeTabId && t.pagerNumber.trim() === n);
   }, [canUsePager, pagerNumber, tabs, activeTabId]);
 
+  // The table this tab is the bill of, if any, and whether the cart on screen
+  // has drifted from what the table holds.
+  const activeTable = tabs.find((t) => t.id === activeTabId)?.table ?? null;
+  const tableDirty = !!activeTable && cartSignature(cart) !== activeTable.synced;
+  // Render-time twin of savedFloor(), for locking the buttons it would refuse.
+  // A copy rather than a closure over activeTable: the React compiler treats a
+  // captured object as mutable and would give up memoizing this component.
+  const savedFloors: Record<string, number> =
+    activeTable && !activeTable.canVoid ? { ...activeTable.savedQty } : {};
+  const cartHasSaved = cart.some((i) => (savedFloors[i.lineId] ?? 0) > 0);
+
+  // ── Live table updates ────────────────────────────────────────────────────
+  //
+  // While this device holds a table's bill, it listens to the floor's live
+  // stream (SSE, the same one the floor plan uses). When the host changes
+  // that bill elsewhere — moves an item, splits it, another till takes the
+  // payment — an untouched tab quietly reloads, and a tab with unsaved edits
+  // is told instead of overwritten. Only the ACTIVE tab: a parked table tab
+  // is checked when it is next saved or paid, which refuses a stale copy.
+  //
+  // Refs, so the connection is not torn down on every keystroke.
+  const activeTableRef = useRef<TableLink | null>(null);
+  const tableDirtyRef = useRef(false);
+  useEffect(() => {
+    activeTableRef.current = activeTable;
+    tableDirtyRef.current = tableDirty;
+  });
+  const hasTableTabs = tabs.some((t) => t.table);
+
+  // ── "Meja" picker: every open table bill, from any device ─────────────────
+  //
+  // Held tabs are per device, so the till that didn't take a table's order has
+  // no tab for it. This list is how it finds the bill; picking one opens it as
+  // a tab here, exactly as arriving from the floor plan does.
+  const [openBills, setOpenBills] = useState<OpenTableBill[] | null>(null);
+  const [billsMenuOpen, setBillsMenuOpen] = useState(false);
+  const loadOpenBills = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/table-sessions`, { credentials: 'include' });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.success && Array.isArray(data.sessions)) setOpenBills(data.sessions);
+    } catch {
+      /* keep the last list; the next live event or opening the menu retries */
+    }
+  }, []);
+  useEffect(() => {
+    if (!canUseTables) return;
+    const t = setTimeout(() => void loadOpenBills(), 0);
+    return () => clearTimeout(t);
+  }, [canUseTables, loadOpenBills]);
+
+  useEffect(() => {
+    if (!(hasTableTabs || canUseTables) || typeof EventSource === 'undefined') return;
+    let es: EventSource | null = null;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let pending: ReturnType<typeof setTimeout> | undefined;
+    let billsTimer: ReturnType<typeof setTimeout> | undefined;
+    let disposed = false;
+    // Any change on the floor may add, pay or empty a bill in the picker.
+    const refreshBills = () => {
+      if (!canUseTables) return;
+      clearTimeout(billsTimer);
+      billsTimer = setTimeout(() => void loadOpenBills(), 300);
+    };
+
+    const verify = async (tries = 0) => {
+      const link = activeTableRef.current;
+      if (!link || disposed) return;
+      // Our own save or checkout is in flight, and its reply is what brings
+      // this tab's version up to date. Look again once it has landed, rather
+      // than read our own change as somebody else's.
+      if (tableSavingRef.current > 0 || submittingRef.current) {
+        if (tries < 15) pending = setTimeout(() => void verify(tries + 1), 400);
+        return;
+      }
+      try {
+        const res = await fetch(
+          `${API_URL}/api/table-sessions/${encodeURIComponent(link.sessionId)}`,
+          { credentials: 'include' },
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data?.success || disposed) return;
+        const current = activeTableRef.current;
+        // Switched tabs while we were asking.
+        if (!current || current.sessionId !== link.sessionId || current.billNo !== link.billNo) return;
+        // Our own change, or one that doesn't touch the bill (kitchen sent).
+        if (data.session.version === current.version) return;
+        if (data.session.closed) {
+          setTableNotice({ ok: false, text: 'Meja ini sudah dikosongkan dari perangkat lain.' });
+          return;
+        }
+        if (tableDirtyRef.current) {
+          setTableNotice({
+            ok: false,
+            text: 'Bill meja ini diubah dari perangkat lain. Muat ulang sebelum menyimpan.',
+            conflict: true,
+          });
+          return;
+        }
+        void openTableBill(current.sessionId, current.billNo, {
+          onlyExisting: true,
+          notice: 'Bill diperbarui dari perangkat lain.',
+        });
+      } catch {
+        /* the next event, or the save/checkout check, will catch it */
+      }
+    };
+    const schedule = () => {
+      clearTimeout(pending);
+      pending = setTimeout(() => void verify(), 300);
+    };
+    const onFloor = (e: MessageEvent) => {
+      refreshBills();
+      const link = activeTableRef.current;
+      if (!link) return;
+      try {
+        const ids: unknown = JSON.parse(e.data)?.sessionIds;
+        if (Array.isArray(ids) && ids.includes(link.sessionId)) schedule();
+      } catch {
+        /* not ours to read */
+      }
+    };
+    const connect = () => {
+      es = new EventSource(`${API_URL}/api/floor/stream`, { withCredentials: true });
+      // (Re)connected: something may have changed while we were not listening.
+      es.addEventListener('ready', () => {
+        if (activeTableRef.current) schedule();
+        refreshBills();
+      });
+      es.addEventListener('floor', onFloor);
+      es.onerror = () => {
+        // See tables-client.tsx: an HTTP error closes the stream for good.
+        if (es?.readyState === EventSource.CLOSED && !disposed) {
+          es.close();
+          retry = setTimeout(connect, 5000);
+        }
+      };
+    };
+    connect();
+    return () => {
+      disposed = true;
+      clearTimeout(retry);
+      clearTimeout(pending);
+      clearTimeout(billsTimer);
+      es?.close();
+    };
+  }, [hasTableTabs, canUseTables, openTableBill, loadOpenBills]);
+
   // Shared slip payload. Before checkout there's no server order id yet, so the
   // active tab's id stands in — stable across reprints of the same tab, which
   // keeps a reprinted struk matching the first one. It is NOT the final order
@@ -1504,6 +2010,7 @@ export const CashierClient = ({
       // A tab held from before a downgrade still carries its number in
       // localStorage; the plan says it isn't printed any more.
       pagerNumber: canUsePager ? pagerNumber.trim() : '',
+      tableLabel: activeTable?.label,
       orderNote: orderNote.trim(),
       items: cart.map((i) => ({
         product_name: i.product.product_name,
@@ -1551,6 +2058,7 @@ export const CashierClient = ({
     }),
     [
       activeTabId,
+      activeTable,
       cart,
       cartTotal,
       customerName,
@@ -1601,6 +2109,97 @@ export const CashierClient = ({
     });
   };
 
+  /** "Simpan Bill": the active tab's cart becomes the table's bill. */
+  const saveActiveTable = async () => {
+    if (!activeTable || tableBusy) return;
+    setTableBusy(true);
+    const saved = await saveTableBill(activeIdRef.current, activeTable, cart);
+    setTableBusy(false);
+    if (saved) setTableNotice({ ok: true, text: `Bill Meja ${activeTable.label} tersimpan` });
+  };
+
+  /**
+   * Kirim Dapur for a table: save if needed, then print ONLY what the kitchen
+   * has not been told yet and mark it told — a table that adds a drink after
+   * its mains gets a ticket for the drink, not the whole table again.
+   */
+  const sendTableKitchen = async () => {
+    if (!activeTable || tableBusy || cart.length === 0) return;
+    setTableBusy(true);
+    try {
+      let lines: ServerBillLine[];
+      if (tableDirty) {
+        const saved = await saveTableBill(activeIdRef.current, activeTable, cart);
+        if (!saved) return;
+        lines = saved.lines;
+      } else {
+        const res = await fetch(
+          `${API_URL}/api/table-sessions/${encodeURIComponent(activeTable.sessionId)}`,
+          { credentials: 'include' },
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data?.success) {
+          setTableNotice({ ok: false, text: data?.error || 'Bill meja tidak bisa dibaca.' });
+          return;
+        }
+        if (data.session.version !== activeTable.version) {
+          setTableNotice({
+            ok: false,
+            text: 'Bill meja ini diubah dari perangkat lain. Muat ulang bill dulu.',
+            conflict: true,
+          });
+          return;
+        }
+        lines = data.session.lines;
+      }
+      const fresh = lines.filter(
+        (l) => l.billNo === activeTable.billNo && l.quantity > l.sentQty,
+      );
+      if (fresh.length === 0) {
+        setTableNotice({ ok: true, text: 'Semua pesanan meja ini sudah dikirim ke dapur.' });
+        return;
+      }
+      const sent = await fetch(
+        `${API_URL}/api/table-sessions/${encodeURIComponent(activeTable.sessionId)}/sent`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ lineIds: fresh.map((l) => l.lineId) }),
+        },
+      );
+      if (!sent.ok) {
+        setTableNotice({ ok: false, text: 'Gagal menandai pesanan terkirim ke dapur.' });
+        return;
+      }
+      setReceipt({
+        variant: 'kitchen',
+        heading: `Tiket Dapur · Meja ${activeTable.label}`,
+        data: {
+          ...buildReceiptData(),
+          items: fresh.map((l) => ({
+            product_name: l.product.product_name,
+            // Only the units the kitchen hasn't seen.
+            quantity: l.quantity - l.sentQty,
+            price: l.product.price,
+            price_mark_down: l.product.price_mark_down,
+            variant_name: l.product.variant_name,
+            note: l.note,
+            addons: (l.addons ?? []).map((a) => ({
+              product_name: a.name,
+              quantity: a.quantity,
+              price: a.price,
+            })),
+          })),
+        },
+      });
+    } catch {
+      setTableNotice({ ok: false, text: 'Tidak bisa terhubung ke server.' });
+    } finally {
+      setTableBusy(false);
+    }
+  };
+
   const handleCheckout = useCallback(async () => {
     if (cart.length === 0 || isInsufficient) return;
     // Guard against duplicate submissions (double-click / Cmd+Enter key-repeat):
@@ -1621,6 +2220,8 @@ export const CashierClient = ({
     // the wrong tab's key — or, when this was the last tab, a brand-new one's.
     const checkoutTabId = activeIdRef.current;
     const idempotencyKey = claimPendingKey(checkoutTabId);
+    // Captured with the tab id, for the same reason: a table bill being paid.
+    const checkoutTable = tabsRef.current.find((t) => t.id === checkoutTabId)?.table ?? null;
     // Capture snapshot before any async work so state changes mid-flight don't corrupt it
     const snapshot = [...cart];
     const snapshotTotal = cartTotal;
@@ -1668,6 +2269,7 @@ export const CashierClient = ({
       orderId,
       customerName: snapshotCustomerName,
       pagerNumber: snapshotPagerNumber,
+      tableLabel: checkoutTable?.label,
       items: snapshot.map((i) => ({
         product_name: i.product.product_name,
         quantity: i.quantity,
@@ -1729,12 +2331,36 @@ export const CashierClient = ({
         ].slice(0, MAX_PLACED_ORDERS),
       }));
     try {
+      // A table's bill has to be ON the table before it can be paid: the
+      // server settles exactly the lines the table holds, at the version this
+      // tab last saw, and refuses anything else. So unsaved edits go first.
+      let tableSession: { id: string; billNo: number; version: number } | undefined;
+      if (checkoutTable) {
+        let link = checkoutTable;
+        if (cartSignature(snapshot) !== link.synced) {
+          const saved = await saveTableBill(checkoutTabId, link, snapshot);
+          if (!saved) {
+            setCheckoutFailure({
+              title: 'Bill Belum Tersimpan',
+              message:
+                'Bill belum bisa disimpan, jadi belum bisa dibayar. ' +
+                'Lihat pesan di atas keranjang.',
+              canRetry: false,
+            });
+            return;
+          }
+          link = saved.link;
+        }
+        tableSession = { id: link.sessionId, billNo: link.billNo, version: link.version };
+      }
+
       const response = await fetch(`${API_URL}/api/add-order-detail`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
           outletId,
+          tableSession,
           // The server uses this as orders.id and treats a repeat as a replay.
           orderId: idempotencyKey,
           cart: snapshot,
@@ -1754,6 +2380,19 @@ export const CashierClient = ({
       });
       // Parse the body exactly once regardless of success/failure
       const data = await response.json().catch(() => ({}));
+      // The table moved under this tab (an item moved, a bill split, another
+      // till paid it). Refused before anything was booked, so this is not a
+      // "Belum" row — the fix is to reload the bill, never to retry.
+      if (response.status === 409 && data?.code === 'TABLE_CONFLICT') {
+        const text = data?.error?.message || 'Bill meja berubah.';
+        setTableNotice({ ok: false, text, conflict: true });
+        setCheckoutFailure({
+          title: 'Bill Meja Berubah',
+          message: `${text}\n\nMuat ulang bill, periksa lagi, lalu bayar.`,
+          canRetry: false,
+        });
+        return;
+      }
       if (!response.ok) {
         throw new Error(
           data?.error?.message ||
@@ -1885,6 +2524,7 @@ export const CashierClient = ({
     completeActiveTab,
     claimPendingKey,
     releasePendingKey,
+    saveTableBill,
   ]);
 
   // Adds a keyboard shortcut (CMD/Ctrl + Enter) for Checkout
@@ -2000,6 +2640,111 @@ export const CashierClient = ({
                 </p>
               )}
             </div>
+            {/* Open table bills, from any device. Held tabs are per device,
+                so this is how a till that didn't take the order finds it. */}
+            {canUseTables && (
+              <Popover
+                open={billsMenuOpen}
+                onOpenChange={(o) => {
+                  setBillsMenuOpen(o);
+                  if (o) void loadOpenBills();
+                }}
+              >
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="Bill meja terbuka"
+                    title="Bill meja terbuka"
+                    className="relative flex h-9 shrink-0 items-center gap-1.5 rounded-xl border bg-background/90 px-2.5 text-sm font-bold text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    <Armchair className="h-4 w-4" />
+                    <span className="hidden lg:inline">Meja</span>
+                    {(() => {
+                      // Tables with something on the bill: what is waiting
+                      // to be rung up.
+                      const n = (openBills ?? []).filter((b) => b.total > 0).length;
+                      return n > 0 ? (
+                        <span className="absolute -right-1.5 -top-1.5 flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-indigo-600 px-1 text-[11px] font-extrabold leading-none text-white">
+                          {n}
+                        </span>
+                      ) : null;
+                    })()}
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent align="end" className="w-88 p-2.5">
+                  <div className="mb-2 flex items-center justify-between px-1">
+                    <span className="text-xs font-bold">Bill meja terbuka</span>
+                    <Link
+                      href="/dashboard/tables"
+                      className="text-[11px] font-semibold text-indigo-600 hover:underline dark:text-indigo-300"
+                    >
+                      Denah meja
+                    </Link>
+                  </div>
+                  {openBills === null ? (
+                    <p className="px-1 py-3 text-center text-xs text-muted-foreground">Memuat…</p>
+                  ) : openBills.length === 0 ? (
+                    <p className="px-1 py-3 text-center text-xs text-muted-foreground">
+                      Tidak ada meja yang sedang terisi.
+                    </p>
+                  ) : (
+                    <div className="max-h-80 space-y-1.5 overflow-y-auto">
+                      {openBills.map((s) => (
+                        <div key={s.id} className="rounded-lg border px-2.5 py-2">
+                          <div className="flex items-center gap-2">
+                            <span className="flex h-6 min-w-8 shrink-0 items-center justify-center rounded-md bg-indigo-600 px-1.5 text-xs font-black text-white">
+                              {s.tableLabel || '?'}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">
+                              {s.guestName || 'Tamu'} · {s.pax} pax
+                            </span>
+                            <span className="shrink-0 text-xs font-bold tabular-nums">
+                              {formatCurrency(s.total)}
+                            </span>
+                          </div>
+                          <p className="mt-0.5 text-[11px] text-muted-foreground">
+                            Duduk {clockTime(new Date(s.seatedAt))}
+                            {s.billRequestedAt ? ' · bill diberikan' : ''}
+                            {s.unsentQty > 0 ? ` · ${s.unsentQty} belum ke dapur` : ''}
+                            {s.splitCount && s.splitCount > 1 ? ` · dibagi ${s.splitCount}` : ''}
+                          </p>
+                          <div className="mt-1.5 flex flex-wrap gap-1.5">
+                            {s.bills.map((b) => {
+                              const inTab = tabs.some(
+                                (t) => t.table?.sessionId === s.id && t.table.billNo === b.billNo,
+                              );
+                              const label =
+                                s.bills.length > 1
+                                  ? `Bill ${String.fromCharCode(64 + b.billNo)} · ${formatCurrency(b.total)}`
+                                  : b.itemCount > 0
+                                    ? 'Buka bill'
+                                    : 'Tambah pesanan';
+                              return (
+                                <Button
+                                  key={b.billNo}
+                                  type="button"
+                                  size="sm"
+                                  variant={inTab ? 'secondary' : 'outline'}
+                                  disabled={tableBusy}
+                                  title={inTab ? 'Sudah terbuka sebagai tab di perangkat ini' : undefined}
+                                  onClick={() => {
+                                    setBillsMenuOpen(false);
+                                    void openTableBill(s.id, b.billNo);
+                                  }}
+                                >
+                                  {label}
+                                  {inTab ? ' ✓' : ''}
+                                </Button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </PopoverContent>
+              </Popover>
+            )}
             {/* This session's checkouts. Read-only on purpose: the only thing
                 it can do to an order is print it again. Voids and status
                 changes live where they're audited, not behind a toolbar icon. */}
@@ -2014,8 +2759,10 @@ export const CashierClient = ({
                 >
                   <ReceiptText className="h-4 w-4" />
                   {landings > 0 && (
+                    // Prefixed: the badge below is keyed by a count too, and
+                    // after each landing the two numbers are usually equal.
                     <span
-                      key={landings}
+                      key={`ping-${landings}`}
                       aria-hidden
                       className="placed-ping pointer-events-none absolute inset-0 rounded-xl border-2 border-green-600"
                     />
@@ -2023,7 +2770,7 @@ export const CashierClient = ({
                   {placedCount > 0 && (
                     // Keyed by the count so each new sale re-mounts it and pops.
                     <span
-                      key={placedCount}
+                      key={`badge-${placedCount}`}
                       className="badge-pop absolute -right-1.5 -top-1.5 flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-green-600 px-1 text-[11px] font-extrabold leading-none text-white"
                     >
                       {placedCount}
@@ -2299,7 +3046,12 @@ export const CashierClient = ({
                 className="flex w-full items-center justify-between gap-2 rounded-lg border bg-background px-3 py-2 text-sm font-bold transition-colors hover:bg-muted"
               >
                 <span className="flex min-w-0 items-center gap-2">
-                  {activePager ? (
+                  {activeTab?.table ? (
+                    <span className="flex h-5 shrink-0 items-center gap-1 rounded-full bg-indigo-600 px-2 text-[11px] font-black text-white">
+                      <Armchair className="h-3 w-3" />
+                      {activeTab.table.label}
+                    </span>
+                  ) : activePager ? (
                     <span className="flex h-5 shrink-0 items-center gap-1 rounded-full bg-blue-600 px-2 text-[11px] font-black text-white">
                       <Bell className="h-3 w-3" />
                       {activePager}
@@ -2360,6 +3112,15 @@ export const CashierClient = ({
                         </span>
                       )}
                       <span className="flex-1 truncate">{label}</span>
+                      {t.table && (
+                        <span
+                          title="Bill meja"
+                          className="flex shrink-0 items-center gap-1 rounded-full bg-indigo-100 px-1.5 text-[10px] font-bold text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300"
+                        >
+                          <Armchair className="h-2.5 w-2.5" />
+                          {t.table.label}
+                        </span>
+                      )}
                       {staleTabIds.has(t.id) && (
                         <span
                           title="Ada item yang berubah di menu"
@@ -2483,8 +3244,9 @@ export const CashierClient = ({
               {cart.length > 0 && (
                 <button
                   onClick={clearCart}
-                  className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-rose-50 hover:text-rose-600"
-                  title="Kosongkan keranjang"
+                  disabled={cartHasSaved}
+                  className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+                  title={cartHasSaved ? VOID_HINT : 'Kosongkan keranjang'}
                   aria-label="Kosongkan keranjang"
                 >
                   <Trash2 className="h-4 w-4" />
@@ -2512,6 +3274,90 @@ export const CashierClient = ({
             </p>
           )}
         </div>
+
+        {/* This tab is a table's bill. Saved/unsaved is shown all the time,
+            because the host's screen only sees what was saved. */}
+        {activeTable && (
+          <div className="mx-4 mt-3 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 dark:border-indigo-900 dark:bg-indigo-950/40">
+            <div className="flex items-center gap-2">
+              <Armchair className="h-4 w-4 shrink-0 text-indigo-600 dark:text-indigo-300" />
+              <p className="min-w-0 flex-1 truncate text-[13px] font-bold text-indigo-900 dark:text-indigo-100">
+                Meja {activeTable.label}
+                {activeTable.billNo > 1
+                  ? ` · Bill ${String.fromCharCode(64 + activeTable.billNo)}`
+                  : ''}
+              </p>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                title="Muat ulang bill"
+                aria-label="Muat ulang bill"
+                disabled={tableBusy}
+                onClick={() => void openTableBill(activeTable.sessionId, activeTable.billNo)}
+              >
+                <RefreshCw />
+              </Button>
+              <Link
+                href="/dashboard/tables"
+                title="Kembali ke denah meja"
+                aria-label="Kembali ke denah meja"
+                className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-indigo-700 hover:bg-indigo-100 dark:text-indigo-300 dark:hover:bg-indigo-950"
+              >
+                <LayoutGrid className="h-4 w-4" />
+              </Link>
+            </div>
+            <div className="mt-1.5 flex items-center gap-2">
+              <p
+                className={`min-w-0 flex-1 truncate text-[11px] ${tableDirty ? 'font-semibold text-amber-700 dark:text-amber-300' : 'text-indigo-700/80 dark:text-indigo-300/80'}`}
+              >
+                {tableDirty ? 'Belum disimpan' : 'Bill tersimpan'}
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                disabled={!tableDirty || tableBusy}
+                onClick={saveActiveTable}
+                className="bg-indigo-600 text-white hover:bg-indigo-700"
+              >
+                Simpan Bill
+              </Button>
+            </div>
+            {activeTable.canVoid === false && cartHasSaved && (
+              <p className="mt-1 text-[10.5px] leading-snug text-indigo-700/80 dark:text-indigo-300/80">
+                Item tersimpan hanya bisa ditambah. Kurangi/hapus butuh izin Manajemen Meja.
+              </p>
+            )}
+          </div>
+        )}
+        {tableNotice && (
+          <div
+            className={`mx-4 mt-2 flex items-start gap-2 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold ${
+              tableNotice.ok
+                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300'
+                : 'bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300'
+            }`}
+          >
+            <span className="flex-1">{tableNotice.text}</span>
+            {tableNotice.conflict && activeTable && (
+              <button
+                type="button"
+                className="shrink-0 underline"
+                onClick={() => void openTableBill(activeTable.sessionId, activeTable.billNo)}
+              >
+                Muat ulang
+              </button>
+            )}
+            <button
+              type="button"
+              aria-label="Tutup pesan"
+              className="shrink-0"
+              onClick={() => setTableNotice(null)}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        )}
 
         {/* The owner changed something a parked cart still references. Shown,
             never applied — accepting is the cashier's call. */}
@@ -2593,7 +3439,10 @@ export const CashierClient = ({
                         </button>
                         <button
                           onClick={() => removeFromCart(item.lineId)}
-                          className="text-muted-foreground hover:text-rose-500 transition-colors p-1"
+                          disabled={(savedFloors[item.lineId] ?? 0) > 0}
+                          title={(savedFloors[item.lineId] ?? 0) > 0 ? VOID_HINT : 'Hapus item'}
+                          aria-label={`Hapus ${item.product.product_name}`}
+                          className="text-muted-foreground hover:text-rose-500 transition-colors p-1 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:text-muted-foreground"
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>
@@ -2650,7 +3499,14 @@ export const CashierClient = ({
                       <div className="flex items-center gap-3 bg-background border rounded-lg p-1 shadow-sm">
                         <button
                           onClick={() => updateQuantity(item.lineId, -1)}
-                          className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-muted text-muted-foreground transition-colors"
+                          disabled={(savedFloors[item.lineId] ?? 0) > 0 && item.quantity <= (savedFloors[item.lineId] ?? 0)}
+                          title={
+                            (savedFloors[item.lineId] ?? 0) > 0 && item.quantity <= (savedFloors[item.lineId] ?? 0)
+                              ? VOID_HINT
+                              : undefined
+                          }
+                          aria-label={`Kurangi ${item.product.product_name}`}
+                          className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-muted text-muted-foreground transition-colors disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
                         >
                           <Minus className="h-3 w-3" />
                         </button>
@@ -2992,15 +3848,17 @@ export const CashierClient = ({
             >
               <Tag className="h-4 w-4" />
             </Button>
-            {canUsePager && (
+            {/* A table tab sends only what the kitchen hasn't seen yet; a
+                counter tab prints the whole cart, as before. */}
+            {(canUsePager || activeTable) && (
               <Button
                 type="button"
                 variant="outline"
-                onClick={printKitchenTicket}
-                disabled={cart.length === 0}
+                onClick={activeTable ? () => void sendTableKitchen() : printKitchenTicket}
+                disabled={cart.length === 0 || tableBusy}
                 className="h-10 w-10 shrink-0 rounded-xl border-2 p-0"
-                title="Cetak tiket dapur"
-                aria-label="Cetak tiket dapur"
+                title={activeTable ? 'Kirim pesanan baru ke dapur' : 'Cetak tiket dapur'}
+                aria-label={activeTable ? 'Kirim pesanan baru ke dapur' : 'Cetak tiket dapur'}
               >
                 <ChefHat className="h-4 w-4" />
               </Button>

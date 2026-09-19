@@ -39,17 +39,22 @@ const plans = [
 // .features live (see getSubscriptionGate), so an upsert here reprices every
 // existing subscriber immediately, with no migration and no backfill.
 //
+// tableManagement (Manajemen Meja: floor plan, seating, open table bills,
+// waitlist, reservations) joins them at Max Lite — it is the dine-in half of
+// the same counter. Like every flag here it reads as FALSE until this seed has
+// run against the database, so a deploy that ships it must re-run the seed.
+//
 // Feature caps per tier — read by the gating middleware. The same caps apply
 // to a tier's monthly and yearly plan. desktopCashier gates the native cashier
 // app; salesInvoice/purchaseInvoice/stock gate the Faktur & Stok suite.
 const featuresByTier: Record<string, Record<string, unknown>> = {
-  basic: { maxOutlets: 1, maxEmployees: 1, desktopCashier: false, customerCanOrder: true, salesInvoice: false, purchaseInvoice: false, stock: false, cashflow: true, report: true, reportInvoice: false, cashierShift: false, pager: false, tax: false, recipeExplorer: false },
-  pro: { maxOutlets: 1, maxEmployees: 3, desktopCashier: false, customerCanOrder: true, salesInvoice: true, purchaseInvoice: true, stock: false, cashflow: true, report: true, reportInvoice: false, cashierShift: false, pager: false, tax: false, recipeExplorer: true },
-  max_lite: { maxOutlets: 2, maxEmployees: 5, desktopCashier: true, customerCanOrder: true, salesInvoice: true, purchaseInvoice: true, stock: true, cashflow: true, report: true, reportInvoice: true, cashierShift: true, pager: true, tax: true, recipeExplorer: true },
-  max: { maxOutlets: 3, maxEmployees: 5, desktopCashier: true, customerCanOrder: true, salesInvoice: true, purchaseInvoice: true, stock: true, cashflow: true, report: true, reportInvoice: true, cashierShift: true, pager: true, tax: true, recipeExplorer: true, membership: false },
+  basic: { maxOutlets: 1, maxEmployees: 1, desktopCashier: false, customerCanOrder: true, salesInvoice: false, purchaseInvoice: false, stock: false, cashflow: true, report: true, reportInvoice: false, cashierShift: false, pager: false, tax: false, recipeExplorer: false, tableManagement: false },
+  pro: { maxOutlets: 1, maxEmployees: 3, desktopCashier: false, customerCanOrder: true, salesInvoice: true, purchaseInvoice: true, stock: false, cashflow: true, report: true, reportInvoice: false, cashierShift: false, pager: false, tax: false, recipeExplorer: true, tableManagement: false },
+  max_lite: { maxOutlets: 2, maxEmployees: 5, desktopCashier: true, customerCanOrder: true, salesInvoice: true, purchaseInvoice: true, stock: true, cashflow: true, report: true, reportInvoice: true, cashierShift: true, pager: true, tax: true, recipeExplorer: true, tableManagement: true },
+  max: { maxOutlets: 3, maxEmployees: 5, desktopCashier: true, customerCanOrder: true, salesInvoice: true, purchaseInvoice: true, stock: true, cashflow: true, report: true, reportInvoice: true, cashierShift: true, pager: true, tax: true, recipeExplorer: true, membership: false, tableManagement: true },
   // Ultimax = Max, plus the membership programme (members, points, tiers,
   // outlet promo codes) on every outlet the owner runs. Same caps otherwise.
-  ultimax: { maxOutlets: 3, maxEmployees: 5, desktopCashier: true, customerCanOrder: true, salesInvoice: true, purchaseInvoice: true, stock: true, cashflow: true, report: true, reportInvoice: true, cashierShift: true, pager: true, tax: true, recipeExplorer: true, membership: true },
+  ultimax: { maxOutlets: 3, maxEmployees: 5, desktopCashier: true, customerCanOrder: true, salesInvoice: true, purchaseInvoice: true, stock: true, cashflow: true, report: true, reportInvoice: true, cashierShift: true, pager: true, tax: true, recipeExplorer: true, membership: true, tableManagement: true },
 };
 
 // PLACEHOLDER trial length (same for all plans). Adjust per tier if desired.

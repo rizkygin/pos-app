@@ -59,6 +59,7 @@ export default async function CashierPage() {
                 canUseShift={features.cashierShift === true}
                 canUsePager={features.pager === true}
                 canUseMembership={features.membership === true}
+                canUseTables={features.tableManagement === true}
                 // Resolved against the gate here, so the counter can't show a
                 // tax line the plan doesn't include. The server applies the
                 // same gate when it stores the order.

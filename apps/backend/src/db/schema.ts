@@ -6,6 +6,7 @@ import {
   varchar,
   pgEnum,
   json,
+  jsonb,
   timestamp,
   index,
   uniqueIndex,
@@ -311,6 +312,11 @@ export const outletsTable = pgTable('outlets', {
     .notNull(),
   tax_inclusive: boolean('tax_inclusive').default(false).notNull(),
   tax_label: varchar('tax_label', { length: 20 }).default('Pajak').notNull(),
+
+  // Manajemen Meja: how long a seating may run before the floor plan paints it
+  // "Lewat Waktu". Per outlet because a warung turns a table in 30 minutes and
+  // a restaurant in two hours — see the table management section below.
+  table_overtime_minutes: integer('table_overtime_minutes').default(90).notNull(),
 
   ...timestamps,
 });
@@ -2299,5 +2305,273 @@ export const outletPromoUsesTable = pgTable(
   (t) => [
     index('outlet_promo_uses_promo_member_idx').on(t.promo_id, t.member_id),
     index('outlet_promo_uses_order_idx').on(t.order_id),
+  ],
+);
+
+// ============================================================================
+// Table management — "Manajemen Meja" (migration 0074)
+// ============================================================================
+//
+// A floor plan (zones, tables, walls), who is sitting where, and the bill each
+// seating is running up — plus the waiting list and reservations around it.
+//
+// THE RULE: AN OPEN BILL IS NOT AN ORDER. A seating's items live in
+// table_session_lines until the bill is paid, and only then become an `orders`
+// row, through the same /api/add-order-detail checkout the counter uses. Every
+// reader of `orders` — revenue, shift close, cost ledger, stock, cashflow —
+// assumes an order is a finished sale, and an unpaid bill written there would
+// show up as revenue with no cash behind it and move stock for food that may
+// still be sent back. Keeping it out means none of those readers had to change.
+//
+// So a line's lifecycle is: written by the cashier (or moved around by the
+// host) while order_id IS NULL, then stamped with the order_id it settled into
+// at checkout. A stamped line is history and is never edited again.
+
+/** A wall or bar counter drawn on a zone. Decoration: nothing references one. */
+export type FloorWall = {
+  id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  kind: 'wall' | 'bar';
+};
+
+/**
+ * One room or area of the floor ("Main Zone", "Teras"). Walls ride on the zone
+ * as jsonb rather than as rows: they are drawn, never referenced, and the
+ * layout editor saves a zone whole.
+ */
+export const diningZonesTable = pgTable(
+  'dining_zones',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    outlet_id: integer('outlet_id')
+      .notNull()
+      .references(() => outletsTable.id),
+    name: varchar('name', { length: 40 }).notNull(),
+    sort_order: integer('sort_order').default(0).notNull(),
+    walls: jsonb('walls').$type<FloorWall[]>().default([]).notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    index('dining_zones_outlet_idx')
+      .on(t.outlet_id, t.sort_order)
+      .where(sql`deleted_at is null`),
+  ],
+);
+
+/**
+ * One seating: guests arrive, run up a bill, pay, leave.
+ *
+ * Status:
+ *   open      seated, bill (possibly empty) not yet fully paid
+ *   paid      every line settled into an order; guests may still be at the
+ *             table — the host clears it, which is what makes "Paid" a state
+ *             the floor can show ("needs bussing") rather than a vanished table
+ *   closed    cleared after paying
+ *   cancelled left without paying for anything; unpaid lines stay as a record
+ *   merged    folded into another seating (merged_into)
+ *
+ * closed_at IS NULL is "still on the floor" and is what every live query keys
+ * on. Occupancy itself is dining_tables.session_id, never a column here: one
+ * seating can hold several tables (Gabung Meja), and a table can hold one
+ * seating, so the pointer belongs on the table.
+ *
+ * `version` bumps on every change to the bill's composition. The cashier holds
+ * a bill in a local tab and must not overwrite a change made on another device
+ * (the host moving an item to another table) with its stale copy — saves and
+ * checkout both carry the version they were built from, and lose on mismatch.
+ */
+export const tableSessionsTable = pgTable(
+  'table_sessions',
+  {
+    id: text('id').primaryKey(),
+    outlet_id: integer('outlet_id')
+      .notNull()
+      .references(() => outletsTable.id),
+    guest_name: varchar('guest_name', { length: 100 }),
+    pax: integer('pax').default(1).notNull(),
+    status: varchar('status', { length: 12 }).default('open').notNull(),
+    version: integer('version').default(1).notNull(),
+    seated_at: timestamp('seated_at', { withTimezone: true }).defaultNow().notNull(),
+    // "Ck Dropped": the pre-bill was printed and handed over. Set once — how
+    // long a table has been waiting to pay is measured from the FIRST print.
+    bill_requested_at: timestamp('bill_requested_at', { withTimezone: true }),
+    // A manual "needs attention" flag, raised by staff. Not derived from
+    // anything: the whole point is that it records what no column can.
+    alert_at: timestamp('alert_at', { withTimezone: true }),
+    alert_note: varchar('alert_note', { length: 100 }),
+    // Bagi rata: the bill is shown and printed as N equal shares. Purely a
+    // presentation of ONE bill — it settles as one order. Splitting into real
+    // separate payments is done per item, with bill_no on the lines.
+    split_count: integer('split_count'),
+    paid_at: timestamp('paid_at', { withTimezone: true }),
+    closed_at: timestamp('closed_at', { withTimezone: true }),
+    merged_into: text('merged_into').references((): AnyPgColumn => tableSessionsTable.id),
+    opened_by: text('opened_by').references(() => usersTable.id),
+    ...timestamps,
+  },
+  (t) => [
+    check(
+      'table_sessions_status_ck',
+      sql`${t.status} in ('open', 'paid', 'closed', 'cancelled', 'merged')`,
+    ),
+    check('table_sessions_pax_ck', sql`${t.pax} >= 1`),
+    index('table_sessions_outlet_live_idx')
+      .on(t.outlet_id)
+      .where(sql`closed_at is null`),
+  ],
+);
+
+/**
+ * A table on the floor plan. Coordinates are in the editor's fixed 900x620
+ * canvas, snapped to its 20px grid.
+ *
+ * session_id is the seating occupying it right now, NULL when free. Claiming a
+ * table is a conditional UPDATE ... WHERE session_id IS NULL, so two hosts
+ * seating the same table at the same moment resolve to one winner.
+ */
+export const diningTablesTable = pgTable(
+  'dining_tables',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    outlet_id: integer('outlet_id')
+      .notNull()
+      .references(() => outletsTable.id),
+    zone_id: integer('zone_id')
+      .notNull()
+      .references(() => diningZonesTable.id),
+    label: varchar('label', { length: 10 }).notNull(),
+    capacity: integer('capacity').default(4).notNull(),
+    shape: varchar('shape', { length: 10 }).default('square').notNull(),
+    x: integer('x').notNull(),
+    y: integer('y').notNull(),
+    w: integer('w').notNull(),
+    h: integer('h').notNull(),
+    session_id: text('session_id').references(() => tableSessionsTable.id),
+    // Out of service ("Servis AC"). Only a free table can be blocked.
+    blocked_at: timestamp('blocked_at', { withTimezone: true }),
+    blocked_reason: varchar('blocked_reason', { length: 100 }),
+    ...timestamps,
+  },
+  (t) => [
+    check('dining_tables_shape_ck', sql`${t.shape} in ('square', 'round')`),
+    check('dining_tables_capacity_ck', sql`${t.capacity} >= 1`),
+    index('dining_tables_outlet_idx')
+      .on(t.outlet_id)
+      .where(sql`deleted_at is null`),
+    index('dining_tables_session_idx')
+      .on(t.session_id)
+      .where(sql`session_id is not null`),
+  ],
+);
+
+/**
+ * One line of an open bill, in the cashier's own cart shape.
+ *
+ * `id` IS the cashier's cart lineId, so a tab and the server agree on which
+ * line is which without a mapping table. `product` is the snapshot the cashier
+ * added it from — the same snapshot the counter checks out from, so a table
+ * bill and a counter sale price identically (see the staleness notes in
+ * cashier-client.tsx: a price change never silently reprices an open bill).
+ *
+ * sent_qty is how many units the kitchen has already been told about, so a
+ * second "Kirim Dapur" prints only what was added since, not the whole bill.
+ */
+export const tableSessionLinesTable = pgTable(
+  'table_session_lines',
+  {
+    id: text('id').primaryKey(),
+    session_id: text('session_id')
+      .notNull()
+      .references(() => tableSessionsTable.id, { onDelete: 'cascade' }),
+    // Which separate bill this line is on, for Pisah Bill per item. Each bill
+    // settles as its own order with its own payment method.
+    bill_no: integer('bill_no').default(1).notNull(),
+    product_id: text('product_id')
+      .notNull()
+      .references(() => productsTable.id),
+    product: jsonb('product').notNull(),
+    quantity: integer('quantity').notNull(),
+    addons: jsonb('addons').default([]).notNull(),
+    note: varchar('note', { length: 200 }),
+    sent_qty: integer('sent_qty').default(0).notNull(),
+    // NULL = unpaid. Set once, at checkout, to the order the line became.
+    order_id: text('order_id').references(() => ordersTable.id),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }),
+  },
+  (t) => [
+    check('table_session_lines_qty_ck', sql`${t.quantity} > 0`),
+    check('table_session_lines_sent_ck', sql`${t.sent_qty} >= 0`),
+    check('table_session_lines_bill_ck', sql`${t.bill_no} >= 1`),
+    index('table_session_lines_session_idx').on(t.session_id),
+    index('table_session_lines_order_idx')
+      .on(t.order_id)
+      .where(sql`order_id is not null`),
+  ],
+);
+
+/**
+ * A booking. Holds its table on the floor plan ("Reservasi 19:00") from an hour
+ * before until it is seated, cancelled or marked no-show.
+ */
+export const tableReservationsTable = pgTable(
+  'table_reservations',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    outlet_id: integer('outlet_id')
+      .notNull()
+      .references(() => outletsTable.id),
+    table_id: integer('table_id').references(() => diningTablesTable.id),
+    guest_name: varchar('guest_name', { length: 100 }).notNull(),
+    // Canonical 628… when it parses (lib/utils/phone), as typed otherwise.
+    phone: varchar('phone', { length: 20 }),
+    pax: integer('pax').default(2).notNull(),
+    reserved_at: timestamp('reserved_at', { withTimezone: true }).notNull(),
+    note: varchar('note', { length: 255 }),
+    status: varchar('status', { length: 12 }).default('booked').notNull(),
+    session_id: text('session_id').references(() => tableSessionsTable.id),
+    created_by: text('created_by').references(() => usersTable.id),
+    ...timestamps,
+  },
+  (t) => [
+    check(
+      'table_reservations_status_ck',
+      sql`${t.status} in ('booked', 'seated', 'cancelled', 'no_show')`,
+    ),
+    index('table_reservations_outlet_time_idx').on(t.outlet_id, t.reserved_at),
+  ],
+);
+
+/**
+ * Walk-ins waiting for a table. queue_no ("W3") is handed to the guest, so it
+ * is fixed at insert and numbered per local day — renumbering as others are
+ * seated would change the number someone was told to listen for.
+ */
+export const tableWaitlistTable = pgTable(
+  'table_waitlist',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    outlet_id: integer('outlet_id')
+      .notNull()
+      .references(() => outletsTable.id),
+    queue_no: integer('queue_no').notNull(),
+    guest_name: varchar('guest_name', { length: 100 }).notNull(),
+    phone: varchar('phone', { length: 20 }),
+    pax: integer('pax').default(2).notNull(),
+    note: varchar('note', { length: 255 }),
+    called_at: timestamp('called_at', { withTimezone: true }),
+    seated_at: timestamp('seated_at', { withTimezone: true }),
+    cancelled_at: timestamp('cancelled_at', { withTimezone: true }),
+    session_id: text('session_id').references(() => tableSessionsTable.id),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('table_waitlist_outlet_waiting_idx')
+      .on(t.outlet_id, t.created_at)
+      .where(sql`seated_at is null and cancelled_at is null`),
   ],
 );

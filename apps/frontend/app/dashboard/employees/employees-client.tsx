@@ -19,6 +19,7 @@ import { API_URL } from '@/lib/api-url';
 // order here is the display order of the toggles.
 const PERMISSIONS: { key: string; label: string }[] = [
   { key: 'cashier', label: 'Kasir' },
+  { key: 'tables', label: 'Manajemen Meja' },
   { key: 'activeOrders', label: 'Pesanan Aktif' },
   { key: 'products', label: 'Produk' },
   { key: 'stock', label: 'Stok' },

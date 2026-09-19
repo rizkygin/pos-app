@@ -31,6 +31,10 @@ export const EMPLOYEE_PERMISSIONS = [
   "purchaseInvoice",
   "reports",
   "cashflow",
+  // Manajemen Meja: the floor plan, seating, waitlist and reservations. Apart
+  // from `cashier` because the host at the door is often not the person on
+  // the till — and a bill still settles through the cashier permission.
+  "tables",
 ] as const;
 export type EmployeePermission = (typeof EMPLOYEE_PERMISSIONS)[number];
 
@@ -133,6 +137,7 @@ const TRIAL_FEATURES: Record<string, unknown> = {
   reportInvoice: true,
   recipeExplorer: true,
   membership: true,
+  tableManagement: true,
 };
 const NO_FEATURES: Record<string, unknown> = {};
 
@@ -292,11 +297,13 @@ export function gateBlocks(
 // Route-guard helper: session -> access -> permission -> subscription gate,
 // sending the matching error itself (mirrors the getOwnerOutlet pattern used
 // across routes). `perm: "owner"` restricts to the actual owner (billing,
-// employees, settings).
+// employees, settings). A list admits anyone holding ANY of the permissions —
+// for a route two pages share, like a table's bill, which the host and the
+// cashier both edit.
 export async function requireOutletAccess(
   request: FastifyRequest,
   reply: FastifyReply,
-  perm: EmployeePermission | "owner",
+  perm: EmployeePermission | "owner" | readonly EmployeePermission[],
 ): Promise<(OutletAccess & { userId: string; gate: SubscriptionGate }) | null> {
   const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
   if (!session?.user) {
@@ -308,12 +315,24 @@ export async function requireOutletAccess(
     reply.status(403).send({ success: false, error: "No outlet found" });
     return null;
   }
-  if (perm === "owner" ? !access.isOwner : !hasPermission(access, perm)) {
+  // The permission that let them in, which is also the one the plan gate below
+  // is asked about.
+  const granted =
+    typeof perm === "string"
+      ? perm === "owner"
+        ? access.isOwner
+          ? perm
+          : null
+        : hasPermission(access, perm)
+          ? perm
+          : null
+      : (perm.find((p) => hasPermission(access, p)) ?? null);
+  if (!granted) {
     reply.status(403).send({ success: false, error: "Akses fitur ini belum diizinkan pemilik" });
     return null;
   }
   const gate = await getSubscriptionGate(access.outlet.user_id);
-  const blocked = gateBlocks(gate, perm, request.method);
+  const blocked = gateBlocks(gate, granted, request.method);
   if (blocked) {
     reply.status(403).send({ success: false, error: blocked, code: gate.alive ? "PLAN_FEATURE" : "SUBSCRIPTION_EXPIRED" });
     return null;

@@ -102,7 +102,23 @@ export type ReceiptData = {
     pagerNumber?: string;
     /** Whole-order kitchen instruction, printed at the foot of the kitchen ticket. */
     orderNote?: string;
+    /**
+     * Manajemen Meja: which table this is for ("05", "05+06"). On the kitchen
+     * ticket it is printed as large as the pager — it is how the food finds
+     * its way back to the guest.
+     */
+    tableLabel?: string;
+    /**
+     * A pre-bill handed to a table before paying (Cetak Bill). Printed with a
+     * "not yet paid" banner so it can never be mistaken for a receipt.
+     */
+    billOnly?: boolean;
+    /** Bagi rata: the pre-bill also states each person's share of N. */
+    splitCount?: number;
 };
+
+/** Each person's share of a bill split evenly, rounded up so it covers the total. */
+const shareOf = (total: number, n: number) => Math.ceil(total / n);
 
 type Props = {
     data: ReceiptData;
@@ -338,6 +354,13 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
     if (data.outletPhone) line(data.outletPhone);
     divider();
 
+    if (data.billOnly) {
+        bold(true);
+        line("TAGIHAN - BELUM DIBAYAR");
+        bold(false);
+        divider();
+    }
+
     align(0);
     const shortId = data.orderId.split("-")[0].toUpperCase();
     row("Order #", shortId);
@@ -348,6 +371,7 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
     // Also on the customer's copy: if they mislay the buzzer, the number is
     // still in their hand.
     if (data.pagerNumber) row("Pager", data.pagerNumber);
+    if (data.tableLabel) row("Meja", data.tableLabel);
     divider();
 
     for (const item of data.items) {
@@ -403,6 +427,11 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
     size(0x00);
     bold(false);
     divider();
+
+    if (data.billOnly && data.splitCount && data.splitCount > 1) {
+        row(`Dibagi ${data.splitCount} orang`, `${fmt(shareOf(data.total, data.splitCount))}/org`);
+        divider();
+    }
 
     if (data.paymentMethod) {
         // Only a cash sale has money tendered and change given. Everything else
@@ -522,6 +551,15 @@ function buildKitchenEscposBase64(data: ReceiptData, paper: PaperWidth): string 
         bold(true);
         size(0x22);
         line(`PAGER ${data.pagerNumber}`);
+        size(0x00);
+        bold(false);
+    }
+    if (data.tableLabel) {
+        // As large as the pager, for the same reason: it is what the runner
+        // reads to know where the plate goes.
+        bold(true);
+        size(0x22);
+        line(`MEJA ${data.tableLabel}`);
         size(0x00);
         bold(false);
     }
@@ -759,12 +797,14 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
   ${data.outletAddress ? `<div class="c sm">${esc(data.outletAddress)}</div>` : ""}
   ${data.outletPhone ? `<div class="c sm">${esc(data.outletPhone)}</div>` : ""}
   <div class="dv"></div>
+  ${data.billOnly ? `<div class="c b">TAGIHAN - BELUM DIBAYAR</div><div class="dv"></div>` : ""}
   <div class="row sm"><span>Order #</span><span class="b">${shortId}</span></div>
   <div class="row sm"><span>Tanggal</span><span>${data.date.toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" })}</span></div>
   <div class="row sm"><span>Jam</span><span>${data.date.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}</span></div>
   <div class="row sm"><span>Kasir</span><span>${esc(data.cashierName)}</span></div>
   ${data.customerName ? `<div class="row sm"><span>Pelanggan</span><span>${esc(data.customerName)}</span></div>` : ""}
   ${data.pagerNumber ? `<div class="row sm"><span>Pager</span><span class="b">${esc(data.pagerNumber)}</span></div>` : ""}
+  ${data.tableLabel ? `<div class="row sm"><span>Meja</span><span class="b">${esc(data.tableLabel)}</span></div>` : ""}
   <div class="dv"></div>
   ${itemsHtml}
   <div class="dv"></div>
@@ -776,6 +816,7 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
   ${data.taxAmount !== undefined && data.taxLabel ? `<div class="row sm"><span>${esc(data.taxLabel)}${data.taxInclusive ? " (termasuk)" : ""}</span><span>${fmt(data.taxAmount)}</span></div>` : ""}
   <div class="row b lg"><span>TOTAL</span><span>${fmt(data.total)}</span></div>
   <div class="dv"></div>
+  ${data.billOnly && data.splitCount && data.splitCount > 1 ? `<div class="row sm"><span>Dibagi ${data.splitCount} orang</span><span class="b">${fmt(shareOf(data.total, data.splitCount))}/org</span></div><div class="dv"></div>` : ""}
   ${paymentHtml}
   ${memberHtml}
   <div class="c sm">Terima kasih!</div>
@@ -837,6 +878,7 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
 </style></head><body>
   <div class="c b lg">PESANAN DAPUR</div>
   ${data.pagerNumber ? `<div class="c b xl">PAGER ${esc(data.pagerNumber)}</div>` : ""}
+  ${data.tableLabel ? `<div class="c b xl">MEJA ${esc(data.tableLabel)}</div>` : ""}
   <div class="dv"></div>
   <div class="row sm"><span>Jam</span><span>${data.date.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}</span></div>
   <div class="row sm"><span>Kasir</span><span>${esc(data.cashierName)}</span></div>
@@ -973,6 +1015,11 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
                                     PAGER {data.pagerNumber}
                                 </p>
                             )}
+                            {data.tableLabel && (
+                                <p className="text-center font-black text-3xl tracking-wider mt-1">
+                                    MEJA {data.tableLabel}
+                                </p>
+                            )}
 
                             <div className="border-t border-dashed border-gray-300 my-3" />
 
@@ -1039,6 +1086,15 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
 
                         <div className="border-t border-dashed border-gray-300 my-3" />
 
+                        {data.billOnly && (
+                            <>
+                                <p className="text-center font-bold text-xs tracking-wide">
+                                    TAGIHAN - BELUM DIBAYAR
+                                </p>
+                                <div className="border-t border-dashed border-gray-300 my-3" />
+                            </>
+                        )}
+
                         {/* Order meta */}
                         <div className="flex justify-between text-xs mb-1">
                             <span className="text-gray-500">Order #</span>
@@ -1066,6 +1122,12 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
                             <div className="flex justify-between text-xs mb-1">
                                 <span className="text-gray-500">Pager</span>
                                 <span className="font-bold">{data.pagerNumber}</span>
+                            </div>
+                        )}
+                        {data.tableLabel && (
+                            <div className="flex justify-between text-xs mb-1">
+                                <span className="text-gray-500">Meja</span>
+                                <span className="font-bold">{data.tableLabel}</span>
                             </div>
                         )}
 
@@ -1165,6 +1227,18 @@ export function ReceiptModal({ data, onClose, heading = "Order Placed!", variant
                         </div>
 
                         <div className="border-t border-dashed border-gray-300 my-3" />
+
+                        {data.billOnly && data.splitCount && data.splitCount > 1 ? (
+                            <>
+                                <div className="flex justify-between text-xs">
+                                    <span className="text-gray-500">Dibagi {data.splitCount} orang</span>
+                                    <span className="font-bold">
+                                        {fmt(shareOf(data.total, data.splitCount))}/org
+                                    </span>
+                                </div>
+                                <div className="border-t border-dashed border-gray-300 my-3" />
+                            </>
+                        ) : null}
 
                         {/* Payment — omitted for a courier pickup slip (see ReceiptData). */}
                         {data.paymentMethod && (
