@@ -6,13 +6,12 @@ import {
   usersTable,
   session as sessionTable,
   account as accountTable,
-  subscriptionsTable,
-  subscriptionPlansTable,
 } from "../db/schema";
 import { auth } from "../auth";
 import {
   requireOutletAccess,
   EMPLOYEE_PERMISSIONS,
+  type SubscriptionGate,
 } from "../lib/outlet-access";
 
 // Employees without a subscription (or on a plan without the key) get the
@@ -30,18 +29,12 @@ function sanitizePermissions(input: unknown): Record<string, boolean> {
   return out;
 }
 
-// The owner's plan-defined active-employee cap.
-async function maxEmployeesFor(ownerUserId: string): Promise<number> {
-  const [row] = await db
-    .select({ features: subscriptionPlansTable.features })
-    .from(subscriptionsTable)
-    .innerJoin(
-      subscriptionPlansTable,
-      eq(subscriptionPlansTable.id, subscriptionsTable.plan_id),
-    )
-    .where(eq(subscriptionsTable.user_id, ownerUserId))
-    .limit(1);
-  const cap = Number((row?.features as Record<string, unknown>)?.maxEmployees);
+// The owner's active-employee cap, read off the subscription GATE rather than
+// subscriptions.plan_id: a trial's plan_id is NULL (auto-started) or whatever
+// plan was clicked first, so reading it directly capped trials at 1 or 3 while
+// every other feature honored TRIAL_FEATURES' 5.
+function maxEmployeesFor(gate: SubscriptionGate): number {
+  const cap = Number(gate.features.maxEmployees);
   return Number.isFinite(cap) && cap >= 0 ? cap : DEFAULT_MAX_EMPLOYEES;
 }
 
@@ -71,7 +64,7 @@ export async function employeeRoutes(app: FastifyInstance) {
       .innerJoin(usersTable, eq(usersTable.id, employeesTable.user_id))
       .where(eq(employeesTable.outlet_id, access.outlet.id))
       .orderBy(employeesTable.id);
-    const max = await maxEmployeesFor(access.outlet.user_id);
+    const max = maxEmployeesFor(access.gate);
     const active = rows.filter((r) => r.is_active).length;
     return { success: true, data: rows, max_employees: max, active_count: active };
   });
@@ -101,7 +94,7 @@ export async function employeeRoutes(app: FastifyInstance) {
       .where(
         and(eq(employeesTable.outlet_id, access.outlet.id), eq(employeesTable.is_active, true)),
       );
-    const max = await maxEmployeesFor(access.outlet.user_id);
+    const max = maxEmployeesFor(access.gate);
     if (activeCount >= max)
       return reply.status(409).send({
         success: false,
@@ -173,7 +166,7 @@ export async function employeeRoutes(app: FastifyInstance) {
               eq(employeesTable.is_active, true),
             ),
           );
-        const max = await maxEmployeesFor(access.outlet.user_id);
+        const max = maxEmployeesFor(access.gate);
         if (n >= max)
           return reply.status(409).send({
             success: false,

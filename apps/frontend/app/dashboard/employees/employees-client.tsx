@@ -71,6 +71,16 @@ export function EmployeesClient() {
   }, [fetchAll]);
 
   const addEmployee = async () => {
+    // Validate here instead of silently disabling Simpan: owners typed a short
+    // password, saw a grey button with no reason, and read it as the plan cap.
+    if (!name.trim() || !email.trim()) {
+      setError('Nama dan email wajib diisi');
+      return;
+    }
+    if (password.length < 8) {
+      setError('Password minimal 8 karakter');
+      return;
+    }
     setSaving(true);
     setError('');
     try {
@@ -198,20 +208,35 @@ export function EmployeesClient() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />
-            <div className="relative">
-              <Input
-                placeholder="Password (min. 8)"
-                type={showPw ? 'text' : 'password'}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-              <button
-                type="button"
-                onClick={() => setShowPw((v) => !v)}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
+            <div>
+              <div className="relative">
+                <Input
+                  placeholder="Password (min. 8)"
+                  type={showPw ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPw((v) => !v)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
+                >
+                  {showPw ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                </button>
+              </div>
+              {/* The placeholder vanishes on the first keystroke, so the rule
+                  stays visible here while typing. */}
+              <p
+                className={`mt-1 text-[11px] ${
+                  password.length > 0 && password.length < 8
+                    ? 'font-medium text-red-600'
+                    : 'text-muted-foreground'
+                }`}
               >
-                {showPw ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-              </button>
+                {password.length > 0 && password.length < 8
+                  ? `Minimal 8 karakter — kurang ${8 - password.length} lagi`
+                  : 'Minimal 8 karakter'}
+              </p>
             </div>
           </div>
           <div className="mt-3 flex flex-wrap gap-1.5">
@@ -238,7 +263,7 @@ export function EmployeesClient() {
             <Button
               size="sm"
               onClick={addEmployee}
-              disabled={saving || !name.trim() || !email.trim() || password.length < 8}
+              disabled={saving}
               className="bg-foreground text-background hover:opacity-85"
             >
               {saving ? <Loader2 className="size-3.5 animate-spin" /> : 'Simpan'}
