@@ -122,6 +122,15 @@ const navMain: NavItem[] = [
     iconColor: 'text-indigo-600 dark:text-indigo-400',
   },
   {
+    // The Kitchen Display. Listed for every owner like Manajemen Meja; the
+    // page itself says when the plan does not include it.
+    name: 'Dapur',
+    url: '/dashboard/kitchen',
+    icon: ChefHat,
+    iconBg: 'bg-orange-100 dark:bg-orange-950',
+    iconColor: 'text-orange-600 dark:text-orange-400',
+  },
+  {
     name: 'Buku Kas',
     url: '/dashboard/cashflow',
     icon: Book,
@@ -489,7 +498,7 @@ export function AppSidebar({
   const router = useRouter();
   const currentUrl = useCurrentUrl();
   const { data: session } = useSession();
-  const ownerOnlyNames = new Set(['Product', 'Laporan', 'Kasir', 'Manajemen Meja', 'Buku Kas']);
+  const ownerOnlyNames = new Set(['Product', 'Laporan', 'Kasir', 'Manajemen Meja', 'Dapur', 'Buku Kas']);
   // Employees see exactly the pages their permission map allows (set by the
   // owner in /dashboard/employees). Keys mirror backend EMPLOYEE_PERMISSIONS.
   const can = (perm: string) => employeePermissions?.[perm] === true;
@@ -499,6 +508,7 @@ export function AppSidebar({
     Laporan: 'reports',
     Kasir: 'cashier',
     'Manajemen Meja': 'tables',
+    Dapur: 'kitchen',
     'Buku Kas': 'cashflow',
   };
   const employeeInvoiceSubPerm: Record<string, string> = {

@@ -45,6 +45,7 @@ import {
   type OrderLabel,
 } from '@/lib/labelbridge';
 import { API_URL } from '@/lib/api-url';
+import { viewerTimezone } from '@/app/dashboard/tables/floor-api';
 import { POS_PAYMENT_OPTIONS, type PosPaymentMethod } from '@/lib/pos-payment';
 import { ShiftBar } from './shift-bar';
 import { isSameDay } from '@/lib/date-calender';
@@ -138,7 +139,8 @@ type CartItem = {
   /**
    * Kitchen instruction for this line ("jangan pedas", "es sedikit"). Lives in
    * the held tab only — it's prep guidance for the next ten minutes, printed on
-   * the kitchen ticket and then gone. Never sent to the backend.
+   * the kitchen ticket and then gone. Never sent with the ORDER; the only copy
+   * the backend sees is on the Kitchen Display ticket the Dapur button writes.
    */
   note?: string;
   /**
@@ -1963,15 +1965,19 @@ export const CashierClient = ({
       pending = setTimeout(() => void verify(), 300);
     };
     const onFloor = (e: MessageEvent) => {
-      refreshBills();
-      const link = activeTableRef.current;
-      if (!link) return;
+      let event: { reason?: unknown; sessionIds?: unknown } = {};
       try {
-        const ids: unknown = JSON.parse(e.data)?.sessionIds;
-        if (Array.isArray(ids) && ids.includes(link.sessionId)) schedule();
+        event = JSON.parse(e.data) ?? {};
       } catch {
         /* not ours to read */
       }
+      // The kitchen screen's own traffic — a ticket moving, a waiter being
+      // called — never changes a bill.
+      if (event.reason === 'ticket' || event.reason === 'call') return;
+      refreshBills();
+      const link = activeTableRef.current;
+      if (!link) return;
+      if (Array.isArray(event.sessionIds) && event.sessionIds.includes(link.sessionId)) schedule();
     };
     const connect = () => {
       es = new EventSource(`${API_URL}/api/floor/stream`, { withCredentials: true });
@@ -2107,6 +2113,53 @@ export const CashierClient = ({
       variant: 'kitchen',
       heading: 'Tiket Dapur',
     });
+    void sendCounterKitchen();
+  };
+
+  /**
+   * The same press also puts the order on the Kitchen Display. The whole cart
+   * goes every time and the server keeps only what this tab has not sent
+   * before, so a reprint adds nothing there and an added drink adds the drink.
+   * The paper ticket is already printing — a failure here only says so.
+   */
+  const sendCounterKitchen = async () => {
+    const tabKey = activeIdRef.current;
+    const lines = cart.map((i) => ({
+      lineId: i.lineId,
+      name: i.product.product_name,
+      variant: i.product.variant_name || null,
+      qty: i.quantity,
+      note: i.note?.trim() || null,
+      addons: (i.addons ?? []).map((a) => ({ name: a.name, qty: a.quantity })),
+    }));
+    try {
+      const res = await fetch(
+        `${API_URL}/api/kitchen/tickets?timezone=${encodeURIComponent(viewerTimezone())}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            tabKey,
+            label: canUsePager ? pagerNumber.trim() : '',
+            customer: customerName.trim(),
+            note: orderNote.trim(),
+            lines,
+          }),
+        },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success) {
+        setTableNotice({
+          ok: false,
+          text: data?.error || 'Tiket tercetak, tapi gagal masuk ke layar dapur.',
+        });
+        return;
+      }
+      if (data.ticket) setTableNotice({ ok: true, text: `Masuk layar dapur · #${data.ticket.ticketNo}` });
+    } catch {
+      setTableNotice({ ok: false, text: 'Tiket tercetak, tapi layar dapur tidak terjangkau.' });
+    }
   };
 
   /** "Simpan Bill": the active tab's cart becomes the table's bill. */
@@ -2160,7 +2213,7 @@ export const CashierClient = ({
         return;
       }
       const sent = await fetch(
-        `${API_URL}/api/table-sessions/${encodeURIComponent(activeTable.sessionId)}/sent`,
+        `${API_URL}/api/table-sessions/${encodeURIComponent(activeTable.sessionId)}/sent?timezone=${encodeURIComponent(viewerTimezone())}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

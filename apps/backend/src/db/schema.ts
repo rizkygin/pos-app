@@ -2575,3 +2575,78 @@ export const tableWaitlistTable = pgTable(
       .where(sql`seated_at is null and cancelled_at is null`),
   ],
 );
+
+// ============================================================================
+// Kitchen Display (KDS)
+// ============================================================================
+
+/**
+ * One ticket on the kitchen screen: a batch of dishes the kitchen was told
+ * about at once. NOT an order, and never read by anything that counts money —
+ * a table ticket is written while the bill is still open, a counter ticket
+ * before checkout.
+ *
+ * Where tickets come from:
+ *   table    "Kirim ke Dapur" on a seating (floor page or the cashier's table
+ *            tab). Written inside POST /api/table-sessions/:id/sent, from the
+ *            same sent_qty delta that call marks told, so a ticket holds only
+ *            what was added since the last send and a retry adds nothing.
+ *   counter  the cashier's Dapur button on a counter tab. source_key is that
+ *            tab's id; each press carries the whole cart and the server keeps
+ *            only what earlier tickets of the same tab did not already hold.
+ *
+ * `lines` is a snapshot — names, quantities, notes — because the kitchen needs
+ * what was asked for at the time, not the product as it is now.
+ *
+ * Status: open (Masuk) → in_progress (Dikerjakan) → done (Siap); hold
+ * (Ditahan) and cancelled (Batal) from anywhere. status_at is when the current
+ * status began.
+ *
+ * The call_* columns are the kitchen's "Recall": a call for a waiter, shown on
+ * the floor page until someone acknowledges it. One pending call per ticket —
+ * calling again re-raises it and counts it.
+ */
+export const kitchenTicketsTable = pgTable(
+  'kitchen_tickets',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    outlet_id: integer('outlet_id')
+      .notNull()
+      .references(() => outletsTable.id),
+    // "#41", numbered per local day like the waitlist's queue_no.
+    ticket_no: integer('ticket_no').notNull(),
+    source: varchar('source', { length: 10 }).notNull(),
+    session_id: text('session_id').references(() => tableSessionsTable.id),
+    source_key: varchar('source_key', { length: 64 }),
+    // Table labels ("5+6") or the pager number, as the floor calls it out.
+    label: varchar('label', { length: 40 }),
+    customer: varchar('customer', { length: 100 }),
+    note: varchar('note', { length: 255 }),
+    lines: jsonb('lines').default([]).notNull(),
+    status: varchar('status', { length: 12 }).default('open').notNull(),
+    status_at: timestamp('status_at', { withTimezone: true }).defaultNow().notNull(),
+    started_at: timestamp('started_at', { withTimezone: true }),
+    call_at: timestamp('call_at', { withTimezone: true }),
+    call_note: varchar('call_note', { length: 100 }),
+    call_count: integer('call_count').default(0).notNull(),
+    call_ack_at: timestamp('call_ack_at', { withTimezone: true }),
+    call_ack_by: text('call_ack_by').references(() => usersTable.id),
+    created_by: text('created_by').references(() => usersTable.id),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }),
+  },
+  (t) => [
+    check('kitchen_tickets_source_ck', sql`${t.source} in ('table', 'counter')`),
+    check(
+      'kitchen_tickets_status_ck',
+      sql`${t.status} in ('open', 'in_progress', 'done', 'hold', 'cancelled')`,
+    ),
+    index('kitchen_tickets_outlet_created_idx').on(t.outlet_id, t.created_at),
+    index('kitchen_tickets_pending_call_idx')
+      .on(t.outlet_id)
+      .where(sql`call_at is not null and call_ack_at is null`),
+    index('kitchen_tickets_source_key_idx')
+      .on(t.outlet_id, t.source_key)
+      .where(sql`source_key is not null`),
+  ],
+);

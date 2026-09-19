@@ -3,12 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { LayoutGrid, Pencil, Plus } from 'lucide-react';
+import { BellRing, LayoutGrid, Pencil, Plus, Volume2, VolumeX } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { formatCurrency } from '@/lib/utils/format';
 import { computeTax, taxLineLabel } from '@/lib/tax';
 import { API_URL } from '@/lib/api-url';
+import { useOrderAlarm } from '@/lib/use-order-alarm';
 import { ReceiptModal, type ReceiptData } from '@/components/dashboard/receipt-modal';
 import { FloorCanvas, type TableView } from './floor-canvas';
 import { floorApi, viewerTimezone, type ApiResult } from './floor-api';
@@ -38,6 +39,7 @@ import {
   type Floor,
   type FloorSession,
   type FloorTable,
+  type KitchenCall,
   type Wall,
 } from './floor-model';
 import { ActionsPanel, LayoutPanel, type DraftTable } from './floor-panels';
@@ -212,7 +214,16 @@ export function TablesClient({ cashierName }: { cashierName: string }) {
         setLiveBoth(true);
         refresh();
       });
-      es.addEventListener('floor', refresh);
+      es.addEventListener('floor', (e: MessageEvent) => {
+        // A ticket moving on the kitchen screen changes nothing drawn here;
+        // a Recall ("call") does, and so does everything else.
+        try {
+          if (JSON.parse(e.data)?.reason === 'ticket') return;
+        } catch {
+          /* unreadable: re-read to be safe */
+        }
+        refresh();
+      });
       es.onerror = () => {
         setLiveBoth(false);
         // A dropped connection is retried by the browser on its own, but an
@@ -305,6 +316,14 @@ export function TablesClient({ cashierName }: { cashierName: string }) {
   const overtimeMin = floor?.outlet.overtimeMinutes ?? 90;
   const canFloor = !!floor?.permissions.tables;
   const canCashier = !!floor?.permissions.cashier;
+  // The kitchen's Recall: unanswered calls for a waiter. The chime keeps
+  // ringing until someone taps Diterima, like the incoming-order alarm.
+  const kitchenCalls = useMemo(() => floor?.kitchenCalls ?? [], [floor]);
+  const calledSessions = useMemo(
+    () => new Set(kitchenCalls.map((c) => c.sessionId).filter((id): id is string => !!id)),
+    [kitchenCalls],
+  );
+  const callAlarm = useOrderAlarm(kitchenCalls.length > 0, 'pos_kitchen_call_muted');
 
   const fitScale = paneW ? clamp((paneW - 32) / CANVAS_W, 0.3, 1) : 0.8;
   const scale = zoomMode === 'fit' ? fitScale : zoom / 100;
@@ -337,6 +356,7 @@ export function TablesClient({ cashierName }: { cashierName: string }) {
         alert: false,
         billRequested: false,
         unsent: false,
+        kitchenCall: false,
       }));
     }
     return floor.tables
@@ -368,9 +388,10 @@ export function TablesClient({ cashierName }: { cashierName: string }) {
           alert: !!s?.alertAt,
           billRequested: !!s?.billRequestedAt && s.status === 'open',
           unsent: (s?.unsentQty ?? 0) > 0,
+          kitchenCall: !!t.sessionId && calledSessions.has(t.sessionId),
         };
       });
-  }, [floor, draft, activeZoneId, sessionById, now, overtimeMin]);
+  }, [floor, draft, activeZoneId, sessionById, now, overtimeMin, calledSessions]);
 
   const chips = useMemo(() => {
     const sessions = floor?.sessions ?? [];
@@ -429,6 +450,21 @@ export function TablesClient({ cashierName }: { cashierName: string }) {
   // ── navigation to the till ─────────────────────────────────────────────────
   const goCashier = (sessionId: string, billNo = 1) =>
     router.push(`/dashboard/cashier?table=${encodeURIComponent(sessionId)}&bill=${billNo}`);
+
+  // ── kitchen calls ─────────────────────────────────────────────────────────
+  /** Who the kitchen is asking about, the way the floor says it. */
+  const callTitle = (c: KitchenCall) =>
+    c.source === 'table'
+      ? `Meja ${c.label || '?'}`
+      : c.label
+        ? `Pager ${c.label}`
+        : c.customer || 'Pesanan kasir';
+
+  const answerCall = (c: KitchenCall) =>
+    void run(
+      () => floorApi('POST', `/api/kitchen/tickets/${c.ticketId}/ack`),
+      `Panggilan dapur ${callTitle(c)} diterima`,
+    );
 
   const selectTableById = (f: Floor | null, pick: (t: FloorTable) => boolean) => {
     const t = f?.tables.find(pick);
@@ -519,7 +555,7 @@ export function TablesClient({ cashierName }: { cashierName: string }) {
       flash(true, 'Semua pesanan sudah dikirim ke dapur');
       return;
     }
-    const res = await floorApi('POST', `/api/table-sessions/${session.id}/sent`, {
+    const res = await floorApi('POST', `/api/table-sessions/${session.id}/sent?timezone=${encodeURIComponent(tz)}`, {
       lineIds: fresh.map((l) => l.lineId),
     });
     setBusy(false);
@@ -769,6 +805,82 @@ export function TablesClient({ cashierName }: { cashierName: string }) {
           </div>
         </div>
       </header>
+
+      {/* The kitchen's Recall. Above everything else on purpose: it is the
+          one thing on this screen somebody is actively waiting on. */}
+      {kitchenCalls.length > 0 && (
+        <div className="border-b border-red-200 bg-red-50 px-4 py-2.5 md:px-5 dark:border-red-900 dark:bg-red-950/40">
+          <div className="flex items-center gap-2">
+            <BellRing className="h-4 w-4 animate-pulse text-red-600 dark:text-red-400" />
+            <span className="text-[13px] font-bold text-red-800 dark:text-red-200">
+              Dapur memanggil pelayan
+            </span>
+            <span className="rounded-full bg-red-600 px-1.5 py-px font-mono text-[11px] font-semibold text-white">
+              {kitchenCalls.length}
+            </span>
+            <div className="ml-auto flex items-center gap-1.5">
+              {callAlarm.blocked && !callAlarm.muted && (
+                <Button size="sm" variant="outline" onClick={callAlarm.enableSound}>
+                  Aktifkan suara
+                </Button>
+              )}
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                onClick={callAlarm.toggleMuted}
+                aria-label={callAlarm.muted ? 'Nyalakan suara panggilan' : 'Matikan suara panggilan'}
+                title={callAlarm.muted ? 'Nyalakan suara panggilan' : 'Matikan suara panggilan'}
+              >
+                {callAlarm.muted ? <VolumeX /> : <Volume2 />}
+              </Button>
+            </div>
+          </div>
+          <div className="mt-2 flex gap-2 overflow-x-auto pb-0.5">
+            {kitchenCalls.map((c) => {
+              const seated = c.sessionId ? floor.tables.some((t) => t.sessionId === c.sessionId) : false;
+              return (
+                <div
+                  key={c.ticketId}
+                  className="flex shrink-0 items-center gap-2.5 rounded-xl border border-red-200 bg-card px-2.5 py-2 shadow-sm dark:border-red-900"
+                >
+                  <span className="flex h-9 min-w-9 items-center justify-center rounded-lg bg-red-600 px-1.5 font-mono text-sm font-bold text-white">
+                    #{c.ticketNo}
+                  </span>
+                  <div className="min-w-0 max-w-56 leading-tight">
+                    <p className="truncate text-[13px] font-semibold">
+                      {callTitle(c)}
+                      {c.source === 'table' && c.customer ? (
+                        <span className="font-normal text-muted-foreground"> · {c.customer}</span>
+                      ) : null}
+                    </p>
+                    <p className="truncate text-[11px] text-muted-foreground">
+                      {c.note || 'Pelayan diminta ke dapur'} · {clock(c.callAt)}
+                      {c.callCount > 1 ? ` · ${c.callCount}×` : ''}
+                    </p>
+                  </div>
+                  {seated && !editing && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => selectTableById(floor, (t) => t.sessionId === c.sessionId)}
+                    >
+                      Lihat
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => answerCall(c)}
+                    className="bg-red-600 text-white hover:bg-red-700"
+                  >
+                    Diterima
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Toolbar: zones, waitlist, counts, edit */}
       <div className="flex flex-wrap items-center gap-1.5 border-b px-4 py-2.5 md:px-5">

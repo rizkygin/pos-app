@@ -35,6 +35,9 @@ export const EMPLOYEE_PERMISSIONS = [
   // from `cashier` because the host at the door is often not the person on
   // the till — and a bill still settles through the cashier permission.
   "tables",
+  // Dapur: the Kitchen Display. Its own key so a kitchen tablet can sign in
+  // to the tickets and nothing else — no till, no floor.
+  "kitchen",
 ] as const;
 export type EmployeePermission = (typeof EMPLOYEE_PERMISSIONS)[number];
 

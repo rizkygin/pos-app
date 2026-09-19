@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 // Gap between chimes while an order is still waiting. Short enough to nag,
 // long enough not to drown out someone talking to a customer at the counter.
 const REPEAT_MS = 2000;
-const MUTED_KEY = 'pos_order_alarm_muted';
+const DEFAULT_MUTED_KEY = 'pos_order_alarm_muted';
 
 // The chime is synthesised rather than loaded from an mp3: no asset to ship or
 // cache, and a pure tone cuts through counter noise better than most stock
@@ -37,31 +37,34 @@ function playChime(ctx: AudioContext) {
  * and a page restored in a background tab may never have been touched. When
  * that happens the hook reports `blocked` so the UI can offer a tap-to-enable
  * button — the tap is the gesture that unlocks the AudioContext.
+ *
+ * `mutedKey` keeps each screen's mute switch its own: muting the kitchen's
+ * new-ticket chime must not silence the owner's incoming-order alarm.
  */
-export function useOrderAlarm(active: boolean) {
+export function useOrderAlarm(active: boolean, mutedKey: string = DEFAULT_MUTED_KEY) {
   const [muted, setMuted] = useState(false);
   const [blocked, setBlocked] = useState(false);
   const ctxRef = useRef<AudioContext | null>(null);
 
   useEffect(() => {
     try {
-      setMuted(localStorage.getItem(MUTED_KEY) === '1');
+      setMuted(localStorage.getItem(mutedKey) === '1');
     } catch {
       /* ignore */
     }
-  }, []);
+  }, [mutedKey]);
 
   const toggleMuted = useCallback(() => {
     setMuted((v) => {
       const next = !v;
       try {
-        localStorage.setItem(MUTED_KEY, next ? '1' : '0');
+        localStorage.setItem(mutedKey, next ? '1' : '0');
       } catch {
         /* ignore */
       }
       return next;
     });
-  }, []);
+  }, [mutedKey]);
 
   const getContext = useCallback(() => {
     if (!ctxRef.current) {

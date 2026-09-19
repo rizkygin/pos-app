@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef } from 'react';
-import { ReceiptText } from 'lucide-react';
+import { BellRing, ReceiptText } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
   CANVAS_H,
@@ -31,6 +31,8 @@ export type TableView = {
   alert: boolean;
   billRequested: boolean;
   unsent: boolean;
+  /** The kitchen's Recall is waiting on this table. */
+  kitchenCall: boolean;
 };
 
 type Selection = { kind: 'table' | 'wall'; key: string } | null;
@@ -216,6 +218,25 @@ export function FloorCanvas({
                   >
                     <ReceiptText className="h-2.5 w-2.5" />
                   </span>
+                )}
+                {t.kitchenCall && !editing && (
+                  <>
+                    {/* A pulse, not a ping: it stays inside the table's own
+                        footprint instead of spilling over its neighbours. */}
+                    <span
+                      aria-hidden
+                      className={cn(
+                        'pointer-events-none absolute -inset-1.5 animate-pulse border-[3px] border-red-500',
+                        t.shape === 'round' ? 'rounded-full' : 'rounded-2xl',
+                      )}
+                    />
+                    <span
+                      title="Dapur memanggil pelayan"
+                      className="absolute -bottom-[9px] -left-[9px] flex h-[19px] w-[19px] items-center justify-center rounded-full border-2 border-card bg-red-600 text-white"
+                    >
+                      <BellRing className="h-2.5 w-2.5" />
+                    </span>
+                  </>
                 )}
                 {t.unsent && !editing && (
                   <span

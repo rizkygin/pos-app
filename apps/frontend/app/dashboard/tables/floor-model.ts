@@ -97,6 +97,27 @@ export type WaitEntry = {
   createdAt: string;
 };
 
+/**
+ * The kitchen's Recall: a waiter is wanted at the pass for this ticket. Stays
+ * until someone answers it (POST /api/kitchen/tickets/:id/ack).
+ */
+export type KitchenCall = {
+  ticketId: number;
+  ticketNo: number;
+  source: 'table' | 'counter';
+  /** The seating the ticket came from; null for a counter ticket. */
+  sessionId: string | null;
+  /** Table labels ("5+6") or the pager number. */
+  label: string | null;
+  customer: string | null;
+  /** Why the kitchen called, when it said. */
+  note: string | null;
+  callAt: string;
+  callCount: number;
+  status: string;
+  itemCount: number;
+};
+
 export type Floor = {
   serverTime: string;
   entitled: boolean;
@@ -117,6 +138,7 @@ export type Floor = {
   sessions: FloorSession[];
   reservations: Reservation[];
   waitlist: WaitEntry[];
+  kitchenCalls: KitchenCall[];
 };
 
 // ── Table state ──────────────────────────────────────────────────────────────

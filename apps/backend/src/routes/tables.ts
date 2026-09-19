@@ -1,9 +1,10 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { and, asc, eq, gte, inArray, isNull, lte, ne, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNotNull, isNull, lte, ne, sql } from "drizzle-orm";
 import { db } from "../db";
 import {
   diningTablesTable,
   diningZonesTable,
+  kitchenTicketsTable,
   outletsTable,
   productsTable,
   tableReservationsTable,
@@ -32,6 +33,12 @@ import {
 } from "../lib/tables";
 import { getOpenShift } from "../lib/shift";
 import { publishFloor, subscribeFloor } from "../lib/floor-events";
+import {
+  KITCHEN_CALL_TTL_MS,
+  insertKitchenTicket,
+  tableKitchenLine,
+  type KitchenLine,
+} from "../lib/kitchen";
 import { APP_TIMEZONE, getUTCRangeFromLocalDate } from "../lib/timezone";
 import { taxConfigFrom } from "../lib/tax";
 import { normalizeIndonesianPhone } from "../lib/utils/phone";
@@ -60,6 +67,10 @@ const UPGRADE_MESSAGE =
 
 const FLOOR = ["tables"] as const;
 const FLOOR_OR_CASHIER = ["tables", "cashier"] as const;
+// The live stream carries no data, only "something changed", so the kitchen
+// screen may listen on it too: its tickets are written by the same floor
+// actions, and its Recall is what the floor listens for.
+const LIVE_LISTENERS = ["tables", "cashier", "kitchen"] as const;
 
 /** The layout editor's fixed canvas, in its own units. */
 const CANVAS_W = 900;
@@ -363,7 +374,7 @@ export async function tableRoutes(app: FastifyInstance) {
     const now = new Date();
     const { startUTC, endUTC } = getUTCRangeFromLocalDate(localDate(tz, now), tz);
 
-    const [zones, tables, sessions, reservations, waitlist, shift, todayRows] = await Promise.all([
+    const [zones, tables, sessions, reservations, waitlist, shift, todayRows, kitchenCalls] = await Promise.all([
       db
         .select()
         .from(diningZonesTable)
@@ -417,6 +428,20 @@ export async function tableRoutes(app: FastifyInstance) {
            and o.created_at >= ${startUTC}
            and o.created_at <= ${endUTC}
       `),
+      // The kitchen's Recall: calls for a waiter nobody has answered yet.
+      // Bounded, so a call left hanging overnight does not greet the morning.
+      db
+        .select()
+        .from(kitchenTicketsTable)
+        .where(
+          and(
+            eq(kitchenTicketsTable.outlet_id, outletId),
+            isNotNull(kitchenTicketsTable.call_at),
+            isNull(kitchenTicketsTable.call_ack_at),
+            gte(kitchenTicketsTable.call_at, new Date(now.getTime() - KITCHEN_CALL_TTL_MS)),
+          ),
+        )
+        .orderBy(asc(kitchenTicketsTable.call_at)),
     ]);
 
     const sessionIds = sessions.map((s) => s.id);
@@ -554,6 +579,19 @@ export async function tableRoutes(app: FastifyInstance) {
         calledAt: iso(w.called_at),
         createdAt: iso(w.created_at),
       })),
+      kitchenCalls: kitchenCalls.map((k) => ({
+        ticketId: k.id,
+        ticketNo: k.ticket_no,
+        source: k.source,
+        sessionId: k.session_id,
+        label: k.label,
+        customer: k.customer,
+        note: k.call_note,
+        callAt: iso(k.call_at),
+        callCount: k.call_count,
+        status: k.status,
+        itemCount: (k.lines as KitchenLine[]).reduce((n, l) => n + l.qty, 0),
+      })),
     };
   });
 
@@ -570,7 +608,7 @@ export async function tableRoutes(app: FastifyInstance) {
    * and `retry` tells the browser how soon to reconnect when one does anyway.
    */
   app.get("/api/floor/stream", async (request, reply) => {
-    const access = await requireOutletAccess(request, reply, FLOOR_OR_CASHIER);
+    const access = await requireOutletAccess(request, reply, LIVE_LISTENERS);
     if (!access) return;
 
     reply.hijack();
@@ -1241,6 +1279,10 @@ export async function tableRoutes(app: FastifyInstance) {
    * The kitchen has been told: every unpaid line's sent_qty catches up with
    * its quantity (or just the listed lines). Not a change to the bill, so no
    * version bump — a tab holding this bill stays valid.
+   *
+   * The units that catch up become one Kitchen Display ticket, in the same
+   * transaction: the delta is read under the seating lock, so a retry (or two
+   * devices sending at once) finds nothing new and makes no second ticket.
    */
   app.post("/api/table-sessions/:id/sent", async (request, reply) => {
     const access = await requireOutletAccess(request, reply, FLOOR_OR_CASHIER);
@@ -1252,8 +1294,31 @@ export async function tableRoutes(app: FastifyInstance) {
         ? body.lineIds.filter((x: unknown) => typeof x === "string").slice(0, 300)
         : null;
       if (lineIds && lineIds.length === 0) return { success: true };
-      await db.transaction(async (tx) => {
-        await lockLiveSession(tx, access.outlet.id, sessionId);
+      const ticket = await db.transaction(async (tx) => {
+        const s = await lockLiveSession(tx, access.outlet.id, sessionId);
+        const fresh = (await unpaidLines(tx, sessionId, lineIds ?? undefined))
+          .map(tableKitchenLine)
+          .filter((l): l is KitchenLine => l !== null);
+        let made: { id: number; ticketNo: number } | null = null;
+        if (fresh.length) {
+          const held = await tx
+            .select({ label: diningTablesTable.label })
+            .from(diningTablesTable)
+            .where(eq(diningTablesTable.session_id, sessionId));
+          made = await insertKitchenTicket(tx, {
+            outletId: access.outlet.id,
+            timezone: timezoneOf(request),
+            source: "table",
+            sessionId,
+            label: held
+              .map((t) => t.label)
+              .sort((a, b) => a.localeCompare(b, "id", { numeric: true }))
+              .join("+"),
+            customer: s.guest_name,
+            lines: fresh,
+            createdBy: access.userId,
+          });
+        }
         await tx
           .update(tableSessionLinesTable)
           .set({ sent_qty: sql`${tableSessionLinesTable.quantity}`, updated_at: new Date() })
@@ -1264,9 +1329,10 @@ export async function tableRoutes(app: FastifyInstance) {
               lineIds ? inArray(tableSessionLinesTable.id, lineIds) : undefined,
             ),
           );
+        return made;
       });
       publishFloor(access.outlet.id, "kitchen", [sessionId]);
-      return { success: true };
+      return { success: true, ticket };
     });
   });
 

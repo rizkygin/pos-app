@@ -20,6 +20,7 @@ import { API_URL } from '@/lib/api-url';
 const PERMISSIONS: { key: string; label: string }[] = [
   { key: 'cashier', label: 'Kasir' },
   { key: 'tables', label: 'Manajemen Meja' },
+  { key: 'kitchen', label: 'Dapur (Layar Dapur)' },
   { key: 'activeOrders', label: 'Pesanan Aktif' },
   { key: 'products', label: 'Produk' },
   { key: 'stock', label: 'Stok' },

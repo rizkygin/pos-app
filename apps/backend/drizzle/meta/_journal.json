@@ -526,6 +526,13 @@
       "when": 1789748898324,
       "tag": "0074_table_management",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1789792160259,
+      "tag": "0075_kitchen_tickets",
+      "breakpoints": true
     }
   ]
 }

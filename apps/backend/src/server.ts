@@ -31,6 +31,7 @@ import { auditRoutes } from "./routes/audit";
 import { shiftRoutes } from "./routes/shifts";
 import { membershipRoutes } from "./routes/membership";
 import { tableRoutes } from "./routes/tables";
+import { kitchenRoutes } from "./routes/kitchen";
 import { startDispatchScheduler } from "./lib/dispatch-scheduler";
 import { FRONTEND_ORIGINS } from "./lib/app-env";
 
@@ -129,6 +130,7 @@ async function main() {
   await app.register(shiftRoutes);
   await app.register(membershipRoutes);
   await app.register(tableRoutes);
+  await app.register(kitchenRoutes);
 
   app.get("/health", async () => ({ ok: true }));
 
