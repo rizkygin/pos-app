@@ -85,6 +85,9 @@ type Subscription = {
   // Scheduled downgrade: tier switches to next_tier at next_tier_at.
   next_tier: Plan['tier'] | null;
   next_tier_at: string | null;
+  // Staff quota granted to THIS account by an admin, overriding the tier's
+  // number on the plan cards below. NULL = the plan's own cap applies.
+  max_employees_override: number | null;
 };
 
 type Bank = { bank: string; account_number: string; account_holder: string };
@@ -95,6 +98,17 @@ type Deal = {
   pct: number;
   tier: Plan['tier'] | null;
   interval: 'monthly' | 'yearly' | null;
+  note: string;
+};
+
+// Paid staff seats an admin granted this account (the price side of
+// max_employees_override). seat_price is per seat per MONTH; a yearly plan
+// bills 12 of them. It is added AFTER the deal — a discount is on the plan,
+// these seats are not — and the backend prices the payment the same way, so
+// the card total below is exactly what the merchant will be asked to transfer.
+type Addon = {
+  seats: number;
+  seat_price: number;
   note: string;
 };
 
@@ -177,6 +191,7 @@ export function SubscriptionClient() {
   const [loading, setLoading] = useState(true);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [deal, setDeal] = useState<Deal | null>(null);
+  const [addon, setAddon] = useState<Addon | null>(null);
   const [bank, setBank] = useState<Bank | null>(null);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [payments, setPayments] = useState<Payment[]>([]);
@@ -206,6 +221,7 @@ export function SubscriptionClient() {
     if (planJson.success) {
       setPlans(planJson.data);
       setDeal(planJson.deal ?? null);
+      setAddon(planJson.addon ?? null);
     }
   }, []);
 
@@ -344,12 +360,23 @@ export function SubscriptionClient() {
                   }`
                 : 'Pilih paket di bawah untuk mulai — lengkap dengan masa percobaan gratis.'}
             </p>
-            {subscription?.next_tier && subscription.next_tier_at && (
-              <span className="mt-2 inline-block rounded-full bg-white/15 px-2.5 py-1 text-[11px] font-semibold backdrop-blur">
-                ↓ Pindah ke {TIER_LABEL[subscription.next_tier]} mulai{' '}
-                {tglPanjang(subscription.next_tier_at)}
-              </span>
-            )}
+            <div className="mt-2 flex flex-wrap gap-2">
+              {subscription?.next_tier && subscription.next_tier_at && (
+                <span className="inline-block rounded-full bg-white/15 px-2.5 py-1 text-[11px] font-semibold backdrop-blur">
+                  ↓ Pindah ke {TIER_LABEL[subscription.next_tier]} mulai{' '}
+                  {tglPanjang(subscription.next_tier_at)}
+                </span>
+              )}
+              {/* Admin-granted seats: the plan cards below still advertise the
+                  tier's number, so say the real one here. */}
+              {subscription?.max_employees_override != null && (
+                <span className="inline-block rounded-full bg-white/15 px-2.5 py-1 text-[11px] font-semibold backdrop-blur">
+                  <UsersRound className="mr-1 inline size-3" />
+                  Kuota khusus: {subscription.max_employees_override} akun karyawan
+                  {addon ? ` · ${rupiah(addon.seats * addon.seat_price)}/bln` : ' · gratis'}
+                </span>
+              )}
+            </div>
           </div>
           {daysLeft !== null && isLive && (
             <div className="rounded-2xl bg-white/15 px-4 py-2.5 text-center backdrop-blur">
@@ -574,6 +601,14 @@ export function SubscriptionClient() {
                 : Number(p.price);
               const perMonth = interval === 'yearly' ? effPrice / 12 : effPrice;
               const basePerMonth = interval === 'yearly' ? Number(p.price) / 12 : Number(p.price);
+              // Paid staff seats ride on every plan and are never discounted,
+              // so they sit outside effPrice — mirroring employeeAddonFor on
+              // the backend, which is what the transfer amount comes from.
+              const addonPerMonth = addon ? addon.seats * addon.seat_price : 0;
+              const addonAmount = Math.round(
+                addonPerMonth * (interval === 'yearly' ? 12 : 1),
+              );
+              const totalDue = effPrice + addonAmount;
               const f = p.features ?? {};
               return (
                 <div
@@ -609,14 +644,28 @@ export function SubscriptionClient() {
                       Diskon {deal!.pct}% khusus Pian 🎉
                     </span>
                   )}
+                  {addonAmount > 0 && (
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      + {rupiah(addonPerMonth)}/bln · {addon!.seats} akun karyawan tambahan
+                      {addon!.note ? ` (${addon!.note})` : ''}
+                    </p>
+                  )}
                   {interval === 'yearly' && (
                     <p className="text-[11px] text-muted-foreground">
-                      ditagih {rupiah(effPrice)}/tahun
+                      ditagih {rupiah(totalDue)}/tahun
                       {(yearlySavingsByTier.get(p.tier) ?? 0) > 0 && (
                         <span className="font-bold text-rose-600 dark:text-rose-400">
                           {' '}· hemat {yearlySavingsByTier.get(p.tier)}%
                         </span>
                       )}
+                    </p>
+                  )}
+                  {/* Monthly cards have no "ditagih" line to fold the add-on
+                      into, so the payable total gets its own — nobody should
+                      click a price and then be quoted a bigger one. */}
+                  {addonAmount > 0 && interval === 'monthly' && (
+                    <p className="text-[11px] font-semibold">
+                      total {rupiah(totalDue)}/bln
                     </p>
                   )}
                   <ul className="mt-4 flex-1 space-y-2 text-xs">

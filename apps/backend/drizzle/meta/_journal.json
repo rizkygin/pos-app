@@ -561,6 +561,20 @@
       "when": 1789834384551,
       "tag": "0079_outlet_service_type_enabled",
       "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1789880402583,
+      "tag": "0080_subscription_employee_override",
+      "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1789884839138,
+      "tag": "0081_subscription_employee_addon",
+      "breakpoints": true
     }
   ]
 }

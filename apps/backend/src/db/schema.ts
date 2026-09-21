@@ -1726,6 +1726,25 @@ export const subscriptionsTable = pgTable(
     discount_tier: SUBSCRIPTION_TIER('discount_tier'),
     discount_interval: BILLING_INTERVAL('discount_interval'),
     discount_note: varchar('discount_note', { length: 255 }).default(''),
+    // Admin-granted employee quota for THIS account only, overriding the
+    // plan's features.maxEmployees while the subscription is alive. NULL =
+    // follow the plan. Sold/granted case by case (extra staff seats, a client
+    // kept whole mid-upgrade) — the seeded plan caps stay the catalog rule, so
+    // nothing here leaks to other merchants on the same tier.
+    max_employees_override: integer('max_employees_override'),
+    // What those extra seats COST. Deliberately a rupiah add-on and not a
+    // negative discount_pct: a seat has a fixed price, while a deal is a
+    // percentage of the plan and carries a tier scope, so a "negative deal"
+    // would reprice itself on every tier and vanish on upgrade. Kept per SEAT
+    // per MONTH so one setting prices both intervals (yearly bills x12) —
+    // employeeAddonFor() in lib/subscription.ts is the only place that math
+    // lives. 0 seats or 0 price = nothing is added. Set and cleared together
+    // with max_employees_override so granted seats and billed seats can't drift.
+    addon_employee_seats: integer('addon_employee_seats').notNull().default(0),
+    addon_seat_price: numeric('addon_seat_price', { precision: 14, scale: 2 })
+      .notNull()
+      .default('0'),
+    addon_note: varchar('addon_note', { length: 255 }).notNull().default(''),
     // Xendit-ready (nullable until the gateway migration): maps this account to
     // a Xendit customer for hosted invoices / future recurring plans.
     xendit_customer_id: varchar('xendit_customer_id', { length: 255 }),
@@ -1767,9 +1786,17 @@ export const subscriptionPaymentsTable = pgTable(
     discount_pct: numeric('discount_pct', { precision: 5, scale: 2 })
       .notNull()
       .default('0'),
+    // Paid staff-seat add-on charged on THIS payment (snapshot; the live seats
+    // and unit price live on subscriptions). Already the full line for the
+    // period — seats x unit price x 12 for a yearly plan — and never touched by
+    // the marketing deal, which only discounts the plan itself.
+    addon_amount: numeric('addon_amount', { precision: 14, scale: 2 })
+      .notNull()
+      .default('0'),
+    addon_seats: integer('addon_seats').notNull().default(0),
     // ...and the unique-amount matching trick: unique_code (e.g. 237) is added
-    // to the discounted price so admin can auto-match a bank transfer to THIS
-    // record. amount_due = discounted amount + unique_code = actual transfer.
+    // to the payable total so admin can auto-match a bank transfer to THIS
+    // record. amount_due = discounted amount + addon_amount + unique_code.
     unique_code: integer('unique_code').notNull().default(0),
     amount_due: numeric('amount_due', { precision: 14, scale: 2 }).notNull(),
     method: SUBSCRIPTION_PAYMENT_METHOD('method')

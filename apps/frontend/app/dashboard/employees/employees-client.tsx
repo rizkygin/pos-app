@@ -180,7 +180,7 @@ export function EmployeesClient() {
           <span className="font-bold text-foreground">{maxEmployees}</span> karyawan aktif
           {capReached && (
             <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700 dark:bg-amber-950 dark:text-amber-300">
-              batas paket tercapai — upgrade untuk menambah
+              batas karyawan tercapai — upgrade paket untuk menambah
             </span>
           )}
         </p>

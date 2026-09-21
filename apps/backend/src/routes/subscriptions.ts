@@ -6,6 +6,8 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "../db";
 import {
   adminsTable,
+  employeesTable,
+  outletsTable,
   subscriptionsTable,
   subscriptionPlansTable,
   subscriptionPaymentsTable,
@@ -24,7 +26,7 @@ import {
   expireStalePayments,
   applyScheduledTierIfDue,
 } from "../lib/subscription";
-import { invalidateGate } from "../lib/outlet-access";
+import { getSubscriptionGate, invalidateGate, maxEmployeesFor } from "../lib/outlet-access";
 import { getUTCRangeFromLocalMonth } from "../lib/timezone";
 
 const PROOF_DIR = path.join(process.cwd(), "uploads", "subscriptions");
@@ -85,6 +87,9 @@ export async function subscriptionRoutes(app: FastifyInstance) {
           discount_tier: subscriptionsTable.discount_tier,
           discount_interval: subscriptionsTable.discount_interval,
           discount_note: subscriptionsTable.discount_note,
+          addon_employee_seats: subscriptionsTable.addon_employee_seats,
+          addon_seat_price: subscriptionsTable.addon_seat_price,
+          addon_note: subscriptionsTable.addon_note,
         })
         .from(subscriptionsTable)
         .where(eq(subscriptionsTable.user_id, user.id))
@@ -101,7 +106,19 @@ export async function subscriptionRoutes(app: FastifyInstance) {
             note: sub.discount_note ?? "",
           }
         : null;
-    return { success: true, data: plans, bank: BANK_INFO, deal };
+    // Paid staff seats, sent for the SAME reason as the deal: the card has to
+    // add it in or the merchant would click a price the quote then exceeds.
+    // seat_price is per seat per MONTH — a yearly card bills 12 (see
+    // employeeAddonFor, which is what actually prices the payment).
+    const addon =
+      sub && Number(sub.addon_employee_seats) > 0 && Number(sub.addon_seat_price) > 0
+        ? {
+            seats: Number(sub.addon_employee_seats),
+            seat_price: Number(sub.addon_seat_price),
+            note: sub.addon_note ?? "",
+          }
+        : null;
+    return { success: true, data: plans, bank: BANK_INFO, deal, addon };
   });
 
   app.get("/api/my-subscription", async (request, reply) => {
@@ -289,6 +306,9 @@ export async function subscriptionRoutes(app: FastifyInstance) {
           tier: subscriptionPaymentsTable.tier,
           interval: subscriptionPaymentsTable.interval,
           amount: subscriptionPaymentsTable.amount,
+          discount_pct: subscriptionPaymentsTable.discount_pct,
+          addon_amount: subscriptionPaymentsTable.addon_amount,
+          addon_seats: subscriptionPaymentsTable.addon_seats,
           unique_code: subscriptionPaymentsTable.unique_code,
           amount_due: subscriptionPaymentsTable.amount_due,
           status: subscriptionPaymentsTable.status,
@@ -328,12 +348,23 @@ export async function subscriptionRoutes(app: FastifyInstance) {
 
   // Revenue accumulation — computed straight from PAID payments (the source of
   // truth; no shadow table to drift): totals, this/last month (by paid_at),
-  // active subscriber count, and a 6-month trend.
+  // active subscriber count, and the per-month / per-year series the admin
+  // Pendapatan panel charts.
+  //
+  // This is the WHOLE platform's income: subscription payments are Ulun Pesan's
+  // only revenue stream (see schema.ts — merchant orders, cashflow and errands
+  // are the MERCHANTS' money and never ours), so summing paid rows here is the
+  // complete answer, not a slice of one.
   app.get("/api/admin/subscription-revenue", async (request, reply) => {
     const admin = await getAdminUser(request, reply);
     if (!admin) return;
 
     const paidAmount = sql<string>`coalesce(sum(${subscriptionPaymentsTable.amount_due}), 0)`;
+    // Split of that same total, so plan_total + addon_total === total exactly.
+    // The 3-digit unique code rides along on the plan side: it is a matching
+    // artifact of the plan payment, not a separate product.
+    const planAmount = sql<string>`coalesce(sum(${subscriptionPaymentsTable.amount_due} - ${subscriptionPaymentsTable.addon_amount}), 0)`;
+    const addonAmount = sql<string>`coalesce(sum(${subscriptionPaymentsTable.addon_amount}), 0)`;
     // "This month" is a local calendar month. new Date(y, m, 1) would use the
     // container's zone — UTC in the deployed image — so a payment made in the
     // first 7 hours of the 1st would be credited to the previous month.
@@ -352,9 +383,17 @@ export async function subscriptionRoutes(app: FastifyInstance) {
     };
     const monthStart = monthsAgoStart(0);
     const lastMonthStart = monthsAgoStart(1);
-    const trendStart = monthsAgoStart(5);
+    // 12 months back INCLUDING the current one, so the monthly panel always
+    // shows a full year ending today rather than a ragged window.
+    const monthlyStart = monthsAgoStart(11);
 
-    const [[allTime], [thisMonth], [lastMonth], [subs], trendRows] = await Promise.all([
+    // Bucket keys are cut in the viewer's zone, never UTC: a payment confirmed
+    // at 06:00 WIB on 1 Januari belongs to January and to that year, but its
+    // UTC timestamp still reads 31 December.
+    const localMonthKey = sql<string>`to_char(${subscriptionPaymentsTable.paid_at} AT TIME ZONE ${timezone}, 'YYYY-MM')`;
+    const localYearKey = sql<string>`to_char(${subscriptionPaymentsTable.paid_at} AT TIME ZONE ${timezone}, 'YYYY')`;
+
+    const [[allTime], [thisMonth], [lastMonth], [subs], monthlyRows, yearlyRows] = await Promise.all([
       db
         .select({ total: paidAmount, n: sql<number>`count(*)::int` })
         .from(subscriptionPaymentsTable)
@@ -386,19 +425,61 @@ export async function subscriptionRoutes(app: FastifyInstance) {
         .from(subscriptionsTable),
       db
         .select({
-          month: sql<string>`to_char(${subscriptionPaymentsTable.paid_at} AT TIME ZONE ${timezone}, 'YYYY-MM')`,
+          month: localMonthKey,
           total: paidAmount,
+          plan: planAmount,
+          addon: addonAmount,
+          n: sql<number>`count(*)::int`,
         })
         .from(subscriptionPaymentsTable)
         .where(
           and(
             eq(subscriptionPaymentsTable.status, "paid"),
-            sql`${subscriptionPaymentsTable.paid_at} >= ${trendStart}`,
+            sql`${subscriptionPaymentsTable.paid_at} >= ${monthlyStart}`,
           ),
         )
-        .groupBy(sql`to_char(${subscriptionPaymentsTable.paid_at} AT TIME ZONE ${timezone}, 'YYYY-MM')`)
-        .orderBy(sql`to_char(${subscriptionPaymentsTable.paid_at} AT TIME ZONE ${timezone}, 'YYYY-MM')`),
+        // By ordinal, not by repeating the expression: the timezone is a bound
+        // parameter, so writing the same to_char() twice emits $1 in SELECT and
+        // $4 in GROUP BY, which Postgres cannot prove are the same expression
+        // ("column paid_at must appear in the GROUP BY clause"). The timezone
+        // is caller-supplied, so inlining it instead is not an option.
+        .groupBy(sql`1`)
+        .orderBy(sql`1`),
+      // Yearly runs over ALL history — there is no "last N years" window worth
+      // hiding, and a SaaS wants every year it has ever earned in one column.
+      db
+        .select({
+          year: localYearKey,
+          total: paidAmount,
+          plan: planAmount,
+          addon: addonAmount,
+          n: sql<number>`count(*)::int`,
+        })
+        .from(subscriptionPaymentsTable)
+        .where(eq(subscriptionPaymentsTable.status, "paid"))
+        .groupBy(sql`1`)
+        .orderBy(sql`1`),
     ]);
+
+    const bucket = (r: { total: string; plan: string; addon: string; n: number }) => ({
+      total: Number(r.total),
+      plan_total: Number(r.plan),
+      addon_total: Number(r.addon),
+      count: r.n,
+    });
+
+    // A month with no payments must still appear, as a zero — a gap in the
+    // series would otherwise read as "we didn't chart it" rather than "we
+    // earned nothing", and it squashes the bar scale.
+    const byMonth = new Map(monthlyRows.map((r) => [r.month, bucket(r)]));
+    const monthly = Array.from({ length: 12 }, (_, i) => {
+      const d = new Date(Date.UTC(localYear, localMonth - 1 - (11 - i), 1));
+      const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+      return {
+        period: key,
+        ...(byMonth.get(key) ?? { total: 0, plan_total: 0, addon_total: 0, count: 0 }),
+      };
+    });
 
     return {
       success: true,
@@ -410,7 +491,8 @@ export async function subscriptionRoutes(app: FastifyInstance) {
         last_month: Number(lastMonth.total),
         active_subscribers: subs.active,
         trialing: subs.trialing,
-        trend: trendRows.map((r) => ({ month: r.month, total: Number(r.total) })),
+        monthly,
+        yearly: yearlyRows.map((r) => ({ period: r.year, ...bucket(r) })),
       },
     };
   });
@@ -480,6 +562,262 @@ export async function subscriptionRoutes(app: FastifyInstance) {
     });
 
     return { success: true, data: updated, merchant: { name: merchant.name, email } };
+  });
+
+  // ------------------------------------------- admin: per-merchant staff quota
+  // The plan's features.maxEmployees is the catalog rule for a TIER; this pair
+  // of endpoints sells/grants a different number to ONE account without moving
+  // the seed (which would reprice every merchant on that tier). Looked up by
+  // account email, like the deal form next to it.
+
+  // What one merchant's staff quota looks like right now — the plan's own cap,
+  // the override on top of it, what the gate actually grants today, and how
+  // many seats each of their outlets has filled. The cap is PER OUTLET (that
+  // is how routes/employees.ts counts), so a multi-outlet owner gets a row
+  // each instead of one misleading total.
+  app.get("/api/admin/subscription-employee-cap", async (request, reply) => {
+    const admin = await getAdminUser(request, reply);
+    if (!admin) return;
+    const email = String((request.query as { email?: string }).email ?? "")
+      .trim()
+      .toLowerCase();
+    if (!email) return reply.status(400).send({ success: false, error: "Email merchant wajib diisi" });
+
+    const [merchant] = await db
+      .select({ id: usersTable.id, name: usersTable.name, email: usersTable.email })
+      .from(usersTable)
+      .where(eq(usersTable.email, email))
+      .limit(1);
+    if (!merchant)
+      return reply.status(404).send({ success: false, error: "Merchant tidak ditemukan" });
+
+    const [[sub], outlets, gate] = await Promise.all([
+      db
+        .select({
+          id: subscriptionsTable.id,
+          status: subscriptionsTable.status,
+          tier: subscriptionsTable.tier,
+          current_period_end: subscriptionsTable.current_period_end,
+          override: subscriptionsTable.max_employees_override,
+          addon_seats: subscriptionsTable.addon_employee_seats,
+          addon_seat_price: subscriptionsTable.addon_seat_price,
+          addon_note: subscriptionsTable.addon_note,
+          plan_name: subscriptionPlansTable.name,
+          plan_features: subscriptionPlansTable.features,
+        })
+        .from(subscriptionsTable)
+        .leftJoin(
+          subscriptionPlansTable,
+          eq(subscriptionPlansTable.id, subscriptionsTable.plan_id),
+        )
+        .where(eq(subscriptionsTable.user_id, merchant.id))
+        .limit(1),
+      db
+        .select({
+          id: outletsTable.id,
+          name: outletsTable.name,
+          active_employees: sql<number>`count(${employeesTable.id}) filter (where ${employeesTable.is_active})::int`,
+        })
+        .from(outletsTable)
+        .leftJoin(employeesTable, eq(employeesTable.outlet_id, outletsTable.id))
+        .where(eq(outletsTable.user_id, merchant.id))
+        .groupBy(outletsTable.id, outletsTable.name)
+        .orderBy(outletsTable.id),
+      getSubscriptionGate(merchant.id),
+    ]);
+
+    const planCap = Number((sub?.plan_features as Record<string, unknown> | null)?.maxEmployees);
+
+    return {
+      success: true,
+      data: {
+        merchant,
+        subscription: sub
+          ? {
+              status: sub.status,
+              tier: sub.tier,
+              plan_name: sub.plan_name,
+              current_period_end: sub.current_period_end,
+            }
+          : null,
+        // null = no paid plan behind them yet (trial), so clearing the override
+        // falls back to the trial allowance rather than a tier's number.
+        plan_max_employees: Number.isFinite(planCap) ? planCap : null,
+        override: sub?.override ?? null,
+        effective_max: maxEmployeesFor(gate),
+        // The price side of the same grant: how many seats are billed and at
+        // what per-seat monthly rate, so the form shows what the merchant is
+        // actually paying rather than only what they were given.
+        addon_seats: sub?.addon_seats ?? 0,
+        addon_seat_price: Number(sub?.addon_seat_price ?? 0),
+        addon_note: sub?.addon_note ?? "",
+        outlets,
+      },
+    };
+  });
+
+  // Set (max_employees = a number) or clear (null) the override, together with
+  // what the merchant pays for those seats. Both live in ONE call on purpose:
+  // granting seats and billing for them are the same decision, and splitting
+  // them into two endpoints is how an account ends up with six seats nobody
+  // charges for. Clearing the cap therefore clears the charge too.
+  //
+  // Lowering the cap never deactivates anyone — it is only consulted when an
+  // employee is added or reactivated — so the response reports any outlet
+  // already above the new number instead of silently locking staff out.
+  app.post("/api/admin/subscription-employee-cap", async (request, reply) => {
+    const admin = await getAdminUser(request, reply);
+    if (!admin) return;
+    const body = (request.body ?? {}) as {
+      email?: string;
+      max_employees?: number | string | null;
+      addon_seats?: number | string | null;
+      addon_seat_price?: number | string | null;
+      addon_note?: string;
+      note?: string;
+    };
+    const email = String(body.email ?? "").trim().toLowerCase();
+    if (!email) return reply.status(400).send({ success: false, error: "Email merchant wajib diisi" });
+
+    const raw = body.max_employees;
+    const clearing = raw === null || raw === undefined || String(raw).trim() === "";
+    let cap: number | null = null;
+    if (!clearing) {
+      cap = Number(raw);
+      if (!Number.isInteger(cap) || cap < 0 || cap > 100)
+        return reply
+          .status(400)
+          .send({ success: false, error: "Kuota karyawan harus bilangan bulat 0–100" });
+    }
+
+    // Billing for those seats. Clearing the cap zeroes it; otherwise both
+    // numbers must be sane, and either one at 0 means "granted, not charged"
+    // (a client kept whole mid-upgrade) — a legitimate case, not an error.
+    let addonSeats = 0;
+    let addonPrice = 0;
+    if (!clearing) {
+      addonSeats = Number(body.addon_seats ?? 0);
+      addonPrice = Number(body.addon_seat_price ?? 0);
+      if (!Number.isInteger(addonSeats) || addonSeats < 0 || addonSeats > 100)
+        return reply
+          .status(400)
+          .send({ success: false, error: "Jumlah akun berbayar harus bilangan bulat 0–100" });
+      if (!Number.isFinite(addonPrice) || addonPrice < 0 || addonPrice > 99_999_999)
+        return reply
+          .status(400)
+          .send({ success: false, error: "Harga per akun harus 0 atau lebih" });
+      addonPrice = Math.round(addonPrice);
+      if (addonSeats > (cap ?? 0))
+        return reply.status(400).send({
+          success: false,
+          error: `Akun berbayar (${addonSeats}) tidak boleh melebihi kuota karyawan (${cap ?? 0})`,
+        });
+    }
+    const addonNote = clearing ? "" : String(body.addon_note ?? "").slice(0, 255);
+
+    const [merchant] = await db
+      .select({ id: usersTable.id, name: usersTable.name })
+      .from(usersTable)
+      .where(eq(usersTable.email, email))
+      .limit(1);
+    if (!merchant)
+      return reply.status(404).send({ success: false, error: "Merchant tidak ditemukan" });
+
+    // Same rule as the deal form: never pre-create a subscription row here — it
+    // would burn the merchant's one-time trial before they ever picked a plan.
+    const [sub] = await db
+      .select({
+        id: subscriptionsTable.id,
+        override: subscriptionsTable.max_employees_override,
+        addon_seats: subscriptionsTable.addon_employee_seats,
+        addon_seat_price: subscriptionsTable.addon_seat_price,
+      })
+      .from(subscriptionsTable)
+      .where(eq(subscriptionsTable.user_id, merchant.id))
+      .limit(1);
+    if (!sub)
+      return reply.status(404).send({
+        success: false,
+        error: "Merchant belum punya data langganan — minta merchant membuka halaman Langganan dulu",
+      });
+
+    await db
+      .update(subscriptionsTable)
+      .set({
+        max_employees_override: cap,
+        addon_employee_seats: addonSeats,
+        addon_seat_price: String(addonPrice),
+        addon_note: addonNote,
+        updatedAt: new Date(),
+      })
+      .where(eq(subscriptionsTable.id, sub.id));
+
+    await db.insert(subscriptionEventsTable).values({
+      subscription_id: sub.id,
+      user_id: merchant.id,
+      type: clearing ? "employee_cap_cleared" : "employee_cap_set",
+      actor: "admin",
+      actor_id: admin.id,
+      detail: {
+        max_employees: cap,
+        previous: sub.override ?? null,
+        addon_seats: addonSeats,
+        addon_seat_price: addonPrice,
+        previous_addon_seats: sub.addon_seats ?? 0,
+        previous_addon_seat_price: Number(sub.addon_seat_price ?? 0),
+        addon_note: addonNote,
+        note: body.note ?? "",
+      },
+    });
+
+    // The merchant's cached gate must grant the new quota on their next click.
+    invalidateGate(merchant.id);
+    const gate = await getSubscriptionGate(merchant.id);
+    const effective = maxEmployeesFor(gate);
+
+    const overBudget = await db
+      .select({
+        id: outletsTable.id,
+        name: outletsTable.name,
+        active_employees: sql<number>`count(${employeesTable.id}) filter (where ${employeesTable.is_active})::int`,
+      })
+      .from(outletsTable)
+      .leftJoin(employeesTable, eq(employeesTable.outlet_id, outletsTable.id))
+      .where(eq(outletsTable.user_id, merchant.id))
+      .groupBy(outletsTable.id, outletsTable.name)
+      .having(sql`count(${employeesTable.id}) filter (where ${employeesTable.is_active}) > ${effective}`);
+
+    // A quote the merchant is already holding was priced BEFORE this change —
+    // createPendingPayment voids it the next time they pick a plan, but until
+    // then they could still transfer the old amount. Report it so the admin can
+    // tell them to re-pick rather than confirming an underpayment by surprise.
+    const [stalePending] = await db
+      .select({
+        id: subscriptionPaymentsTable.id,
+        amount_due: subscriptionPaymentsTable.amount_due,
+        addon_amount: subscriptionPaymentsTable.addon_amount,
+      })
+      .from(subscriptionPaymentsTable)
+      .where(
+        and(
+          eq(subscriptionPaymentsTable.subscription_id, sub.id),
+          eq(subscriptionPaymentsTable.status, "pending"),
+        ),
+      )
+      .limit(1);
+
+    return {
+      success: true,
+      data: {
+        override: cap,
+        effective_max: effective,
+        addon_seats: addonSeats,
+        addon_seat_price: addonPrice,
+        over_cap_outlets: overBudget,
+        stale_pending: stalePending ?? null,
+      },
+      merchant: { name: merchant.name, email },
+    };
   });
 
   app.post("/api/admin/subscription-payments/:id/confirm", async (request, reply) => {

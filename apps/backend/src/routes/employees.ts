@@ -11,12 +11,8 @@ import { auth } from "../auth";
 import {
   requireOutletAccess,
   EMPLOYEE_PERMISSIONS,
-  type SubscriptionGate,
+  maxEmployeesFor,
 } from "../lib/outlet-access";
-
-// Employees without a subscription (or on a plan without the key) get the
-// Basic allowance — matches the seeded features.maxEmployees floor.
-const DEFAULT_MAX_EMPLOYEES = 1;
 
 // Keep only known permission keys, coerced to booleans.
 function sanitizePermissions(input: unknown): Record<string, boolean> {
@@ -27,15 +23,6 @@ function sanitizePermissions(input: unknown): Record<string, boolean> {
     }
   }
   return out;
-}
-
-// The owner's active-employee cap, read off the subscription GATE rather than
-// subscriptions.plan_id: a trial's plan_id is NULL (auto-started) or whatever
-// plan was clicked first, so reading it directly capped trials at 1 or 3 while
-// every other feature honored TRIAL_FEATURES' 5.
-function maxEmployeesFor(gate: SubscriptionGate): number {
-  const cap = Number(gate.features.maxEmployees);
-  return Number.isFinite(cap) && cap >= 0 ? cap : DEFAULT_MAX_EMPLOYEES;
 }
 
 // Kill every session of a user (deactivation / password reset must bite now,
@@ -98,7 +85,10 @@ export async function employeeRoutes(app: FastifyInstance) {
     if (activeCount >= max)
       return reply.status(409).send({
         success: false,
-        error: `Paket Pian dibatasi ${max} karyawan aktif — upgrade paket untuk menambah`,
+        // Not always "upgrade your plan" any more: an admin may have set a
+        // custom quota on this account, and telling a merchant who already
+        // paid for seats to upgrade would be wrong.
+        error: `Batas karyawan aktif Pian ${max} orang — upgrade paket atau hubungi admin untuk menambah`,
       });
 
     // Reject emails that already belong to any account: silently hijacking an

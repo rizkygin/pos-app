@@ -55,6 +55,8 @@ function addInterval(from: Date, interval: 'monthly' | 'yearly') {
 // used to price remaining time (Model 2 credit-to-days conversion).
 const TIER_RANK: Record<string, number> = { basic: 0, pro: 1, max_lite: 2, max: 3, ultimax: 4 };
 const PERIOD_DAYS: Record<'monthly' | 'yearly', number> = { monthly: 30, yearly: 365 };
+// How many months of a per-month add-on one billing period covers.
+const PERIOD_MONTHS: Record<'monthly' | 'yearly', number> = { monthly: 1, yearly: 12 };
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 async function logEvent(
@@ -112,6 +114,8 @@ type ReceiptPayload = {
   interval: 'monthly' | 'yearly';
   amount: string; // base plan price
   discount_pct: number; // marketing deal applied to this payment (0 = none)
+  addon_amount: string; // paid staff seats charged on this payment (0 = none)
+  addon_seats: number; // how many seats that covers
   bonus_days: number; // upgrade conversion: remaining old-plan value as days
   unique_code: number;
   amount_due: string; // what was actually transferred
@@ -162,6 +166,14 @@ function receiptEmailHtml(r: ReceiptPayload) {
                 ? row(
                     `Diskon (${r.discount_pct}%)`,
                     `-${rupiah(Math.round(Number(r.amount) * (r.discount_pct / 100)))}`,
+                  )
+                : ''
+            }
+            ${
+              Number(r.addon_amount) > 0
+                ? row(
+                    `Tambahan ${r.addon_seats} akun karyawan`,
+                    `+${rupiah(r.addon_amount)}`,
                   )
                 : ''
             }
@@ -292,6 +304,25 @@ export function effectiveDiscountPct(
   return Math.min(100, pct);
 }
 
+// Paid staff seats (the price side of max_employees_override) resolved for one
+// plan. The stored unit price is PER SEAT PER MONTH, so a yearly plan bills 12
+// of them and the same admin setting stays correct whichever interval the
+// merchant picks — and keeps being charged after an upgrade, which is exactly
+// what a tier-scoped "negative deal" would have failed to do.
+//
+// Unlike a discount this is never scoped away and never proportional: it is a
+// flat pass-through charge added AFTER the marketing deal, so a merchant on 50%
+// off still pays full price for their extra seats.
+export function employeeAddonFor(
+  sub: { addon_employee_seats: number | null; addon_seat_price: string | null },
+  plan: { interval: 'monthly' | 'yearly' },
+) {
+  const seats = Number(sub.addon_employee_seats ?? 0);
+  const perMonth = Number(sub.addon_seat_price ?? 0);
+  if (!(seats > 0) || !(perMonth > 0)) return { seats: 0, amount: 0 };
+  return { seats, amount: Math.round(seats * perMonth * PERIOD_MONTHS[plan.interval]) };
+}
+
 // Merchant picks a plan → returns the pending payment carrying the unique
 // transfer amount (amount_due = discounted plan price + 3-digit unique code) so
 // the admin can match the bank mutation at a glance. Idempotent per plan: an
@@ -317,21 +348,26 @@ export async function createPendingPayment(userId: string, planId: number) {
           eq(subscriptionPaymentsTable.status, 'pending'),
         ),
       );
-    // Apply the merchant's marketing deal (if it matches this plan).
+    // Apply the merchant's marketing deal (if it matches this plan), then add
+    // their paid staff seats on top — the deal discounts the PLAN, the add-on
+    // is a pass-through charge, so the order matters and is not commutative.
     const discountPct = effectiveDiscountPct(sub, plan);
     const discountedPrice = Math.round(Number(plan.price) * (1 - discountPct / 100));
+    const addon = employeeAddonFor(sub, plan);
+    const payable = discountedPrice + addon.amount;
 
     const now = new Date();
     for (const p of pendings) {
       if (
         p.plan_id === plan.id &&
         Number(p.discount_pct) === discountPct &&
+        Number(p.addon_amount) === addon.amount &&
         (!p.expires_at || p.expires_at > now)
       ) {
         return { payment: p, subscription: sub, reused: true };
       }
-      // Different plan, changed deal, or stale: void it so only one live
-      // quote (with a current price) exists.
+      // Different plan, changed deal, changed add-on, or stale: void it so only
+      // one live quote (with a current price) exists.
       await tx
         .update(subscriptionPaymentsTable)
         .set({ status: 'expired' })
@@ -349,7 +385,7 @@ export async function createPendingPayment(userId: string, planId: number) {
         .where(
           and(
             eq(subscriptionPaymentsTable.status, 'pending'),
-            eq(subscriptionPaymentsTable.amount_due, String(discountedPrice + candidate)),
+            eq(subscriptionPaymentsTable.amount_due, String(payable + candidate)),
           ),
         )
         .limit(1);
@@ -371,8 +407,10 @@ export async function createPendingPayment(userId: string, planId: number) {
         currency: plan.currency,
         amount: plan.price,
         discount_pct: String(discountPct),
+        addon_amount: String(addon.amount),
+        addon_seats: addon.seats,
         unique_code: uniqueCode,
-        amount_due: String(discountedPrice + uniqueCode),
+        amount_due: String(payable + uniqueCode),
         method: 'manual_transfer',
         status: 'pending',
         expires_at: new Date(now.getTime() + PAYMENT_EXPIRY_DAYS * 24 * 60 * 60 * 1000),
@@ -480,6 +518,10 @@ export async function confirmPayment(paymentId: number, adminUserId: string) {
             ),
           );
       }
+      // Both sides of this ratio read `amount` — the base PLAN price — so the
+      // staff-seat add-on stays out of the conversion on purpose: it buys
+      // seats for a period, not plan time, and the seats carry over to the new
+      // period anyway. Same reason the discount is ignored here.
       const newDaily = Number(payment.amount) / PERIOD_DAYS[payment.interval];
       bonusDays = newDaily > 0 ? Math.max(0, Math.round(remainingValue / newDaily)) : 0;
       base = now;
@@ -554,6 +596,8 @@ export async function confirmPayment(paymentId: number, adminUserId: string) {
       interval: payment.interval,
       amount: payment.amount,
       discount_pct: Number(payment.discount_pct ?? 0),
+      addon_amount: payment.addon_amount ?? '0',
+      addon_seats: payment.addon_seats ?? 0,
       bonus_days: bonusDays,
       unique_code: payment.unique_code,
       amount_due: payment.amount_due,

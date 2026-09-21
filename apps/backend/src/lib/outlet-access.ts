@@ -211,6 +211,15 @@ export async function getSubscriptionGate(ownerUserId: string): Promise<Subscrip
   if (alive && sub.status === "trialing") features = TRIAL_FEATURES;
   else if (alive && sub.plan_id) features = planFeatures;
 
+  // An admin may sell/grant ONE merchant extra staff seats (admin > Langganan
+  // Merchant > Kuota Karyawan). It lands on the entitlement, never on
+  // planFeatures: what they may do today moves, what they pay for does not.
+  // Spread rather than assign — TRIAL_FEATURES and the plan row's features are
+  // shared objects, and writing through them would reprice everyone.
+  if (features !== NO_FEATURES && sub.max_employees_override != null) {
+    features = { ...features, maxEmployees: sub.max_employees_override };
+  }
+
   const gate: SubscriptionGate = {
     alive,
     status: sub.status,
@@ -247,6 +256,25 @@ const PERM_FEATURE: Partial<Record<EmployeePermission, string>> = {
  */
 export function hasFeature(gate: SubscriptionGate, flag: string): boolean {
   return gate.features[flag] === true;
+}
+
+// An owner with no subscription (or on a plan predating the key) gets the
+// Basic allowance — matches the seeded features.maxEmployees floor.
+const DEFAULT_MAX_EMPLOYEES = 1;
+
+/**
+ * How many ACTIVE employees this owner may keep, per outlet.
+ *
+ * Read off the gate rather than subscriptions.plan_id: a trial's plan_id is
+ * NULL (auto-started) or whatever plan was clicked first, so reading it
+ * directly capped trials at 1 or 3 while every other feature honored
+ * TRIAL_FEATURES' 5. An admin's per-merchant override is already folded into
+ * gate.features above, so this is the single answer — routes ask here instead
+ * of reading features.maxEmployees themselves.
+ */
+export function maxEmployeesFor(gate: SubscriptionGate): number {
+  const cap = Number(gate.features.maxEmployees);
+  return Number.isFinite(cap) && cap >= 0 ? cap : DEFAULT_MAX_EMPLOYEES;
 }
 
 /**
