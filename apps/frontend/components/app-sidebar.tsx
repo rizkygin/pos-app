@@ -54,7 +54,8 @@ import {
   Home,
   ShieldCheck,
   Wrench,
-  Armchair
+  Armchair,
+  BookOpenText
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -158,6 +159,16 @@ const navManagement: NavItem[] = [
     icon: SunDim,
     iconBg: 'bg-slate-100 dark:bg-slate-800',
     iconColor: 'text-slate-600 dark:text-slate-400',
+  },
+  {
+    // How-it-works guides (how laba kotor is costed, the duplicate-order
+    // audit…). Owner-only like the rest of this group; the route's own layout
+    // enforces it.
+    name: 'Panduan',
+    url: '/dashboard/panduan',
+    icon: BookOpenText,
+    iconBg: 'bg-sky-100 dark:bg-sky-950',
+    iconColor: 'text-sky-600 dark:text-sky-400',
   },
 ];
 
