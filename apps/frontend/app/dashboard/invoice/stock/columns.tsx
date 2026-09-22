@@ -22,6 +22,10 @@ export type StockRow = {
   // buying_price above is a hand-typed estimate rather than something the system
   // computed. Opname offers to fill it in; until then its value is a guess.
   needs_cost: boolean;
+  // products.barcode — the outlet's own code for the item, when it has one.
+  // There is no SKU column: this is the one per-outlet-unique code there is,
+  // and opname searches by it.
+  code: string | null;
 };
 
 const sortHeader = (label: string) =>

@@ -42,6 +42,7 @@ import {
   yearIn,
 } from "../lib/timezone";
 import { postMovement } from "../lib/cost";
+import { postCount } from "../lib/opname";
 
 // Cashflow categories used when an invoice is paid (seeded in CATEGORY_OUT/IN).
 const PURCHASE_CASH_CATEGORY = "Pembelian stok barang dagang";
@@ -2010,54 +2011,14 @@ export async function invoiceRoutes(app: FastifyInstance) {
             .where(and(eq(productsTable.id, it.product_id), eq(productsTable.outlet_id, outlet.id)))
             .limit(1);
           if (!p || !p.track_stock) continue;
-          const onHand = Number(p.stock) || 0;
-          const avg = Number(p.avg_cost) || 0;
-          const delta = +(counted - onHand).toFixed(2);
-
-          // A cost the owner typed for a product the ledger cannot price. Only
-          // when the average really is 0: an established average is the ledger's
-          // own arithmetic and opname does not get to argue with it.
-          const typed = Number(it.unit_cost);
-          const setsCost = avg === 0 && Number.isFinite(typed) && typed > 0;
-
-          let touched = false;
-
-          // Stock already on the shelf, valued at nothing. Say what it is worth
-          // FIRST, so the count difference below is then valued at that same
-          // number instead of at zero.
-          if (setsCost && onHand > 0) {
-            await postMovement(tx, {
-              outletId: outlet.id,
-              productId: it.product_id,
-              qtyChange: 0,
-              unitCost: typed,
-              reason: "adjustment",
-              note: `${note} · HPP awal ${Math.round(typed)}/${p.unit}`,
-            });
-            touched = true;
-          }
-
-          // Valued at the running average in both directions: shrinkage is
-          // stock worth what the rest of the shelf is worth, and a surplus found
-          // during a count is stock that was always there, not a purchase. Note
-          // this posts the DELTA rather than setting the count absolutely — same
-          // resulting quantity, but it goes through the one ledger writer.
-          //
-          // The one exception is a surplus onto an EMPTY shelf priced at 0: the
-          // revaluation above had nothing to revalue, so the incoming quantity
-          // has to carry the cost itself.
-          if (delta !== 0) {
-            await postMovement(tx, {
-              outletId: outlet.id,
-              productId: it.product_id,
-              qtyChange: delta,
-              ...(setsCost && onHand <= 0 && delta > 0 ? { unitCost: typed } : {}),
-              reason: "adjustment",
-              note,
-            });
-            touched = true;
-          }
-
+          const delta = +(counted - (Number(p.stock) || 0)).toFixed(2);
+          const touched = await postCount(tx, {
+            outletId: outlet.id,
+            product: { id: it.product_id, ...p },
+            delta,
+            typedCost: it.unit_cost == null ? null : Number(it.unit_cost),
+            note,
+          });
           if (touched) count++;
         }
         return count;

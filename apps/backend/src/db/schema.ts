@@ -1501,6 +1501,96 @@ export const stockMovementsTable = pgTable(
       table.reason,
       table.created_at,
     ),
+    // "What did the system hold at time T" (opname sessions, migration 0082):
+    // current stock minus every movement of the product after T.
+    index('stock_movements_product_created_idx').on(table.product_id, table.created_at),
+  ],
+);
+
+/**
+ * Stock opname SESSIONS (migration 0082) — a physical count that may take
+ * days while the shop keeps selling.
+ *
+ * Each counted line remembers WHEN it was counted, and is compared with what
+ * the system held at that moment: current stock minus every movement after
+ * counted_at (lib/opname.ts). Comparing against one snapshot taken when the
+ * session opened would book every sale made during the count as missing
+ * stock. counted_at may also be set back a few days, which is how a count
+ * written on paper yesterday still lands against yesterday's stock.
+ *
+ * Nothing touches stock until the session is FINISHED: then every line with a
+ * difference posts an 'adjustment' movement dated at its counted_at. A
+ * cancelled session posts nothing and keeps its lines as a record.
+ *
+ * One open session per outlet (partial unique index below).
+ */
+export const stockOpnameSessionsTable = pgTable(
+  'stock_opname_sessions',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    outlet_id: integer('outlet_id')
+      .notNull()
+      .references(() => outletsTable.id),
+    note: varchar('note', { length: 255 }).default('').notNull(),
+    status: varchar('status', { length: 12 }).default('open').notNull(),
+    started_at: timestamp('started_at', { withTimezone: true }).defaultNow().notNull(),
+    started_by: text('started_by').references(() => usersTable.id),
+    finished_at: timestamp('finished_at', { withTimezone: true }),
+    finished_by: text('finished_by').references(() => usersTable.id),
+  },
+  (t) => [
+    check('stock_opname_sessions_status_ck', sql`${t.status} in ('open', 'finished', 'cancelled')`),
+    uniqueIndex('stock_opname_sessions_one_open_idx')
+      .on(t.outlet_id)
+      .where(sql`status = 'open'`),
+    index('stock_opname_sessions_outlet_started_idx').on(t.outlet_id, t.started_at),
+  ],
+);
+
+export const stockOpnameLinesTable = pgTable(
+  'stock_opname_lines',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    session_id: integer('session_id')
+      .notNull()
+      .references(() => stockOpnameSessionsTable.id),
+    product_id: text('product_id')
+      .notNull()
+      .references(() => productsTable.id),
+    // NULL only on a SKIPPED line — something that could not be counted at
+    // all. A zero is a real count ("the shelf is empty") and must stay
+    // distinguishable from it.
+    counted: numeric('counted', { precision: 12, scale: 3 }),
+    // "Lewati — tidak bisa dihitung". It adjusts nothing, but it is an
+    // ANSWER: finishing requires every product to be counted or skipped, and
+    // a skipped one is deliberately left alone rather than forgotten.
+    skipped: boolean('skipped').default(false).notNull(),
+    // Why the count differs (migration 0083). One of REASON_CODES in
+    // lib/opname.ts; required before finishing when the difference is over
+    // tolerance, optional otherwise. Written into the adjustment's note so
+    // Riwayat Opname and Alur Stok explain themselves.
+    reason: varchar('reason', { length: 40 }),
+    counted_at: timestamp('counted_at', { withTimezone: true }).notNull(),
+    counted_by: text('counted_by').references(() => usersTable.id),
+    // An HPP typed for a product the ledger has never priced; honoured at
+    // finish only while avg_cost is still 0, same rule as the one-shot opname.
+    unit_cost: numeric('unit_cost', { precision: 14, scale: 4 }),
+    // Written at FINISH, never before: the system stock at counted_at and the
+    // difference that was booked. Null on an open or cancelled session, whose
+    // numbers are computed live instead.
+    system_qty: numeric('system_qty', { precision: 12, scale: 3 }),
+    delta: numeric('delta', { precision: 12, scale: 3 }),
+    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex('stock_opname_lines_session_product_idx').on(t.session_id, t.product_id),
+    // "When was this product last counted" — the guard against a count dated
+    // before a later one (lib/opname.ts lastCountedAt).
+    index('stock_opname_lines_product_counted_idx').on(t.product_id, t.counted_at),
+    check(
+      'stock_opname_lines_counted_ck',
+      sql`(${t.skipped} and ${t.counted} is null) or (not ${t.skipped} and ${t.counted} is not null)`,
+    ),
   ],
 );
 

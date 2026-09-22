@@ -35,6 +35,12 @@ export type PostMovementArgs = {
   // re-deriving that from product config that may have changed since.
   orderDetailId?: number | null;
   note?: string;
+  // When the movement HAPPENED, if not now. Only an opname session passes it:
+  // a count made yesterday is booked at yesterday's time, so Alur Stok and
+  // Riwayat Opname show it where it belongs. It is a label on the row only —
+  // the quantity and the average below are always applied to the product as it
+  // stands now, which is what keeps the cached balances equal to the ledger.
+  createdAt?: Date;
 };
 
 // The single writer for stock_movements. Every movement in the system goes
@@ -56,7 +62,8 @@ export async function postMovement(
   tx: Tx,
   args: PostMovementArgs,
 ): Promise<{ unitCost: number; costChange: number }> {
-  const { outletId, productId, qtyChange, reason, invoiceId, orderId, orderDetailId, note } = args;
+  const { outletId, productId, qtyChange, reason, invoiceId, orderId, orderDetailId, note, createdAt } =
+    args;
 
   // FOR UPDATE because avg_cost is a read-modify-write, unlike `stock`, which is
   // a self-referencing SQL increment and safe without a lock. Two concurrent
@@ -144,6 +151,7 @@ export async function postMovement(
     note: note ?? "",
     unit_cost: effUnit.toFixed(4),
     cost_change: costChange.toFixed(2),
+    ...(createdAt ? { created_at: createdAt } : {}),
   });
 
   await tx

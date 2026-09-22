@@ -19,6 +19,7 @@ import { DataTable } from "@/app/dashboard/reports/data-table";
 import { API_URL } from "@/lib/api-url";
 import { fmtIDR } from "@/lib/utils/format";
 import { stockColumns, type StockRow } from "./columns";
+import { OpnameSessionView, type OpnameSession } from "./opname-session";
 
 type Product = {
   id: string;
@@ -33,6 +34,7 @@ type Product = {
   track_stock: boolean;
   has_recipe: boolean;
   yield_qty: string;
+  barcode?: string | null;
 };
 
 type HistoryRow = {
@@ -77,14 +79,13 @@ export function StockClient() {
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(10);
 
-  // opname state
-  const [counts, setCounts] = useState<Record<string, string>>({});
-  // Unit costs typed during an opname, only for rows the ledger cannot price.
-  // Left empty on purpose: an untouched field changes nothing, so confirming a
-  // count never quietly promotes a guessed price into ledger truth.
-  const [costs, setCosts] = useState<Record<string, string>>({});
-  const [note, setNote] = useState("");
-  const [saving, setSaving] = useState(false);
+  // opname state: the outlet's open session, if any (opname-session.tsx). A
+  // count can take days, so the page has to know one is running before anyone
+  // presses the button.
+  const [session, setSession] = useState<OpnameSession | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [opnameError, setOpnameError] = useState("");
+  const [finishedMsg, setFinishedMsg] = useState("");
 
   // production state: which product is being made, and how much of it
   const [produceRow, setProduceRow] = useState<StockRow | null>(null);
@@ -133,6 +134,7 @@ export function StockClient() {
               has_recipe: !!p.has_recipe,
               yield_qty: Number(p.yield_qty || 1),
               needs_cost: !(ledgerCost > 0),
+              code: p.barcode || null,
             };
           }),
       );
@@ -141,8 +143,19 @@ export function StockClient() {
     }
   };
 
+  const loadSession = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/stock/opname-sessions/current`, { credentials: "include" });
+      const json = await res.json();
+      if (json.success) setSession(json.session);
+    } catch {
+      /* the button still works: starting returns the open session */
+    }
+  };
+
   useEffect(() => {
     loadStock();
+    loadSession();
   }, []);
 
   useEffect(() => {
@@ -212,13 +225,32 @@ export function StockClient() {
   );
   const pageData = useMemo(() => filtered.slice((page - 1) * limit, page * limit), [filtered, page, limit]);
 
-  const openOpname = () => {
-    // Pre-fill each count with the current system stock; the owner edits the
-    // ones they physically counted differently.
-    setCounts(Object.fromEntries(rows.map((r) => [r.id, String(r.stock)])));
-    setCosts({});
-    setNote("");
-    setView("opname");
+  // Resume the open session, or start one. Starting when another device just
+  // started one returns that one instead, so both end up counting together.
+  const openOpname = async () => {
+    setFinishedMsg("");
+    setOpnameError("");
+    if (session) {
+      setView("opname");
+      return;
+    }
+    setStarting(true);
+    try {
+      const res = await fetch(`${API_URL}/api/stock/opname-sessions`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error || "Gagal memulai opname");
+      setSession(json.session);
+      setView("opname");
+    } catch (e) {
+      setOpnameError(e instanceof Error ? e.message : "Gagal memulai opname");
+    } finally {
+      setStarting(false);
+    }
   };
 
   const loadHistory = async (from: string, to: string) => {
@@ -288,32 +320,6 @@ export function StockClient() {
     }
     return groups;
   }, [history]);
-
-  const saveOpname = async () => {
-    setSaving(true);
-    try {
-      const items = rows.map((r) => {
-        const typed = Number(costs[r.id]);
-        return {
-          product_id: r.id,
-          counted: Number(counts[r.id] ?? r.stock),
-          // Only sent where it means something. The server refuses it anyway
-          // for a product the ledger has already priced.
-          ...(r.needs_cost && Number.isFinite(typed) && typed > 0 ? { unit_cost: typed } : {}),
-        };
-      });
-      await fetch(`${API_URL}/api/stock/opname`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ note, items }),
-      });
-      await loadStock();
-      setView("list");
-    } finally {
-      setSaving(false);
-    }
-  };
 
   const openProduce = (row: StockRow) => {
     setProduceRow(row);
@@ -540,114 +546,27 @@ export function StockClient() {
   }
 
   // ===================================================================== opname
-  if (view === "opname") {
+  if (view === "opname" && session) {
     return (
-      <div className="p-4 md:p-6 space-y-5">
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" size="icon-sm" onClick={() => setView("list")}>
-            <ArrowLeft className="size-4" />
-          </Button>
-          <h1 className="text-xl font-semibold tracking-tight">Stok Opname</h1>
-        </div>
-        <p className="text-sm text-muted-foreground">
-          Masukkan jumlah hasil hitung fisik. Selisih akan dicatat sebagai penyesuaian stok
-          (tidak memengaruhi kas).
-        </p>
-        {needCostCount > 0 && (
-          <p className="rounded-lg border border-dashed border-amber-300 bg-amber-50 px-3 py-2 text-[13px] leading-relaxed text-amber-800 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-200">
-            <span className="font-semibold">{needCostCount} produk belum punya HPP dari sistem.</span>{" "}
-            Stoknya tidak pernah masuk lewat faktur pembelian, jadi nilainya sekarang cuma tebakan dari
-            form produk. Isi <span className="font-medium">HPP / unit</span> di bawah kalau kamu tahu
-            harga aslinya — kosongkan saja kalau belum yakin, tidak ada yang berubah.
-          </p>
-        )}
-
-        <label className="block max-w-md space-y-1">
-          <span className="text-xs font-medium text-muted-foreground">Catatan opname</span>
-          <Input
-            placeholder="mis. Opname 1 Juli — barang busuk"
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-          />
-        </label>
-
-        <div className="overflow-x-auto rounded-xl border">
-          <table className="w-full text-sm">
-            <thead className="border-b bg-muted/30 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-              <tr>
-                <th className="px-3 py-2 font-medium">Produk</th>
-                <th className="px-3 py-2 text-right font-medium">Stok Sistem</th>
-                <th className="px-3 py-2 text-right font-medium">Hitung Fisik</th>
-                <th className="px-3 py-2 text-right font-medium">Selisih</th>
-                <th className="px-3 py-2 text-right font-medium">HPP / Unit</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => {
-                const counted = Number(counts[r.id] ?? r.stock);
-                const delta = +(counted - r.stock).toFixed(2);
-                return (
-                  <tr key={r.id} className="border-b last:border-0">
-                    <td className="px-3 py-2 font-medium">{r.product_name}</td>
-                    <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
-                      {r.stock} {r.unit}
-                    </td>
-                    <td className="px-3 py-2">
-                      <Input
-                        type="number"
-                        value={counts[r.id] ?? ""}
-                        onChange={(e) => setCounts((c) => ({ ...c, [r.id]: e.target.value }))}
-                        className="h-8 w-24 ml-auto text-right"
-                      />
-                    </td>
-                    <td
-                      className={`px-3 py-2 text-right tabular-nums font-medium ${
-                        delta < 0 ? "text-destructive" : delta > 0 ? "text-green-600 dark:text-green-400" : "text-muted-foreground"
-                      }`}
-                    >
-                      {delta > 0 ? "+" : ""}
-                      {delta} {r.unit}
-                    </td>
-                    <td className="px-3 py-2">
-                      {r.needs_cost ? (
-                        <Input
-                          type="number"
-                          min="0"
-                          placeholder={String(r.buying_price || 0)}
-                          value={costs[r.id] ?? ""}
-                          onChange={(e) => setCosts((c) => ({ ...c, [r.id]: e.target.value }))}
-                          className="ml-auto h-8 w-28 text-right"
-                        />
-                      ) : (
-                        <div className="text-right tabular-nums text-muted-foreground">
-                          {fmtIDR(r.buying_price)}
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-              {rows.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="px-3 py-10 text-center text-sm text-muted-foreground">
-                    Tidak ada produk yang dikelola stoknya.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="flex justify-end gap-2">
-          <Button variant="outline" onClick={() => setView("list")} disabled={saving}>
-            Batal
-          </Button>
-          <Button onClick={saveOpname} disabled={saving} className="bg-teal-600 text-white hover:bg-teal-700">
-            {saving && <Loader2 className="size-4 animate-spin" />}
-            Simpan Opname
-          </Button>
-        </div>
-      </div>
+      <OpnameSessionView
+        key={session.id}
+        rows={rows}
+        session={session}
+        onSessionChange={setSession}
+        onRefreshStock={loadStock}
+        onExit={() => setView("list")}
+        onFinished={async ({ adjusted, counted, skipped }) => {
+          setSession(null);
+          await loadStock();
+          setView("list");
+          const tail = skipped > 0 ? `, ${skipped} dilewati` : "";
+          setFinishedMsg(
+            adjusted > 0
+              ? `Opname selesai — ${counted} barang dihitung, ${adjusted} disesuaikan${tail}.`
+              : `Opname selesai — ${counted} barang dihitung, semuanya cocok${tail}.`,
+          );
+        }}
+      />
     );
   }
 
@@ -671,13 +590,42 @@ export function StockClient() {
           </Button>
           <Button
             onClick={openOpname}
-            disabled={loading || rows.length === 0}
+            disabled={loading || starting || rows.length === 0}
             className="bg-teal-600 text-white hover:bg-teal-700"
           >
-            <ClipboardCheck className="size-4" /> Stok Opname
+            {starting ? <Loader2 className="size-4 animate-spin" /> : <ClipboardCheck className="size-4" />}
+            {session ? "Lanjutkan Opname" : "Stok Opname"}
           </Button>
         </div>
       </div>
+
+      {/* A count left open over several days is the normal case now, so say
+          so on the page everyone lands on — a second device should join the
+          running count, not wonder why stock has not moved. */}
+      {session && (
+        <div className="flex flex-col gap-2 rounded-xl border border-teal-200 bg-teal-50 px-4 py-3 text-sm text-teal-900 sm:flex-row sm:items-center sm:justify-between dark:border-teal-900/60 dark:bg-teal-950/30 dark:text-teal-100">
+          <p>
+            <span className="font-semibold">Opname sedang berjalan</span> sejak{" "}
+            {new Date(session.startedAt).toLocaleString("id-ID", {
+              weekday: "short",
+              day: "2-digit",
+              month: "short",
+              hour: "2-digit",
+              minute: "2-digit",
+            })}{" "}
+            · {session.lines.length} barang sudah dihitung. Stok belum berubah sampai opname diselesaikan.
+          </p>
+          <Button size="sm" variant="outline" onClick={openOpname} className="shrink-0">
+            Lanjutkan
+          </Button>
+        </div>
+      )}
+      {finishedMsg && (
+        <p className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800 dark:border-green-900/60 dark:bg-green-950/30 dark:text-green-200">
+          {finishedMsg}
+        </p>
+      )}
+      {opnameError && <p className="text-sm font-medium text-destructive">{opnameError}</p>}
 
       {/* stat cards */}
       <div className="grid gap-3 grid-cols-2 lg:grid-cols-3 *:min-w-0">

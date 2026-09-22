@@ -575,6 +575,20 @@
       "when": 1789884839138,
       "tag": "0081_subscription_employee_addon",
       "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1790044890748,
+      "tag": "0082_stock_opname_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1790100407801,
+      "tag": "0083_opname_reason_skip",
+      "breakpoints": true
     }
   ]
 }

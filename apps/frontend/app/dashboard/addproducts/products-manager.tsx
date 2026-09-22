@@ -147,15 +147,15 @@ const ADDON_CATEGORY = {
 const INTERNAL_CATEGORIES = [INGREDIENT_CATEGORY, ADDON_CATEGORY];
 
 /**
- * Categories with nothing to scan.
+ * The item's code — every category gets to have one.
  *
- * A barcode is a number the MANUFACTURER printed on a package. A warung's nasi
- * goreng arrives on a plate and a service arrives as somebody's afternoon —
- * neither has ever had one, so the field was pure noise on the two categories
- * most outlets here use most. It stays for mart, bahan bangunan and bahan,
- * where the goods really do come out of a box with a code on it.
+ * It started as a BARCODE: the number a manufacturer printed on a package,
+ * which a plate of nasi goreng has never had, so food, drink and services
+ * were not asked. But the same column is the only per-outlet-unique code the
+ * catalogue has, and a shop counting stock wants to find "RAK-A12" whether or
+ * not a factory printed it. So the field is offered everywhere and named for
+ * both uses; products has no separate SKU column, deliberately.
  */
-const NO_BARCODE_CATEGORIES = new Set(['makanan', 'minuman', 'jasa']);
 
 /**
  * One catalogue, three audiences — so one table was always answering three
@@ -858,9 +858,6 @@ export const ProductsManager = ({
   // was asking every product every question, so an owner adding a drink waded
   // past a barcode scanner and a photo uploader to reach the price.
 
-  // See NO_BARCODE_CATEGORIES.
-  const asksBarcode = !NO_BARCODE_CATEGORIES.has(selectedCategory);
-
   // "Punya stok sendiri?" has no answer for a service: there is nothing to
   // count. The backend already forces track_stock off for a range-priced jasa
   // (rangePricedFields), so hiding the toggle agrees with what actually gets
@@ -922,12 +919,9 @@ export const ProductsManager = ({
     // no-courier flow with nothing on screen explaining why.
     const courierDeliverableToSave = asksCourierQuestion ? courierDeliverable : true;
 
-    // Same hazard, and this one bites harder: a barcode typed while the category
-    // was mart stays in formData after a switch to makanan, where the field is
-    // gone. Barcodes are unique per outlet, so the invisible leftover would
-    // collide with the retail product it actually belongs to — and the owner
-    // would be reading an error about a field they cannot see.
-    const barcodeToSave = asksBarcode ? formData.barcode : '';
+    // Always saved now that the field is shown for every category: there is no
+    // longer a state where an owner types a code and then loses sight of it.
+    const barcodeToSave = formData.barcode;
 
     // A service has nothing to count. The backend forces this off for jasa, but
     // only once a price range has actually been typed, so send the honest value
@@ -2228,11 +2222,10 @@ export const ProductsManager = ({
                 </p>
               </div>
 
-              {asksBarcode && (
-                <div className="space-y-2">
+              <div className="space-y-2">
                   <label className="text-sm font-bold flex items-center gap-2">
                     <Barcode className="h-4 w-4 text-muted-foreground" />
-                    Barcode
+                    Barcode / Kode barang
                     <span className="font-normal text-xs text-muted-foreground">(opsional)</span>
                   </label>
                   <input
@@ -2247,14 +2240,14 @@ export const ProductsManager = ({
                     }}
                     maxLength={64}
                     className="flex h-12 w-full rounded-xl border border-input bg-transparent px-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 font-mono"
-                    placeholder="Scan atau ketik kode barcode…"
+                    placeholder="Scan barcode atau ketik kode sendiri…"
                   />
                   <p className="text-xs text-muted-foreground">
-                    Cocok untuk produk mart/ritel. Harus unik per outlet — dua produk tidak
-                    boleh berbagi barcode yang sama.
+                    Boleh barcode dari pabrik, boleh kode buatan sendiri (mis. RAK-A12) untuk
+                    barang yang tidak punya barcode. Harus unik per outlet, dan bisa dipakai
+                    untuk mencari barang saat stok opname.
                   </p>
                 </div>
-              )}
 
               <div className="space-y-2">
                 <label className="text-sm font-bold flex items-center gap-2">
