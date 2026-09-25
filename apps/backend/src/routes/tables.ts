@@ -42,6 +42,7 @@ import {
 } from "../lib/kitchen";
 import { APP_TIMEZONE, getUTCRangeFromLocalDate } from "../lib/timezone";
 import { taxConfigFrom } from "../lib/tax";
+import { getPrinterSettings } from "../lib/printer-settings";
 import { normalizeIndonesianPhone } from "../lib/utils/phone";
 
 /**
@@ -375,7 +376,7 @@ export async function tableRoutes(app: FastifyInstance) {
     const now = new Date();
     const { startUTC, endUTC } = getUTCRangeFromLocalDate(localDate(tz, now), tz);
 
-    const [zones, tables, sessions, reservations, waitlist, shift, todayRows, kitchenCalls] = await Promise.all([
+    const [zones, tables, sessions, reservations, waitlist, shift, todayRows, kitchenCalls, printerSettings] = await Promise.all([
       db
         .select()
         .from(diningZonesTable)
@@ -443,6 +444,7 @@ export async function tableRoutes(app: FastifyInstance) {
           ),
         )
         .orderBy(asc(kitchenTicketsTable.call_at)),
+      getPrinterSettings(outletId),
     ]);
 
     const sessionIds = sessions.map((s) => s.id);
@@ -502,6 +504,8 @@ export async function tableRoutes(app: FastifyInstance) {
         tax: hasFeature(access.gate, "tax")
           ? taxConfigFrom(access.outlet)
           : { enabled: false, rate: 0, inclusive: false, label: "Pajak" },
+        // The owner's receipt layout, for the pre-bill and checkout receipt.
+        printerSettings,
       },
       shift: shift ? { cashierName: shift.cashier_name, openedAt: iso(shift.opened_at) } : null,
       today: {

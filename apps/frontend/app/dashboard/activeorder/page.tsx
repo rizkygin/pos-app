@@ -15,11 +15,13 @@ export default async function ActiveOrderPage() {
     // The pickup slip is the same receipt the cashier prints, so it needs the
     // same outlet header (name/address/phone/logo). Fetched here rather than in
     // the client component to match how /dashboard/cashier passes it down.
-    const [session, outletRes] = await Promise.all([
+    const [session, outletRes, printRes] = await Promise.all([
       getSession(),
       serverFetch('/api/outlet/me'),
+      serverFetch('/api/outlet/printer-settings'),
     ]);
     const outlet = outletRes.ok ? (await outletRes.json()).outlet : null;
+    const printSettings = printRes.ok ? ((await printRes.json())?.settings ?? null) : null;
 
     // No courier reaches this outlet, so no courier-delivered order can ever
     // arrive. The lobby isn't mounted at all — that stops four endpoints being
@@ -63,6 +65,7 @@ export default async function ActiveOrderPage() {
           outletPhone={outlet?.phone ?? ''}
           outletLogo={outlet?.avatar ?? ''}
           cashierName={session?.user?.name ?? 'Owner'}
+          printSettings={printSettings}
         />
       </main>
     );

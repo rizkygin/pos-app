@@ -589,6 +589,13 @@
       "when": 1790100407801,
       "tag": "0083_opname_reason_skip",
       "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1790342597386,
+      "tag": "0084_outlet_printer_settings",
+      "breakpoints": true
     }
   ]
 }

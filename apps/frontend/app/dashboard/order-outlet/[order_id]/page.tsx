@@ -9,6 +9,7 @@ import { id as idLocale } from "date-fns/locale";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { ReceiptModal, type ReceiptData } from "@/components/dashboard/receipt-modal";
 import { API_URL } from "@/lib/api-url";
+import type { ReceiptPrintSettings } from "@/lib/receipt-settings";
 import {
     ChevronLeft,
     CheckCircle2,
@@ -81,7 +82,14 @@ type OfflineNote = {
 
 type ApiResponse = {
     success: boolean;
-    outlet: { id: string; name: string; address: string; phone: string; avatar: string };
+    outlet: {
+        id: string;
+        name: string;
+        address: string;
+        phone: string;
+        avatar: string;
+        printerSettings?: ReceiptPrintSettings;
+    };
     cashierName: string;
     order: {
         createdAt: string | null;
@@ -134,6 +142,7 @@ function toReceipt(data: ApiResponse, orderId: string): ReceiptData {
         outletAddress: data.outlet.address,
         outletPhone: data.outlet.phone,
         outletLogo: data.outlet.avatar,
+        printSettings: data.outlet.printerSettings,
         cashierName: data.cashierName,
     };
 }

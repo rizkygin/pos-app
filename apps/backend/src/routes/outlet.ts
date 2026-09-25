@@ -14,6 +14,11 @@ import {
   requireOutletAccess,
 } from "../lib/outlet-access";
 import { taxConfigFrom } from "../lib/tax";
+import {
+  getPrinterSettings,
+  parsePrinterSettings,
+  savePrinterSettings,
+} from "../lib/printer-settings";
 import { DEFAULT_COORDS, parseCoordPair } from "../lib/utils/coords";
 import { recomputeCourierReachable } from "../lib/service-area";
 import { and, sql } from "drizzle-orm";
@@ -293,6 +298,38 @@ export async function outletRoutes(app: FastifyInstance) {
       message: enabled
         ? "Kasir kembali menanyakan Dine In / Take Away."
         : "Dine In / Take Away tidak lagi dicatat di kasir.",
+    });
+  });
+
+  /**
+   * Customer receipt (struk) settings: the owner's notes, QR link and
+   * show/hide switches. Not plan-gated — every outlet's receipt carries its own
+   * name out the door, new ones most of all. Readable by the staff who print
+   * receipts — at the till, from the order lobby, or at a table; owner only to
+   * change, like tax.
+   *
+   * Loaded with the page, never at print time: the cashier and order lobby
+   * pages fetch it server-side, and /api/floor and the order detail carry it
+   * in their own payload.
+   */
+  app.get("/api/outlet/printer-settings", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, ["cashier", "activeOrders", "tables"]);
+    if (!access) return;
+    return reply.send({ success: true, settings: await getPrinterSettings(access.outlet.id) });
+  });
+
+  app.patch("/api/outlet/printer-settings", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, "owner");
+    if (!access) return;
+    const parsed = parsePrinterSettings(request.body);
+    if (!parsed.ok) return reply.status(400).send({ success: false, error: parsed.error });
+    await savePrinterSettings(access.outlet.id, parsed.settings);
+    return reply.send({
+      success: true,
+      // What was stored, which may differ from what was sent (trimmed notes,
+      // https:// added to a bare link) — the form shows this back.
+      settings: parsed.settings,
+      message: "Pengaturan struk disimpan.",
     });
   });
 

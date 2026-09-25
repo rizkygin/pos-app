@@ -20,11 +20,15 @@ export default async function CashierPage() {
     // counter can render honestly, and fetching the features here rather than
     // from the client avoids the counter briefly offering a control the
     // merchant's plan doesn't include.
-    const [res, featuresRes] = await Promise.all([
+    // The receipt layout rides along too, so printing never waits on a request.
+    const [res, featuresRes, printRes] = await Promise.all([
         serverFetch("/api/products/mine"),
         serverFetch("/api/me/features"),
+        serverFetch("/api/outlet/printer-settings"),
     ]);
     const { outlet, products } = res.ok ? await res.json() : { outlet: null, products: [] };
+    // A failed call prints the default receipt — never a reason to block the till.
+    const printSettings = printRes.ok ? ((await printRes.json())?.settings ?? null) : null;
 
     // Closed by default. If the features call failed we do NOT know the plan,
     // and quietly unlocking a paid feature on a network blip is the wrong way
@@ -66,6 +70,7 @@ export default async function CashierPage() {
                 // tax line the plan doesn't include. The server applies the
                 // same gate when it stores the order.
                 taxConfig={taxConfigFrom(outlet, features.tax === true)}
+                printSettings={printSettings}
                 initialProducts={sellableProducts}
             />
         </main>

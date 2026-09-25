@@ -14,6 +14,17 @@ import { haversineKm } from "@/lib/haversine";
 import { getCurrentPosition, geolocationMessage, GEOLOCATION_OPTIONS } from "@/lib/geolocation";
 import { usePushSubscription } from "@/lib/use-push-subscription";
 import { DEFAULT_SERVICE_TYPE, SERVICE_TYPES, SERVICE_TYPE_LABEL } from "@/lib/service-type";
+import { readPaperWidth } from "@/lib/escpos";
+import {
+    NOTE_MAX_CHARS,
+    NOTE_MAX_LINES,
+    QR_CAPTION_MAX_CHARS,
+    QR_URL_MAX_CHARS,
+    resolveReceiptSettings,
+    type ReceiptPrintSettings,
+    type ReceiptShowKey,
+} from "@/lib/receipt-settings";
+import { ReceiptPaper, type PaperWidth, type ReceiptData } from "./receipt-modal";
 import { cn } from "@/lib/utils";
 
 const FEATURE_META = ORDER_FEATURES.filter((f) => f.isAvailable);
@@ -64,7 +75,7 @@ type TaxState = {
     label: string;
 };
 
-type SectionId = "profil" | "tag" | "lokasi" | "notifikasi" | "pajak" | "layanan";
+type SectionId = "profil" | "tag" | "lokasi" | "notifikasi" | "pajak" | "layanan" | "struk";
 
 const EMPTY_FORM: OutletForm = {
     isOpen: true,
@@ -84,7 +95,10 @@ const rp = (n: number) =>
 
 const INPUT = "h-[42px] rounded-[11px] px-3.5 text-sm focus-visible:border-rose-500 focus-visible:ring-rose-500/15";
 
-async function patchJson(path: string, body: unknown): Promise<{ ok: boolean; text?: string }> {
+async function patchJson(
+    path: string,
+    body: unknown,
+): Promise<{ ok: boolean; text?: string; data?: Record<string, unknown> }> {
     try {
         const res = await fetch(`${API_URL}${path}`, {
             method: "PATCH",
@@ -93,7 +107,7 @@ async function patchJson(path: string, body: unknown): Promise<{ ok: boolean; te
             body: JSON.stringify(body),
         });
         const json = await res.json().catch(() => ({}));
-        return { ok: res.ok && json.success !== false, text: json.error ?? json.message };
+        return { ok: res.ok && json.success !== false, text: json.error ?? json.message, data: json };
     } catch {
         return { ok: false, text: "Tidak bisa menghubungi server." };
     }
@@ -213,6 +227,9 @@ export function OwnerSetting() {
     const [canUseTax, setCanUseTax] = useState(false);
     const [serviceType, setServiceType] = useState<boolean | null>(null);
     const [savedServiceType, setSavedServiceType] = useState<boolean | null>(null);
+    // Struk: same deal — its own endpoint, saved by the one button.
+    const [receipt, setReceipt] = useState<ReceiptPrintSettings | null>(null);
+    const [savedReceipt, setSavedReceipt] = useState<ReceiptPrintSettings | null>(null);
 
     const push = usePushSubscription();
     const [testing, setTesting] = useState(false);
@@ -274,6 +291,18 @@ export function OwnerSetting() {
                 setSavedServiceType(!!j.enabled);
             })
             .catch(() => {});
+
+        fetch(`${API_URL}/api/outlet/printer-settings`, { credentials: "include" })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((j) => {
+                if (!j?.success) return;
+                // Rebuilt in canonical key order: "unsaved changes" is a JSON
+                // comparison, and it must not light up over key order alone.
+                const loaded = resolveReceiptSettings(j.settings);
+                setReceipt(loaded);
+                setSavedReceipt(loaded);
+            })
+            .catch(() => {});
     }, []);
 
     // Courier coverage circle. Fetched as a shape, not a verdict, so the warning
@@ -310,7 +339,8 @@ export function OwnerSetting() {
     // A locked plan can't save tax, so its (untouchable) fields never count.
     const taxDirty = canUseTax && !same(tax, savedTax);
     const serviceTypeDirty = serviceType !== savedServiceType;
-    const dirty = outletDirty || taxDirty || serviceTypeDirty;
+    const receiptDirty = !same(receipt, savedReceipt);
+    const dirty = outletDirty || taxDirty || serviceTypeDirty || receiptDirty;
 
     // Flipping Dine In / Take Away used to save on the spot; now it waits for
     // Simpan like everything else, so leaving with it unsaved has to be loud.
@@ -346,8 +376,11 @@ export function OwnerSetting() {
         if (serviceType !== null) {
             items.push({ id: "layanan", label: "Dine In / Take Away", tag: serviceType ? "aktif" : "mati" });
         }
+        if (receipt) {
+            items.push({ id: "struk", label: "Struk", tag: receipt.qrUrl && receipt.show.qr ? "QR" : "" });
+        }
         return items;
-    }, [form.tags.length, coverage?.outside, push.state, tax, canUseTax, serviceType]);
+    }, [form.tags.length, coverage?.outside, push.state, tax, canUseTax, serviceType, receipt]);
 
     const [active, setActive] = useState<SectionId>("profil");
     const headerRef = useRef<HTMLDivElement>(null);
@@ -499,6 +532,7 @@ export function OwnerSetting() {
         const sentForm = form;
         const sentTax = tax;
         const sentServiceType = serviceType;
+        const sentReceipt = receipt;
         const results = await Promise.all([
             outletDirty
                 ? patchJson("/api/outlet/me", {
@@ -526,6 +560,20 @@ export function OwnerSetting() {
             serviceTypeDirty && sentServiceType !== null
                 ? patchJson("/api/outlet/service-type", { enabled: sentServiceType }).then((r) => {
                     if (r.ok) setSavedServiceType(sentServiceType);
+                    return r;
+                })
+                : null,
+            receiptDirty && sentReceipt
+                ? patchJson("/api/outlet/printer-settings", sentReceipt).then((r) => {
+                    if (r.ok) {
+                        // The server's copy: trimmed notes, https:// on a bare
+                        // link. Shown back unless the owner kept typing.
+                        const stored = resolveReceiptSettings(
+                            (r.data?.settings as Partial<ReceiptPrintSettings> | undefined) ?? sentReceipt,
+                        );
+                        setSavedReceipt(stored);
+                        setReceipt((cur) => (cur && same(cur, sentReceipt) ? stored : cur));
+                    }
                     return r;
                 })
                 : null,
@@ -1231,10 +1279,319 @@ export function OwnerSetting() {
                         </Section>
                     )}
 
+                    {/* ── Struk ──────────────────────────────────────────────
+                        The customer receipt only; the kitchen ticket, shift
+                        report and invoices print their own layouts. */}
+                    {receipt && (
+                        <Section
+                            id="struk"
+                            title="Struk Pelanggan"
+                            desc="Catatan, QR code, dan informasi yang tercetak di struk — di kasir, meja, lobi pesanan, dan cetak ulang."
+                        >
+                            <ReceiptSettings value={receipt} onChange={setReceipt} outlet={form} />
+                        </Section>
+                    )}
+
                     <p className="px-1 text-[11.5px] leading-relaxed text-muted-foreground lg:hidden">
                         Perubahan berlaku untuk transaksi berikutnya. Order yang sudah tercatat tidak berubah.
                     </p>
                 </div>
+            </div>
+        </div>
+    );
+}
+
+// ── Struk ────────────────────────────────────────────────────────────────
+
+// The switches that aren't beside a field of their own (the notes and the QR
+// carry theirs). What is NOT here — order number, date and time, items, money,
+// tax, the thank-you lines — always prints: without it the paper is no longer
+// a receipt.
+const SHOW_GROUPS: { title: string; items: { key: ReceiptShowKey; label: string }[] }[] = [
+    {
+        title: "Kepala struk",
+        items: [
+            { key: "logo", label: "Logo outlet" },
+            { key: "outletName", label: "Nama outlet" },
+            { key: "address", label: "Alamat" },
+            { key: "phone", label: "No. telepon" },
+        ],
+    },
+    {
+        title: "Info pesanan",
+        items: [
+            { key: "cashier", label: "Nama kasir" },
+            { key: "customer", label: "Nama pelanggan" },
+            { key: "pager", label: "Nomor pager" },
+            { key: "table", label: "Nomor meja" },
+            { key: "serviceType", label: "Dine In / Take Away" },
+        ],
+    },
+    {
+        title: "Bawah struk",
+        items: [
+            { key: "savings", label: "Anda hemat" },
+            { key: "member", label: "Member & poin" },
+        ],
+    },
+];
+
+const TEXTAREA =
+    "w-full resize-none rounded-[11px] border border-input bg-transparent px-3.5 py-2.5 text-sm leading-relaxed outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-rose-500 focus-visible:ring-3 focus-visible:ring-rose-500/15 dark:bg-input/30";
+
+/** What the thermal printer can't print: it prints ASCII only, anything else as "?". */
+const printsAsQuestion = (s: string) =>
+    /[^\x20-\x7e\n]/.test(s.replace(/ /g, " ").normalize("NFKD").replace(/[̀-ͯ]/g, ""));
+
+/** Held to the limits as typed, so the counter can never read past them. */
+const clampNote = (v: string) =>
+    v.replace(/\r\n?/g, "\n").split("\n").slice(0, NOTE_MAX_LINES).join("\n").slice(0, NOTE_MAX_CHARS);
+
+/** The link as the server will store it: https:// in front of a bare address. */
+const withScheme = (v: string) => (/^[a-z][a-z0-9+.-]*:/i.test(v) ? v : `https://${v}`);
+
+/** Why the server would refuse this link, or null — the same checks it runs. */
+function qrLinkProblem(v: string | null): string | null {
+    const raw = v?.trim();
+    if (!raw) return null;
+    const url = withScheme(raw);
+    if (url.length > QR_URL_MAX_CHARS) {
+        return `Terlalu panjang (maks. ${QR_URL_MAX_CHARS} karakter termasuk https://). Pakai link pendek.`;
+    }
+    try {
+        const u = new URL(url);
+        if ((u.protocol !== "http:" && u.protocol !== "https:") || !u.hostname.includes(".")) {
+            return "Harus berupa alamat web, misalnya instagram.com/outletmu.";
+        }
+    } catch {
+        return "Link tidak valid.";
+    }
+    return null;
+}
+
+function NoteField({ label, hint, placeholder, value, shown, onText, onShown }: {
+    label: string;
+    hint: string;
+    placeholder: string;
+    value: string | null;
+    shown: boolean;
+    onText: (v: string | null) => void;
+    onShown: () => void;
+}) {
+    const text = value ?? "";
+    const lines = text === "" ? 0 : text.split("\n").length;
+    return (
+        <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between gap-3">
+                <span className="text-xs font-bold text-muted-foreground">{label}</span>
+                <Switch checked={shown} onChange={onShown} label={`Tampilkan ${label.toLowerCase()} di struk`} />
+            </div>
+            <textarea
+                value={text}
+                onChange={(e) => {
+                    const v = clampNote(e.target.value);
+                    onText(v === "" ? null : v);
+                }}
+                rows={3}
+                placeholder={placeholder}
+                className={cn(TEXTAREA, !shown && "opacity-60")}
+            />
+            <div className="flex items-start justify-between gap-3 text-[11.5px] text-muted-foreground">
+                <span>{shown ? hint : "Disembunyikan — tidak tercetak di struk."}</span>
+                <span className="shrink-0 tabular-nums">
+                    {lines}/{NOTE_MAX_LINES} baris · {text.length}/{NOTE_MAX_CHARS}
+                </span>
+            </div>
+            {printsAsQuestion(text) && (
+                <p className="text-[11.5px] font-semibold text-amber-700 dark:text-amber-400">
+                    Emoji dan simbol khusus tercetak sebagai &quot;?&quot; di printer thermal.
+                </p>
+            )}
+        </div>
+    );
+}
+
+function ReceiptSettings({ value, onChange, outlet }: {
+    value: ReceiptPrintSettings;
+    onChange: (next: ReceiptPrintSettings) => void;
+    outlet: OutletForm;
+}) {
+    const [paper, setPaper] = useState<PaperWidth>(() => readPaperWidth());
+    const set = (p: Partial<ReceiptPrintSettings>) => onChange({ ...value, ...p });
+    const toggle = (k: ReceiptShowKey) => onChange({ ...value, show: { ...value.show, [k]: !value.show[k] } });
+
+    const qrProblem = qrLinkProblem(value.qrUrl);
+    const noIdentity = !value.show.logo && !value.show.outletName;
+
+    // A made-up order that touches every switch, so flipping one visibly
+    // changes the preview. It is the outlet's live (unsaved) name and header:
+    // a long name should look long here before it is saved.
+    const [now] = useState(() => new Date());
+    const sample: ReceiptData = {
+        orderId: "A1B2C3D4-contoh",
+        customerName: "Budi",
+        items: [
+            { product_name: "Kopi Susu Gula Aren", quantity: 2, price: "22000", price_mark_down: "20000" },
+            {
+                product_name: "Roti Bakar Coklat",
+                quantity: 1,
+                price: "18000",
+                price_mark_down: "0",
+                addons: [{ product_name: "Keju", quantity: 1, price: 5000 }],
+            },
+        ],
+        subtotal: 63000,
+        discountAmount: 0,
+        discountLabel: "Diskon",
+        total: 63000,
+        paymentMethod: "cash",
+        amountPaid: 70000,
+        changeDue: 7000,
+        memberName: "Budi",
+        memberTier: "Gold",
+        pointsEarned: 63,
+        pointsBalance: 420,
+        date: now,
+        outletName: outlet.name || "Nama Outlet",
+        outletAddress: outlet.address,
+        outletPhone: outlet.phone,
+        outletLogo: outlet.avatar,
+        cashierName: "Kasir",
+        pagerNumber: "12",
+        tableLabel: "05",
+        serviceType: "dine_in",
+        printSettings: {
+            ...value,
+            // The code the receipt will actually carry, or none while the
+            // link is one the server would refuse.
+            qrUrl: value.qrUrl?.trim() && !qrProblem ? withScheme(value.qrUrl.trim()) : null,
+        },
+    };
+
+    return (
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,300px)]">
+            <div className="flex min-w-0 flex-col gap-5">
+                <NoteField
+                    label="Catatan atas"
+                    hint="Tercetak di bawah nama, alamat, dan telepon outlet."
+                    placeholder={"WiFi: NamaWifi / password123\nIG @outletmu"}
+                    value={value.headerNote}
+                    shown={value.show.headerNote}
+                    onText={(v) => set({ headerNote: v })}
+                    onShown={() => toggle("headerNote")}
+                />
+                <NoteField
+                    label="Catatan bawah"
+                    hint="Tercetak setelah ucapan terima kasih."
+                    placeholder={"Follow IG @outletmu\nwww.outletmu.com"}
+                    value={value.footerNote}
+                    shown={value.show.footerNote}
+                    onText={(v) => set({ footerNote: v })}
+                    onShown={() => toggle("footerNote")}
+                />
+
+                <div className="flex flex-col gap-3 rounded-xl border border-border/60 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                            <p className="text-[13px] font-bold">QR Code</p>
+                            <p className="mt-0.5 text-xs text-muted-foreground">
+                                Pelanggan memindai struk untuk membuka link — review Google Maps, Instagram, menu, atau WhatsApp.
+                            </p>
+                        </div>
+                        <Switch checked={value.show.qr} onChange={() => toggle("qr")} label="Tampilkan QR code di struk" />
+                    </div>
+                    <Field label="Link">
+                        <Input
+                            value={value.qrUrl ?? ""}
+                            onChange={(e) => {
+                                const v = e.target.value.slice(0, QR_URL_MAX_CHARS);
+                                set({ qrUrl: v === "" ? null : v });
+                            }}
+                            inputMode="url"
+                            placeholder="instagram.com/outletmu"
+                            aria-invalid={!!qrProblem}
+                            className={INPUT}
+                        />
+                    </Field>
+                    {qrProblem ? (
+                        <p className="-mt-1 text-[11.5px] font-semibold text-rose-600 dark:text-rose-400">{qrProblem}</p>
+                    ) : (
+                        <p className="-mt-1 text-[11.5px] text-muted-foreground">
+                            Makin pendek link-nya, makin mudah QR dipindai. Kosongkan untuk tanpa QR.
+                        </p>
+                    )}
+                    <Field label="Keterangan di bawah QR (opsional)">
+                        <Input
+                            value={value.qrCaption ?? ""}
+                            onChange={(e) => {
+                                const v = e.target.value.slice(0, QR_CAPTION_MAX_CHARS);
+                                set({ qrCaption: v === "" ? null : v });
+                            }}
+                            placeholder="Scan untuk review kami"
+                            className={INPUT}
+                        />
+                    </Field>
+                </div>
+
+                <div className="flex flex-col gap-4">
+                    {SHOW_GROUPS.map((g) => (
+                        <div key={g.title} className="flex flex-col gap-1">
+                            <p className="text-[11.5px] font-bold tracking-wide text-muted-foreground">
+                                {g.title.toUpperCase()}
+                            </p>
+                            <div className="divide-y divide-border/60 rounded-xl border border-border/60">
+                                {g.items.map((it) => (
+                                    <div key={it.key} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                                        <span className="text-[13px] font-semibold">{it.label}</span>
+                                        <Switch
+                                            checked={value.show[it.key]}
+                                            onChange={() => toggle(it.key)}
+                                            label={`Tampilkan ${it.label.toLowerCase()} di struk`}
+                                        />
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ))}
+                    {noIdentity && (
+                        <p className="flex items-start gap-2 rounded-xl bg-amber-50 px-3.5 py-2.5 text-xs font-semibold text-amber-800 dark:bg-amber-500/10 dark:text-amber-300">
+                            <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
+                            Logo dan nama outlet sama-sama disembunyikan — struk tidak menunjukkan dari outlet mana.
+                        </p>
+                    )}
+                    <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+                        Selalu tercetak: nomor order, tanggal &amp; jam, daftar item &amp; harga, total, pajak, pembayaran,
+                        dan ucapan terima kasih.
+                    </p>
+                </div>
+            </div>
+
+            <div className="flex min-w-0 flex-col gap-2">
+                <div className="flex items-center justify-between gap-3">
+                    <p className="text-[11.5px] font-bold tracking-wide text-muted-foreground">PRATINJAU</p>
+                    <div className="flex overflow-hidden rounded-lg border border-border">
+                        {(["58", "80"] as const).map((w) => (
+                            <button
+                                key={w}
+                                type="button"
+                                onClick={() => setPaper(w)}
+                                className={cn(
+                                    "px-2.5 py-1 text-[11px] font-bold transition-colors",
+                                    paper === w ? "bg-foreground text-background" : "text-muted-foreground hover:bg-muted",
+                                )}
+                            >
+                                {w}mm
+                            </button>
+                        ))}
+                    </div>
+                </div>
+                {/* Paper stays white in dark mode — it is a picture of the receipt. */}
+                <div className="rounded-xl border border-border bg-white px-4 py-5 shadow-sm">
+                    <ReceiptPaper data={sample} paperWidth={paper} />
+                </div>
+                <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+                    Contoh pesanan. Hasil cetak printer thermal bisa sedikit berbeda.
+                </p>
             </div>
         </div>
     );

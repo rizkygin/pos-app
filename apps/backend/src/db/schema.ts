@@ -2815,3 +2815,64 @@ export const kitchenTicketsTable = pgTable(
       .where(sql`source_key is not null`),
   ],
 );
+
+// ============================================================================
+// Receipt (struk) print settings
+// ============================================================================
+
+/**
+ * How an outlet's customer receipt is printed. One row per outlet, created the
+ * first time the owner saves the "Struk" section of Pengaturan Outlet — an
+ * outlet without a row prints the default receipt, so nothing is backfilled.
+ * Read through getPrinterSettings (lib/printer-settings.ts), which fills in
+ * those defaults.
+ *
+ * Covers the customer receipt only. The kitchen ticket, shift report and
+ * invoices have their own layouts and ignore this table.
+ *
+ * The notes and the QR link are the owner's own content — Wi-Fi password, IG
+ * handle, a Google review link — printed as given.
+ *
+ * Every show_* switch defaults to true so a new row prints what the receipt
+ * always printed. There is deliberately no switch for the money lines, the tax
+ * line, the order number/date/time, the "belum dibayar" banner, the thank-you
+ * lines or the ulunpesan.com credit: without them the paper is no longer a
+ * receipt, or no longer ours.
+ *
+ * Paper width is NOT here: it belongs to the device (each till has its own
+ * printer) and stays in that device's localStorage.
+ */
+export const outletPrinterSettingsTable = pgTable(
+  'outlet_printer_settings',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    outlet_id: integer('outlet_id')
+      .notNull()
+      .references(() => outletsTable.id, { onDelete: 'cascade' }),
+    // Printed under the outlet's name/address/phone and above the order
+    // details; the footer between the thank-you lines and the credit.
+    header_note: text('header_note'),
+    footer_note: text('footer_note'),
+    // http(s) only; printed as a QR code above the credit, with the caption
+    // under it.
+    qr_url: text('qr_url'),
+    qr_caption: varchar('qr_caption', { length: 40 }),
+    show_logo: boolean('show_logo').default(true).notNull(),
+    show_outlet_name: boolean('show_outlet_name').default(true).notNull(),
+    show_address: boolean('show_address').default(true).notNull(),
+    show_phone: boolean('show_phone').default(true).notNull(),
+    show_cashier: boolean('show_cashier').default(true).notNull(),
+    show_customer: boolean('show_customer').default(true).notNull(),
+    show_pager: boolean('show_pager').default(true).notNull(),
+    show_table: boolean('show_table').default(true).notNull(),
+    show_service_type: boolean('show_service_type').default(true).notNull(),
+    show_member: boolean('show_member').default(true).notNull(),
+    show_savings: boolean('show_savings').default(true).notNull(),
+    show_header_note: boolean('show_header_note').default(true).notNull(),
+    show_footer_note: boolean('show_footer_note').default(true).notNull(),
+    show_qr: boolean('show_qr').default(true).notNull(),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }),
+  },
+  (t) => [uniqueIndex('outlet_printer_settings_outlet_idx').on(t.outlet_id)],
+);

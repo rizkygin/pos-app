@@ -495,6 +495,7 @@ export function TablesClient({ cashierName }: { cashierName: string }) {
     outletPhone: floor?.outlet.phone ?? '',
     outletLogo: floor?.outlet.avatar ?? '',
     cashierName,
+    printSettings: floor?.outlet.printerSettings,
   });
 
   /**

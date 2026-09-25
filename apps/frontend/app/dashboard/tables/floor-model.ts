@@ -1,4 +1,5 @@
 import type { TaxConfig } from '@/lib/tax';
+import type { ReceiptPrintSettings } from '@/lib/receipt-settings';
 
 /**
  * Manajemen Meja — the shapes GET /api/floor answers with, and the pure
@@ -130,6 +131,8 @@ export type Floor = {
     avatar: string;
     overtimeMinutes: number;
     tax: TaxConfig;
+    /** The owner's receipt layout, for the pre-bill and checkout receipt. */
+    printerSettings: ReceiptPrintSettings;
   };
   shift: { cashierName: string; openedAt: string } | null;
   today: { dineIn: number; takeAway: number };

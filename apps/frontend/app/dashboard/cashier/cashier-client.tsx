@@ -59,6 +59,7 @@ import { isSameDay } from '@/lib/date-calender';
 import { LabelPreviewModal } from './label-preview-modal';
 import { OptionPickerModal, priceOf } from './option-picker-modal';
 import { computeTax, taxLineLabel, type TaxConfig } from '@/lib/tax';
+import type { ReceiptPrintSettings } from '@/lib/receipt-settings';
 import { resolveProductImage, isBackendImage } from '@/lib/image-src';
 import { MembershipPanel } from './membership-panel';
 import { TIER_BADGE, TIER_LABEL, type MembershipQuote } from '@/lib/membership';
@@ -372,6 +373,11 @@ type CashierClientProps = {
    * recomputes the stored figure from its own copy of these settings.
    */
   taxConfig: TaxConfig;
+  /**
+   * The owner's receipt layout (Pengaturan Outlet → Struk), fetched with the
+   * page. Null when that call failed: the receipt then prints its default.
+   */
+  printSettings: ReceiptPrintSettings | null;
   initialProducts: Product[];
 };
 
@@ -413,6 +419,7 @@ export const CashierClient = ({
   canUseKitchen,
   askServiceType,
   taxConfig,
+  printSettings,
   initialProducts,
 }: CashierClientProps) => {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
@@ -2102,6 +2109,7 @@ export const CashierClient = ({
       outletPhone,
       outletLogo,
       cashierName,
+      printSettings,
     }),
     [
       activeTabId,
@@ -2130,6 +2138,7 @@ export const CashierClient = ({
       outletPhone,
       outletLogo,
       cashierName,
+      printSettings,
     ],
   );
 
@@ -2408,6 +2417,7 @@ export const CashierClient = ({
       outletPhone,
       outletLogo,
       cashierName,
+      printSettings,
     });
     // Newest first. Drops any earlier row for the same key: a retry that went
     // through should turn its "Belum" into "Tercatat", not sit beside it.
@@ -2625,6 +2635,7 @@ export const CashierClient = ({
     outletPhone,
     outletLogo,
     cashierName,
+    printSettings,
     completeActiveTab,
     claimPendingKey,
     releasePendingKey,

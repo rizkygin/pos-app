@@ -29,6 +29,7 @@ import { getOpenShiftId } from "../lib/shift";
 import { CATEGORY_POS_SALE, CATEGORY_POS_CANCELLATION } from "../lib/cashflow-categories";
 import { money, netLineRevenue } from "../lib/money-sql";
 import { lineCogsSql, orderCogsSql } from "../lib/cogs";
+import { getPrinterSettings } from "../lib/printer-settings";
 
 // Money columns (summary_price, buying_price) are varchar and a single blank
 // row makes the cast throw, killing the whole aggregate. See lib/money-sql.ts.
@@ -349,6 +350,7 @@ export async function ownerRoutes(app: FastifyInstance) {
         .orderBy(desc(orderDetailsTable.created_at), asc(orderDetailsTable.id));
 
       const isOfflineOrder = order.customerEmail === OFFLINE_CUSTOMER_EMAIL;
+      const printerSettings = await getPrinterSettings(outlet.id);
 
       return {
         success: true,
@@ -360,6 +362,10 @@ export async function ownerRoutes(app: FastifyInstance) {
           address: outlet.address,
           phone: outlet.phone,
           avatar: outlet.avatar,
+          // Today's receipt layout, not the one in force when the order was
+          // rung up: it is the owner's current notes and QR that a reprint
+          // should hand out.
+          printerSettings,
         },
         // Whoever is reprinting, not whoever originally rang it up: the order
         // rows don't record a cashier, and the slip's "Kasir" line is only ever

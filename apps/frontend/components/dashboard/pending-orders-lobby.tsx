@@ -35,6 +35,7 @@ import { MaterialsConfirmModal } from '@/components/dashboard/materials-confirm-
 import { ReceiptModal, type ReceiptData } from '@/components/dashboard/receipt-modal';
 import { CalendarClock, Wrench } from 'lucide-react';
 import { API_URL } from '@/lib/api-url';
+import type { ReceiptPrintSettings } from '@/lib/receipt-settings';
 import {
   AlertDialog,
   AlertDialogContent,
@@ -96,6 +97,8 @@ type OutletInfo = {
   outletPhone: string;
   outletLogo: string;
   cashierName: string;
+  /** The owner's receipt layout; null prints the default receipt. */
+  printSettings: ReceiptPrintSettings | null;
 };
 
 function fmtIDR(amount: number) {
@@ -859,6 +862,7 @@ function orderToReceipt(order: Order, outlet: OutletInfo): ReceiptData {
     outletPhone: outlet.outletPhone,
     outletLogo: outlet.outletLogo,
     cashierName: outlet.cashierName,
+    printSettings: outlet.printSettings,
   };
 }
 

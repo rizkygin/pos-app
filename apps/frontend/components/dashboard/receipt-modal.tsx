@@ -6,6 +6,9 @@ import { resolveOutletImage } from "@/lib/image-src";
 import { posPaymentLabel } from "@/lib/pos-payment";
 import { SERVICE_TYPE_LABEL, type ServiceType } from "@/lib/service-type";
 import { buildOrderLabelBatch, openOrderLabelApp, type OrderLabel } from "@/lib/labelbridge";
+import { resolveReceiptSettings, type ReceiptPrintSettings } from "@/lib/receipt-settings";
+import QRCode from "react-qr-code";
+import qrcode from "qrcode-generator";
 
 /** How long the closing receipt takes to fly into `flyToRef`. */
 const FLIGHT_MS = 700;
@@ -122,10 +125,87 @@ export type ReceiptData = {
     billOnly?: boolean;
     /** Bagi rata: the pre-bill also states each person's share of N. */
     splitCount?: number;
+    /**
+     * The owner's receipt layout (Pengaturan Outlet → Struk): header/footer
+     * notes, a QR link, and which optional lines to leave off. Absent means
+     * the default receipt — see resolveReceiptSettings.
+     */
+    printSettings?: ReceiptPrintSettings | null;
 };
 
 /** Each person's share of a bill split evenly, rounded up so it covers the total. */
 const shareOf = (total: number, n: number) => Math.ceil(total / n);
+
+/**
+ * "Anda hemat": every discount line the receipt prints — item markdowns, the
+ * manual discount, the promo code, redeemed points — added up, so the customer
+ * can check it against the lines above it.
+ */
+function receiptSavings(data: ReceiptData): number {
+    let saved = 0;
+    for (const item of data.items) {
+        if (!item.price_mark_down || item.price_mark_down === "0") continue;
+        const off = (parseFloat(item.price) - parseFloat(item.price_mark_down)) * item.quantity;
+        if (Number.isFinite(off) && off > 0) saved += off;
+    }
+    if (data.discountAmount > 0) saved += data.discountAmount;
+    saved += data.promoDiscount ?? 0;
+    saved += data.pointsDiscount ?? 0;
+    return saved;
+}
+
+/**
+ * An owner's note as printed lines. Unlike wrapText, a blank line survives:
+ * it is how the owner spaces two blocks of their note apart.
+ */
+function noteLines(note: string, width: number): string[] {
+    return note.split("\n").flatMap((p) => (p.trim() ? wrapText(p, width) : [""]));
+}
+
+/**
+ * Browser-print size for the outlet name: the regular 14px while the name fits
+ * the paper on one line, shrinking toward the 11px body size as it grows, so a
+ * long name stays on one line instead of dropping onto a second. Courier's
+ * advance is 0.6em; the usable width is the paper minus the body's 2mm
+ * padding each side, at 96px per inch.
+ */
+function outletNameFontPx(name: string, paper: PaperWidth): number {
+    const usablePx = ((Number(paper) - 4) * 96) / 25.4;
+    const fit = Math.floor(usablePx / (Math.max(1, name.length) * 0.6));
+    return Math.max(11, Math.min(14, fit));
+}
+
+/** Outlet logo URL, or null while it's still the placeholder avatar or the owner hid it. */
+function receiptLogoSrc(data: ReceiptData): string | null {
+    const logo = data.outletLogo;
+    if (!resolveReceiptSettings(data.printSettings).show.logo) return null;
+    return logo && logo !== "avatar.png" && logo !== "/avatar.png" ? resolveOutletImage(logo) : null;
+}
+
+/** The owner's QR link as a module matrix. Error correction L — see buildQrEscposBytes. */
+function makeQr(url: string) {
+    const qr = qrcode(0, "L");
+    qr.addData(url);
+    qr.make();
+    return qr;
+}
+
+/**
+ * The QR as a crisp-edged SVG for the browser-print slip, one unit per module
+ * with a one-module white border.
+ */
+function qrSvg(url: string): string {
+    const qr = makeQr(url);
+    const n = qr.getModuleCount();
+    let d = "";
+    for (let r = 0; r < n; r++) {
+        for (let c = 0; c < n; c++) if (qr.isDark(r, c)) d += `M${c} ${r}h1v1h-1z`;
+    }
+    return (
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-1 -1 ${n + 2} ${n + 2}" shape-rendering="crispEdges">` +
+        `<rect x="-1" y="-1" width="${n + 2}" height="${n + 2}" fill="#fff"/><path d="${d}" fill="#000"/></svg>`
+    );
+}
 
 type Props = {
     data: ReceiptData;
@@ -158,7 +238,7 @@ const esc = (s: string) =>
     String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] as string));
 
 // Which thermal paper the printer takes; picked in the modal, remembered per device.
-type PaperWidth = "58" | "80";
+export type PaperWidth = "58" | "80";
 const PAPER_KEY = "pos_paper_width";
 // Font A characters per line: 32 on 58mm paper, 48 on 80mm.
 const LINE_CHARS: Record<PaperWidth, number> = { "58": 32, "80": 48 };
@@ -299,10 +379,62 @@ async function buildLogoEscposBytes(src: string, paper: PaperWidth): Promise<num
     return out;
 }
 
+// Largest the QR raster may be, in dots (square). On 58mm it matches
+// MAX_LOGO_ROWS above: the raster is padded to the full 384-dot head, so every
+// row costs 48 bytes and 128 rows is the largest block the Bluetooth link is
+// known to take. 80mm sends only the code's own width — a fraction of the
+// bytes per row — so the code can print bigger there.
+const QR_MAX_DOTS: Record<PaperWidth, number> = { "58": 128, "80": 192 };
+
+/**
+ * The owner's QR link as an ESC/POS "GS v 0" raster, laid out exactly like the
+ * logo (see buildLogoEscposBytes): padded to the full head width with the
+ * centering baked in on 58mm, only as wide as the code on 80mm for the printer
+ * to center.
+ *
+ * Drawn straight from the module matrix at a whole number of dots per module,
+ * so every module prints as a sharp square — a scaled image would smear module
+ * edges across dots. Error correction L: thermal print is crisp black on
+ * white, and L is what fits a QR_URL_MAX_CHARS link into 128 dots at 3 dots
+ * per module, the smallest a phone reliably reads off the paper.
+ *
+ * Throws only if the link can't be encoded at all; the caller then prints
+ * without the code.
+ */
+function buildQrEscposBytes(url: string, paper: PaperWidth): number[] {
+    const qr = makeQr(url);
+    const n = qr.getModuleCount();
+    const quiet = 1; // modules of white each side; the blank lines above and below add the rest
+    const scale = Math.max(1, Math.min(6, Math.floor(QR_MAX_DOTS[paper] / (n + quiet * 2))));
+    const size = (n + quiet * 2) * scale;
+    const width = paper === "80" ? Math.ceil(size / 8) * 8 : PAPER_DOTS[paper];
+    const left = Math.floor((width - size) / 2);
+    const bytesPerRow = width / 8;
+    const out: number[] = [
+        0x1d, 0x76, 0x30, 0x00, // GS v 0, normal scale
+        bytesPerRow & 0xff, bytesPerRow >> 8,
+        size & 0xff, size >> 8,
+    ];
+    for (let y = 0; y < size; y++) {
+        const r = Math.floor(y / scale) - quiet;
+        for (let bx = 0; bx < bytesPerRow; bx++) {
+            let byte = 0;
+            for (let bit = 0; bit < 8; bit++) {
+                const dx = bx * 8 + bit - left;
+                const c = Math.floor(dx / scale) - quiet;
+                if (dx >= 0 && r >= 0 && r < n && c >= 0 && c < n && qr.isDark(r, c)) byte |= 0x80 >> bit;
+            }
+            out.push(byte);
+        }
+    }
+    return out;
+}
+
 // Build an ESC/POS receipt and return it base64-encoded for RawBT
 // (link: `rawbt:base64,<data>`). RawBT forwards these raw bytes to the printer.
 function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoBytes: number[] = []): string {
     const LINE = LINE_CHARS[paper];
+    const ps = resolveReceiptSettings(data.printSettings);
     const ESC = 0x1b;
     const GS = 0x1d;
     const bytes: number[] = [];
@@ -334,11 +466,16 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
         const gap = Math.max(1, LINE - l.length - r.length);
         line(l + " ".repeat(gap) + r);
     };
+    // An owner's note, centered by the caller. Flattened line by line: ascii()
+    // on the whole note would turn its line breaks into "?".
+    const note = (s: string) => {
+        for (const l of noteLines(s.split("\n").map(ascii).join("\n"), LINE)) line(l);
+    };
 
     push(ESC, 0x40); // initialize
     push(GS, 0x4c, 0x00, 0x00); // GS L 0 0 — zero left margin; some firmware defaults this nonzero, shifting the raster logo (and everything after it) right of where align() expects
 
-    if (logoBytes.length) {
+    if (logoBytes.length && ps.show.logo) {
         // 58mm: left-aligned on purpose. The bitmap already spans the full
         // paper width with the logo centered in white padding, so ESC a
         // centering has nothing to do here — and firmware that "centers" a
@@ -352,13 +489,31 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
         push(0x0a);
     }
     align(1);
-    bold(true);
-    size(0x11);
-    line(data.outletName);
-    size(0x00);
-    bold(false);
-    if (data.outletAddress) line(data.outletAddress);
-    if (data.outletPhone) line(data.outletPhone);
+    if (ps.show.outletName) {
+        // Always bold and double height. Double WIDTH too only while the name
+        // fits on one line at that width (16 chars on 58mm, 24 on 80mm):
+        // past that the printer breaks it wherever the line runs out, mid-word
+        // ("KEDAI KOPI NUSAN / TARA JAYA"). A longer name keeps its height at
+        // normal width — the TOTAL line's size — and only a name too long even
+        // for that wraps, between words, each line centered.
+        const name = ascii(data.outletName).trim();
+        bold(true);
+        if (name.length <= LINE / 2) {
+            size(0x11);
+            line(name);
+        } else {
+            size(0x01);
+            for (const l of wrapText(name, LINE)) line(l);
+        }
+        size(0x00);
+        bold(false);
+    }
+    // Wrapped here rather than by the printer, which breaks mid-word.
+    if (ps.show.address && data.outletAddress) {
+        for (const l of wrapText(ascii(data.outletAddress), LINE)) line(l);
+    }
+    if (ps.show.phone && data.outletPhone) line(data.outletPhone);
+    if (ps.show.headerNote && ps.headerNote) note(ps.headerNote);
     divider();
 
     if (data.billOnly) {
@@ -373,13 +528,13 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
     row("Order #", shortId);
     row("Tanggal", data.date.toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" }));
     row("Jam", data.date.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }));
-    row("Kasir", data.cashierName);
-    if (data.customerName) row("Pelanggan", data.customerName);
+    if (ps.show.cashier) row("Kasir", data.cashierName);
+    if (ps.show.customer && data.customerName) row("Pelanggan", data.customerName);
     // Also on the customer's copy: if they mislay the buzzer, the number is
     // still in their hand.
-    if (data.pagerNumber) row("Pager", data.pagerNumber);
-    if (data.tableLabel) row("Meja", data.tableLabel);
-    if (data.serviceType) row("Layanan", SERVICE_TYPE_LABEL[data.serviceType]);
+    if (ps.show.pager && data.pagerNumber) row("Pager", data.pagerNumber);
+    if (ps.show.table && data.tableLabel) row("Meja", data.tableLabel);
+    if (ps.show.serviceType && data.serviceType) row("Layanan", SERVICE_TYPE_LABEL[data.serviceType]);
     divider();
 
     for (const item of data.items) {
@@ -433,6 +588,8 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
     size(0x01); // double height for the total
     row("TOTAL", fmt(data.total));
     size(0x00);
+    const savings = ps.show.savings ? receiptSavings(data) : 0;
+    if (savings > 0) row("Anda hemat", fmt(savings));
     bold(false);
     divider();
 
@@ -457,7 +614,7 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
     // The member's own block, last, because it is about the next visit rather
     // than this bill. Printed whenever a member was attached, even if they
     // earned nothing — "you are recognised here" is the point of it.
-    if (data.memberName) {
+    if (ps.show.member && data.memberName) {
         align(0);
         row("Member", data.memberTier ? `${data.memberName} (${data.memberTier})` : data.memberName);
         if (data.pointsEarned) row("Poin didapat", `+${data.pointsEarned.toLocaleString("id-ID")}`);
@@ -470,6 +627,27 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
     align(1);
     line("Terima kasih!");
     line("Silakan datang kembali ^^");
+    if (ps.show.footerNote && ps.footerNote) {
+        line("");
+        note(ps.footerNote);
+    }
+    if (ps.show.qr && ps.qrUrl) {
+        let qrBytes: number[] = [];
+        try {
+            qrBytes = buildQrEscposBytes(ps.qrUrl, paper);
+        } catch {
+            // Unencodable link — the receipt goes out without the code.
+        }
+        if (qrBytes.length) {
+            line("");
+            // Same alignment rule as the logo, for the same reasons.
+            align(paper === "80" ? 1 : 0);
+            for (const b of qrBytes) bytes.push(b);
+            push(0x0a);
+            align(1);
+            if (ps.qrCaption) for (const l of wrapText(ascii(ps.qrCaption), LINE)) line(l);
+        }
+    }
     line("");
     line("Dibuat oleh ulunpesan.com");
 
@@ -711,11 +889,8 @@ export function ReceiptModal({ data, onClose, heading = "Pesanan Berhasil!", var
         openOrderLabelApp(batch);
     };
 
-    // Outlet logo, or null while it's still the placeholder avatar.
-    const logoSrc =
-        data.outletLogo && data.outletLogo !== "avatar.png" && data.outletLogo !== "/avatar.png"
-            ? resolveOutletImage(data.outletLogo)
-            : null;
+    const ps = resolveReceiptSettings(data.printSettings);
+    const logoSrc = receiptLogoSrc(data);
 
     // Paper width for this device's printer, persisted so it's a one-time pick.
     const [paperWidth, setPaperWidth] = useState<PaperWidth>(() => {
@@ -773,7 +948,7 @@ export function ReceiptModal({ data, onClose, heading = "Pesanan Berhasil!", var
 
         // Mirrors the ESC/POS member block: about the next visit, not this
         // bill, so it sits after the payment and before the thank-you.
-        const memberHtml = !data.memberName
+        const memberHtml = !(ps.show.member && data.memberName)
             ? ""
             : `<div class="row sm"><span>Member</span><span class="b">${esc(
                   data.memberTier ? `${data.memberName} (${data.memberTier})` : data.memberName,
@@ -785,6 +960,22 @@ export function ReceiptModal({ data, onClose, heading = "Pesanan Berhasil!", var
                   ? `<div class="row sm"><span>Sisa poin</span><span>${data.pointsBalance.toLocaleString("id-ID")}</span></div>`
                   : "") +
               `<div class="dv"></div>`;
+
+        const savings = ps.show.savings ? receiptSavings(data) : 0;
+        const headerNoteHtml =
+            ps.show.headerNote && ps.headerNote ? `<div class="c sm note">${esc(ps.headerNote)}</div>` : "";
+        const footerNoteHtml =
+            ps.show.footerNote && ps.footerNote ? `<div class="c sm note gap">${esc(ps.footerNote)}</div>` : "";
+        let qrHtml = "";
+        if (ps.show.qr && ps.qrUrl) {
+            try {
+                qrHtml =
+                    `<div class="qr">${qrSvg(ps.qrUrl)}</div>` +
+                    (ps.qrCaption ? `<div class="c sm">${esc(ps.qrCaption)}</div>` : "");
+            } catch {
+                // Unencodable link — print without the code, as the thermal path does.
+            }
+        }
 
         const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Struk #${shortId}</title>
 <style>
@@ -808,21 +999,27 @@ export function ReceiptModal({ data, onClose, heading = "Pesanan Berhasil!", var
      before the @page width applies. */
   .logo-wrap { width: 100%; text-align: center; margin-bottom: 2mm; }
   .logo { display: inline-block; width: 20mm; height: 20mm; object-fit: contain; }
+  .outlet-name { font-weight: bold; text-align: center; overflow-wrap: anywhere; }
+  .note { white-space: pre-line; overflow-wrap: anywhere; }
+  .gap { margin-top: 2mm; }
+  .qr { width: 100%; text-align: center; margin-top: 2mm; }
+  .qr svg { display: inline-block; width: ${paperWidth === "80" ? 28 : 22}mm; height: auto; }
 </style></head><body>
   ${logoSrc ? `<div class="logo-wrap"><img class="logo" src="${logoSrc}" alt=""></div>` : ""}
-  <div class="c b lg">${esc(data.outletName)}</div>
-  ${data.outletAddress ? `<div class="c sm">${esc(data.outletAddress)}</div>` : ""}
-  ${data.outletPhone ? `<div class="c sm">${esc(data.outletPhone)}</div>` : ""}
+  ${ps.show.outletName ? `<div class="outlet-name" style="font-size:${outletNameFontPx(data.outletName, paperWidth)}px">${esc(data.outletName)}</div>` : ""}
+  ${ps.show.address && data.outletAddress ? `<div class="c sm">${esc(data.outletAddress)}</div>` : ""}
+  ${ps.show.phone && data.outletPhone ? `<div class="c sm">${esc(data.outletPhone)}</div>` : ""}
+  ${headerNoteHtml}
   <div class="dv"></div>
   ${data.billOnly ? `<div class="c b">TAGIHAN - BELUM DIBAYAR</div><div class="dv"></div>` : ""}
   <div class="row sm"><span>Order #</span><span class="b">${shortId}</span></div>
   <div class="row sm"><span>Tanggal</span><span>${data.date.toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" })}</span></div>
   <div class="row sm"><span>Jam</span><span>${data.date.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}</span></div>
-  <div class="row sm"><span>Kasir</span><span>${esc(data.cashierName)}</span></div>
-  ${data.customerName ? `<div class="row sm"><span>Pelanggan</span><span>${esc(data.customerName)}</span></div>` : ""}
-  ${data.pagerNumber ? `<div class="row sm"><span>Pager</span><span class="b">${esc(data.pagerNumber)}</span></div>` : ""}
-  ${data.tableLabel ? `<div class="row sm"><span>Meja</span><span class="b">${esc(data.tableLabel)}</span></div>` : ""}
-  ${data.serviceType ? `<div class="row sm"><span>Layanan</span><span class="b">${SERVICE_TYPE_LABEL[data.serviceType]}</span></div>` : ""}
+  ${ps.show.cashier ? `<div class="row sm"><span>Kasir</span><span>${esc(data.cashierName)}</span></div>` : ""}
+  ${ps.show.customer && data.customerName ? `<div class="row sm"><span>Pelanggan</span><span>${esc(data.customerName)}</span></div>` : ""}
+  ${ps.show.pager && data.pagerNumber ? `<div class="row sm"><span>Pager</span><span class="b">${esc(data.pagerNumber)}</span></div>` : ""}
+  ${ps.show.table && data.tableLabel ? `<div class="row sm"><span>Meja</span><span class="b">${esc(data.tableLabel)}</span></div>` : ""}
+  ${ps.show.serviceType && data.serviceType ? `<div class="row sm"><span>Layanan</span><span class="b">${SERVICE_TYPE_LABEL[data.serviceType]}</span></div>` : ""}
   <div class="dv"></div>
   ${itemsHtml}
   <div class="dv"></div>
@@ -833,12 +1030,15 @@ export function ReceiptModal({ data, onClose, heading = "Pesanan Berhasil!", var
   ${data.deliveryFee ? `<div class="row sm"><span>Ongkos kirim</span><span>${fmt(data.deliveryFee)}</span></div>` : ""}
   ${data.taxAmount !== undefined && data.taxLabel ? `<div class="row sm"><span>${esc(data.taxLabel)}${data.taxInclusive ? " (termasuk)" : ""}</span><span>${fmt(data.taxAmount)}</span></div>` : ""}
   <div class="row b lg"><span>TOTAL</span><span>${fmt(data.total)}</span></div>
+  ${savings > 0 ? `<div class="row b"><span>Anda hemat</span><span>${fmt(savings)}</span></div>` : ""}
   <div class="dv"></div>
   ${data.billOnly && data.splitCount && data.splitCount > 1 ? `<div class="row sm"><span>Dibagi ${data.splitCount} orang</span><span class="b">${fmt(shareOf(data.total, data.splitCount))}/org</span></div><div class="dv"></div>` : ""}
   ${paymentHtml}
   ${memberHtml}
   <div class="c sm">Terima kasih!</div>
   <div class="c sm">Silakan datang kembali ^^</div>
+  ${footerNoteHtml}
+  ${qrHtml}
   <div class="dv"></div>
   <div class="c sm">Dibuat oleh ulunpesan.com</div>
   <script>window.onload=function(){window.focus();window.print();window.onafterprint=function(){window.close();};setTimeout(function(){try{window.close();}catch(e){}},2000);};</script>
@@ -1092,245 +1292,7 @@ export function ReceiptModal({ data, onClose, heading = "Pesanan Berhasil!", var
                             )}
                         </div>
                     ) : (
-                    <div id="receipt-printable" className="font-mono text-[13px] text-gray-800">
-                        {/* Outlet header */}
-                        <div className="text-center mb-3">
-                            {logoSrc && (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img
-                                    src={logoSrc}
-                                    alt=""
-                                    className="mx-auto mb-2 h-16 w-16 rounded-full object-cover border"
-                                />
-                            )}
-                            <p className="font-bold text-base uppercase tracking-wide">{data.outletName}</p>
-                            <p className="text-xs text-gray-500">{data.outletAddress}</p>
-                            <p className="text-xs text-gray-500">{data.outletPhone}</p>
-                        </div>
-
-                        <div className="border-t border-dashed border-gray-300 my-3" />
-
-                        {data.billOnly && (
-                            <>
-                                <p className="text-center font-bold text-xs tracking-wide">
-                                    TAGIHAN - BELUM DIBAYAR
-                                </p>
-                                <div className="border-t border-dashed border-gray-300 my-3" />
-                            </>
-                        )}
-
-                        {/* Order meta */}
-                        <div className="flex justify-between text-xs mb-1">
-                            <span className="text-gray-500">Order #</span>
-                            <span className="font-bold">{shortId}</span>
-                        </div>
-                        <div className="flex justify-between text-xs mb-1">
-                            <span className="text-gray-500">Tanggal</span>
-                            <span>{data.date.toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" })}</span>
-                        </div>
-                        <div className="flex justify-between text-xs mb-1">
-                            <span className="text-gray-500">Jam</span>
-                            <span>{data.date.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}</span>
-                        </div>
-                        <div className="flex justify-between text-xs mb-1">
-                            <span className="text-gray-500">Kasir</span>
-                            <span>{data.cashierName}</span>
-                        </div>
-                        {data.customerName && (
-                            <div className="flex justify-between text-xs mb-1">
-                                <span className="text-gray-500">Pelanggan</span>
-                                <span className="font-semibold">{data.customerName}</span>
-                            </div>
-                        )}
-                        {data.pagerNumber && (
-                            <div className="flex justify-between text-xs mb-1">
-                                <span className="text-gray-500">Pager</span>
-                                <span className="font-bold">{data.pagerNumber}</span>
-                            </div>
-                        )}
-                        {data.tableLabel && (
-                            <div className="flex justify-between text-xs mb-1">
-                                <span className="text-gray-500">Meja</span>
-                                <span className="font-bold">{data.tableLabel}</span>
-                            </div>
-                        )}
-                        {data.serviceType && (
-                            <div className="flex justify-between text-xs mb-1">
-                                <span className="text-gray-500">Layanan</span>
-                                <span className="font-bold">{SERVICE_TYPE_LABEL[data.serviceType]}</span>
-                            </div>
-                        )}
-
-                        <div className="border-t border-dashed border-gray-300 my-3" />
-
-                        {/* Items */}
-                        <div className="space-y-2">
-                            {data.items.map((item, i) => {
-                                const isDiscount = item.price_mark_down && item.price_mark_down !== "0";
-                                const originalPrice = parseFloat(item.price);
-                                const unitPrice = parseFloat(isDiscount ? item.price_mark_down : item.price);
-                                const subtotal = unitPrice * item.quantity;
-                                const itemDiscount = isDiscount ? (originalPrice - unitPrice) * item.quantity : 0;
-                                return (
-                                    <div key={i}>
-                                        <p className="font-semibold text-[13px] leading-tight">{item.product_name}</p>
-                                        {item.variant_name && (
-                                            <p className="text-xs text-gray-500 italic">{item.variant_name}</p>
-                                        )}
-                                        <div className="flex justify-between text-xs text-gray-500">
-                                            <span>
-                                                {item.quantity} × {fmt(unitPrice)}
-                                                {isDiscount && (
-                                                    <span className="ml-1 line-through text-gray-400">{fmt(originalPrice)}</span>
-                                                )}
-                                            </span>
-                                            <span className="font-semibold text-gray-800">{fmt(subtotal)}</span>
-                                        </div>
-                                        {isDiscount && (
-                                            <div className="flex justify-between text-[11px] text-rose-500">
-                                                <span>Diskon item</span>
-                                                <span>-{fmt(itemDiscount)}</span>
-                                            </div>
-                                        )}
-                                        {(item.addons ?? []).map((a, j) => {
-                                            const addonTotal = a.price * a.quantity * item.quantity;
-                                            return (
-                                                <div
-                                                    key={j}
-                                                    className="flex justify-between pl-3 text-[11px] text-gray-500"
-                                                >
-                                                    <span>+ {a.product_name}</span>
-                                                    {addonTotal > 0 && <span>{fmt(addonTotal)}</span>}
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                );
-                            })}
-                        </div>
-
-                        <div className="border-t border-dashed border-gray-300 my-3" />
-
-                        {/* Totals */}
-                        <div className="flex justify-between text-xs mb-1">
-                            <span className="text-gray-500">Subtotal</span>
-                            <span>{fmt(data.subtotal)}</span>
-                        </div>
-                        <div className="flex justify-between text-xs mb-2">
-                            <span className="text-gray-500">{data.discountLabel}</span>
-                            <span className={data.discountAmount > 0 ? 'text-rose-500' : ''}>
-                                {data.discountAmount > 0 ? '-' : ''}{fmt(data.discountAmount)}
-                            </span>
-                        </div>
-                        {data.promoDiscount ? (
-                            <div className="flex justify-between text-xs mb-2">
-                                <span className="text-gray-500">Promo {data.promoCode}</span>
-                                <span className="text-rose-500">-{fmt(data.promoDiscount)}</span>
-                            </div>
-                        ) : null}
-                        {data.pointsDiscount ? (
-                            <div className="flex justify-between text-xs mb-2">
-                                <span className="text-gray-500">
-                                    Poin ({(data.pointsRedeemed ?? 0).toLocaleString('id-ID')})
-                                </span>
-                                <span className="text-rose-500">-{fmt(data.pointsDiscount)}</span>
-                            </div>
-                        ) : null}
-                        {data.deliveryFee ? (
-                            <div className="flex justify-between text-xs mb-2">
-                                <span className="text-gray-500">Ongkos kirim</span>
-                                <span>{fmt(data.deliveryFee)}</span>
-                            </div>
-                        ) : null}
-                        {data.taxAmount !== undefined && data.taxLabel && (
-                            <div className="flex justify-between text-xs mb-2">
-                                <span className="text-gray-500">
-                                    {data.taxLabel}
-                                    {data.taxInclusive ? ' (termasuk)' : ''}
-                                </span>
-                                <span>{fmt(data.taxAmount)}</span>
-                            </div>
-                        )}
-                        <div className="flex justify-between font-bold text-sm">
-                            <span>TOTAL</span>
-                            <span className="text-blue-600">{fmt(data.total)}</span>
-                        </div>
-
-                        <div className="border-t border-dashed border-gray-300 my-3" />
-
-                        {data.billOnly && data.splitCount && data.splitCount > 1 ? (
-                            <>
-                                <div className="flex justify-between text-xs">
-                                    <span className="text-gray-500">Dibagi {data.splitCount} orang</span>
-                                    <span className="font-bold">
-                                        {fmt(shareOf(data.total, data.splitCount))}/org
-                                    </span>
-                                </div>
-                                <div className="border-t border-dashed border-gray-300 my-3" />
-                            </>
-                        ) : null}
-
-                        {/* Payment — omitted for a courier pickup slip (see ReceiptData). */}
-                        {data.paymentMethod && (
-                            <>
-                                {data.paymentMethod !== 'cash' ? (
-                                    <div className="flex justify-between font-bold text-sm">
-                                        <span>Pembayaran</span>
-                                        <span className="text-blue-600">
-                                            {posPaymentLabel(data.paymentMethod)}
-                                        </span>
-                                    </div>
-                                ) : (
-                                    <>
-                                        <div className="flex justify-between text-xs mb-1">
-                                            <span className="text-gray-500">Tunai</span>
-                                            <span>{fmt(data.amountPaid ?? 0)}</span>
-                                        </div>
-                                        <div className="flex justify-between font-bold text-sm">
-                                            <span>Kembali</span>
-                                            <span className="text-emerald-600">{fmt(data.changeDue ?? 0)}</span>
-                                        </div>
-                                    </>
-                                )}
-                                <div className="border-t border-dashed border-gray-300 my-3" />
-                            </>
-                        )}
-
-                        {/* Member block: about the next visit, so it sits after
-                            the payment, exactly as both printed slips have it. */}
-                        {data.memberName && (
-                            <>
-                                <div className="flex justify-between text-xs mb-1">
-                                    <span className="text-gray-500">Member</span>
-                                    <span className="font-semibold">
-                                        {data.memberName}
-                                        {data.memberTier ? ` (${data.memberTier})` : ''}
-                                    </span>
-                                </div>
-                                {data.pointsEarned ? (
-                                    <div className="flex justify-between text-xs mb-1">
-                                        <span className="text-gray-500">Poin didapat</span>
-                                        <span className="font-semibold text-amber-600">
-                                            +{data.pointsEarned.toLocaleString('id-ID')}
-                                        </span>
-                                    </div>
-                                ) : null}
-                                {data.pointsBalance !== undefined && (
-                                    <div className="flex justify-between text-xs mb-1">
-                                        <span className="text-gray-500">Sisa poin</span>
-                                        <span className="font-semibold">
-                                            {data.pointsBalance.toLocaleString('id-ID')}
-                                        </span>
-                                    </div>
-                                )}
-                                <div className="border-t border-dashed border-gray-300 my-3" />
-                            </>
-                        )}
-
-                        {/* Footer */}
-                        <p className="text-center text-xs text-gray-400">Terima kasih!</p>
-                        <p className="text-center text-xs text-gray-400">Silakan datang kembali 🙏</p>
-                    </div>
+                        <ReceiptPaper data={data} />
                     )}
                 </div>
 
@@ -1378,6 +1340,299 @@ export function ReceiptModal({ data, onClose, heading = "Pesanan Berhasil!", var
                     </button>
                 </div>
             </div>
+        </div>
+    );
+}
+
+/**
+ * The customer receipt as it appears on screen: in the receipt modal, and as
+ * the live preview in Pengaturan Outlet → Struk. It mirrors the two printed
+ * slips (ESC/POS and browser print) line for line — a change to one of the
+ * three belongs in all of them.
+ *
+ * `paperWidth` narrows the sheet to roughly that paper's line length, so the
+ * settings preview shows an owner where their note will wrap. The modal leaves
+ * it unset and fills its card.
+ */
+export function ReceiptPaper({ data, paperWidth }: { data: ReceiptData; paperWidth?: PaperWidth }) {
+    const ps = resolveReceiptSettings(data.printSettings);
+    const logoSrc = receiptLogoSrc(data);
+    const shortId = data.orderId.split("-")[0].toUpperCase();
+    const savings = ps.show.savings ? receiptSavings(data) : 0;
+    // The printers' rule, on screen: a name too long to stay big on one line
+    // is set a size down rather than left to break across two.
+    const nameSize = data.outletName.length > 24 ? "text-sm" : "text-base";
+
+    return (
+        <div
+            className="font-mono text-[13px] text-gray-800"
+            style={paperWidth ? { maxWidth: paperWidth === "58" ? 240 : 350, marginInline: "auto" } : undefined}
+        >
+            {/* Outlet header */}
+            <div className="text-center mb-3">
+                {logoSrc && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                        src={logoSrc}
+                        alt=""
+                        className="mx-auto mb-2 h-16 w-16 rounded-full object-cover border"
+                    />
+                )}
+                {ps.show.outletName && (
+                    <p className={`font-bold ${nameSize} uppercase tracking-wide wrap-break-word`}>{data.outletName}</p>
+                )}
+                {ps.show.address && data.outletAddress && (
+                    <p className="text-xs text-gray-500">{data.outletAddress}</p>
+                )}
+                {ps.show.phone && data.outletPhone && <p className="text-xs text-gray-500">{data.outletPhone}</p>}
+                {ps.show.headerNote && ps.headerNote && (
+                    <p className="mt-1 text-xs whitespace-pre-line wrap-break-word">{ps.headerNote}</p>
+                )}
+            </div>
+
+            <div className="border-t border-dashed border-gray-300 my-3" />
+
+            {data.billOnly && (
+                <>
+                    <p className="text-center font-bold text-xs tracking-wide">
+                        TAGIHAN - BELUM DIBAYAR
+                    </p>
+                    <div className="border-t border-dashed border-gray-300 my-3" />
+                </>
+            )}
+
+            {/* Order meta */}
+            <div className="flex justify-between text-xs mb-1">
+                <span className="text-gray-500">Order #</span>
+                <span className="font-bold">{shortId}</span>
+            </div>
+            <div className="flex justify-between text-xs mb-1">
+                <span className="text-gray-500">Tanggal</span>
+                <span>{data.date.toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" })}</span>
+            </div>
+            <div className="flex justify-between text-xs mb-1">
+                <span className="text-gray-500">Jam</span>
+                <span>{data.date.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}</span>
+            </div>
+            {ps.show.cashier && (
+                <div className="flex justify-between text-xs mb-1">
+                    <span className="text-gray-500">Kasir</span>
+                    <span>{data.cashierName}</span>
+                </div>
+            )}
+            {ps.show.customer && data.customerName && (
+                <div className="flex justify-between text-xs mb-1">
+                    <span className="text-gray-500">Pelanggan</span>
+                    <span className="font-semibold">{data.customerName}</span>
+                </div>
+            )}
+            {ps.show.pager && data.pagerNumber && (
+                <div className="flex justify-between text-xs mb-1">
+                    <span className="text-gray-500">Pager</span>
+                    <span className="font-bold">{data.pagerNumber}</span>
+                </div>
+            )}
+            {ps.show.table && data.tableLabel && (
+                <div className="flex justify-between text-xs mb-1">
+                    <span className="text-gray-500">Meja</span>
+                    <span className="font-bold">{data.tableLabel}</span>
+                </div>
+            )}
+            {ps.show.serviceType && data.serviceType && (
+                <div className="flex justify-between text-xs mb-1">
+                    <span className="text-gray-500">Layanan</span>
+                    <span className="font-bold">{SERVICE_TYPE_LABEL[data.serviceType]}</span>
+                </div>
+            )}
+
+            <div className="border-t border-dashed border-gray-300 my-3" />
+
+            {/* Items */}
+            <div className="space-y-2">
+                {data.items.map((item, i) => {
+                    const isDiscount = item.price_mark_down && item.price_mark_down !== "0";
+                    const originalPrice = parseFloat(item.price);
+                    const unitPrice = parseFloat(isDiscount ? item.price_mark_down : item.price);
+                    const subtotal = unitPrice * item.quantity;
+                    const itemDiscount = isDiscount ? (originalPrice - unitPrice) * item.quantity : 0;
+                    return (
+                        <div key={i}>
+                            <p className="font-semibold text-[13px] leading-tight">{item.product_name}</p>
+                            {item.variant_name && (
+                                <p className="text-xs text-gray-500 italic">{item.variant_name}</p>
+                            )}
+                            <div className="flex justify-between text-xs text-gray-500">
+                                <span>
+                                    {item.quantity} × {fmt(unitPrice)}
+                                    {isDiscount && (
+                                        <span className="ml-1 line-through text-gray-400">{fmt(originalPrice)}</span>
+                                    )}
+                                </span>
+                                <span className="font-semibold text-gray-800">{fmt(subtotal)}</span>
+                            </div>
+                            {isDiscount && (
+                                <div className="flex justify-between text-[11px] text-rose-500">
+                                    <span>Diskon item</span>
+                                    <span>-{fmt(itemDiscount)}</span>
+                                </div>
+                            )}
+                            {(item.addons ?? []).map((a, j) => {
+                                const addonTotal = a.price * a.quantity * item.quantity;
+                                return (
+                                    <div
+                                        key={j}
+                                        className="flex justify-between pl-3 text-[11px] text-gray-500"
+                                    >
+                                        <span>+ {a.product_name}</span>
+                                        {addonTotal > 0 && <span>{fmt(addonTotal)}</span>}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    );
+                })}
+            </div>
+
+            <div className="border-t border-dashed border-gray-300 my-3" />
+
+            {/* Totals */}
+            <div className="flex justify-between text-xs mb-1">
+                <span className="text-gray-500">Subtotal</span>
+                <span>{fmt(data.subtotal)}</span>
+            </div>
+            <div className="flex justify-between text-xs mb-2">
+                <span className="text-gray-500">{data.discountLabel}</span>
+                <span className={data.discountAmount > 0 ? 'text-rose-500' : ''}>
+                    {data.discountAmount > 0 ? '-' : ''}{fmt(data.discountAmount)}
+                </span>
+            </div>
+            {data.promoDiscount ? (
+                <div className="flex justify-between text-xs mb-2">
+                    <span className="text-gray-500">Promo {data.promoCode}</span>
+                    <span className="text-rose-500">-{fmt(data.promoDiscount)}</span>
+                </div>
+            ) : null}
+            {data.pointsDiscount ? (
+                <div className="flex justify-between text-xs mb-2">
+                    <span className="text-gray-500">
+                        Poin ({(data.pointsRedeemed ?? 0).toLocaleString('id-ID')})
+                    </span>
+                    <span className="text-rose-500">-{fmt(data.pointsDiscount)}</span>
+                </div>
+            ) : null}
+            {data.deliveryFee ? (
+                <div className="flex justify-between text-xs mb-2">
+                    <span className="text-gray-500">Ongkos kirim</span>
+                    <span>{fmt(data.deliveryFee)}</span>
+                </div>
+            ) : null}
+            {data.taxAmount !== undefined && data.taxLabel && (
+                <div className="flex justify-between text-xs mb-2">
+                    <span className="text-gray-500">
+                        {data.taxLabel}
+                        {data.taxInclusive ? ' (termasuk)' : ''}
+                    </span>
+                    <span>{fmt(data.taxAmount)}</span>
+                </div>
+            )}
+            <div className="flex justify-between font-bold text-sm">
+                <span>TOTAL</span>
+                <span className="text-blue-600">{fmt(data.total)}</span>
+            </div>
+            {savings > 0 && (
+                <div className="flex justify-between font-bold text-xs mt-1">
+                    <span>Anda hemat</span>
+                    <span className="text-emerald-600">{fmt(savings)}</span>
+                </div>
+            )}
+
+            <div className="border-t border-dashed border-gray-300 my-3" />
+
+            {data.billOnly && data.splitCount && data.splitCount > 1 ? (
+                <>
+                    <div className="flex justify-between text-xs">
+                        <span className="text-gray-500">Dibagi {data.splitCount} orang</span>
+                        <span className="font-bold">
+                            {fmt(shareOf(data.total, data.splitCount))}/org
+                        </span>
+                    </div>
+                    <div className="border-t border-dashed border-gray-300 my-3" />
+                </>
+            ) : null}
+
+            {/* Payment — omitted for a courier pickup slip (see ReceiptData). */}
+            {data.paymentMethod && (
+                <>
+                    {data.paymentMethod !== 'cash' ? (
+                        <div className="flex justify-between font-bold text-sm">
+                            <span>Pembayaran</span>
+                            <span className="text-blue-600">
+                                {posPaymentLabel(data.paymentMethod)}
+                            </span>
+                        </div>
+                    ) : (
+                        <>
+                            <div className="flex justify-between text-xs mb-1">
+                                <span className="text-gray-500">Tunai</span>
+                                <span>{fmt(data.amountPaid ?? 0)}</span>
+                            </div>
+                            <div className="flex justify-between font-bold text-sm">
+                                <span>Kembali</span>
+                                <span className="text-emerald-600">{fmt(data.changeDue ?? 0)}</span>
+                            </div>
+                        </>
+                    )}
+                    <div className="border-t border-dashed border-gray-300 my-3" />
+                </>
+            )}
+
+            {/* Member block: about the next visit, so it sits after
+                the payment, exactly as both printed slips have it. */}
+            {ps.show.member && data.memberName && (
+                <>
+                    <div className="flex justify-between text-xs mb-1">
+                        <span className="text-gray-500">Member</span>
+                        <span className="font-semibold">
+                            {data.memberName}
+                            {data.memberTier ? ` (${data.memberTier})` : ''}
+                        </span>
+                    </div>
+                    {data.pointsEarned ? (
+                        <div className="flex justify-between text-xs mb-1">
+                            <span className="text-gray-500">Poin didapat</span>
+                            <span className="font-semibold text-amber-600">
+                                +{data.pointsEarned.toLocaleString('id-ID')}
+                            </span>
+                        </div>
+                    ) : null}
+                    {data.pointsBalance !== undefined && (
+                        <div className="flex justify-between text-xs mb-1">
+                            <span className="text-gray-500">Sisa poin</span>
+                            <span className="font-semibold">
+                                {data.pointsBalance.toLocaleString('id-ID')}
+                            </span>
+                        </div>
+                    )}
+                    <div className="border-t border-dashed border-gray-300 my-3" />
+                </>
+            )}
+
+            {/* Footer */}
+            <p className="text-center text-xs text-gray-400">Terima kasih!</p>
+            <p className="text-center text-xs text-gray-400">Silakan datang kembali 🙏</p>
+            {ps.show.footerNote && ps.footerNote && (
+                <p className="mt-2 text-center text-xs whitespace-pre-line wrap-break-word">{ps.footerNote}</p>
+            )}
+            {ps.show.qr && ps.qrUrl && (
+                <div className="mt-3 flex flex-col items-center gap-1">
+                    {/* Always black on white, dark mode or not — it has to scan. */}
+                    <div className="bg-white p-1">
+                        <QRCode value={ps.qrUrl} size={96} level="L" />
+                    </div>
+                    {ps.qrCaption && <p className="text-center text-xs">{ps.qrCaption}</p>}
+                </div>
+            )}
+            <p className="mt-2 text-center text-[11px] text-gray-400">Dibuat oleh ulunpesan.com</p>
         </div>
     );
 }
