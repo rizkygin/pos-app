@@ -1078,6 +1078,20 @@ export async function ownerRoutes(app: FastifyInstance) {
 
       if (!cf) return reply.status(404).send({ error: "Not found" });
 
+      // A row the cashier wrote for an order — the sale's cash-in or its
+      // "Pembatalan Order Kasir" cash-out — belongs to that order, not to the
+      // hand-entry ledger. Deleting the cancellation puts a voided sale's money
+      // back into the books, and owners did exactly that from Arus Kas, one
+      // click per order. Cancelling the order is the only undo for a sale.
+      if (cf.order_id) {
+        const code = cf.order_id.split("-")[0].toUpperCase();
+        return reply.status(400).send({
+          error: cf.cash_out_detail_id
+            ? `Pembatalan Order #${code} dicatat otomatis dan tidak bisa dihapus`
+            : `Penjualan Order #${code} dicatat otomatis oleh kasir. Untuk membatalkannya, batalkan ordernya di Semua Pesanan`,
+        });
+      }
+
       const inDetailId = cf.cash_in_detail_id;
       const outDetailId = cf.cash_out_detail_id;
 

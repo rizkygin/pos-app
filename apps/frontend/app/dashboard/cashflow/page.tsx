@@ -90,11 +90,18 @@ export default function CashflowPage() {
     setCategory('');
   };
 
+  // The row only leaves the list once the server has really deleted it —
+  // dropping it on a refusal would read as deleted until the next reload.
   const handleDelete = async (id: string) => {
-    await fetch(`${API_URL}/api/cashflow?id=${id}`, {
+    const res = await fetch(`${API_URL}/api/cashflow?id=${id}`, {
       method: 'DELETE',
       credentials: 'include',
     });
+    if (!res.ok) {
+      const json = await res.json().catch(() => ({}));
+      alert(json.error ?? 'Gagal menghapus. Coba lagi.');
+      return;
+    }
     setTransactions((prev) => prev.filter((t) => t.id !== id));
   };
 
@@ -576,7 +583,13 @@ export default function CashflowPage() {
                           {formatCurrency(balance)}
                         </TableCell>
                         <TableCell className="text-right">
-                          {t.category !== CATEGORY_IN[0] &&
+                          {/* No delete on a row that belongs to an order: the
+                              sale's cash-in or its "Pembatalan Order Kasir"
+                              cash-out. The backend refuses both; the category
+                              checks cover invoice payments and pre-link Kasir
+                              rows that carry no order id. */}
+                          {!t.orderId &&
+                            t.category !== CATEGORY_IN[0] &&
                             t.category !== CATEGORY_IN[13] &&
                             t.category !== CATEGORY_OUT[1] && (
                               <Button
