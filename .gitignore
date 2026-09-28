@@ -58,3 +58,8 @@ google-services*.json
 # dist from src (`RUN npx tsc`) and copies nothing from here, so a committed
 # copy is dead weight that `railway up` still uploads.
 apps/backend/dist/
+
+# Postman collection + API list for the Android app, and the script that
+# generates them from the backend routes. Local-only reference material.
+/docs/api/
+/scripts/api-docs/
