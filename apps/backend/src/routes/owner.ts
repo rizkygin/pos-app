@@ -126,11 +126,23 @@ export async function ownerRoutes(app: FastifyInstance) {
         status === "selesai" ? eq(ordersTable.status, "delivered") :
         eq(ordersTable.status, status as OrderStatus);
 
+      // Every till sale is booked to the one offline customer (see
+      // OFFLINE_CUSTOMER_EMAIL), so usersTable.name says nothing about who a POS
+      // order was for. The name the cashier typed is kept in the order's note by
+      // /api/add-order-detail. NULL for app orders and for a note in any other shape.
+      const posCustomerName = sql<string | null>`${ordersTable.note}->>'customerName'`;
+
       const baseFilter = and(
         orderNotDeleted,
         eq(productsTable.outlet_id, outlet.id),
         statusFilter,
-        search ? or(ilike(usersTable.name, `%${search}%`), ilike(orderDetailsTable.order_id, `%${search}%`)) : undefined,
+        search
+          ? or(
+              ilike(usersTable.name, `%${search}%`),
+              ilike(orderDetailsTable.order_id, `%${search}%`),
+              ilike(posCustomerName, `%${search}%`),
+            )
+          : undefined,
         dateStart ? gte(orderDetailsTable.created_at, dateStart) : undefined,
         dateEnd ? lte(orderDetailsTable.created_at, dateEnd) : undefined,
       );
@@ -147,6 +159,8 @@ export async function ownerRoutes(app: FastifyInstance) {
             source: ordersTable.source,
             createdAt: sql<string>`max(${orderDetailsTable.created_at})::text`,
             customerName: usersTable.name,
+            // max() only to satisfy GROUP BY: every row of an order shares one orders row.
+            posCustomerName: sql<string | null>`max(${posCustomerName})`,
           })
           .from(orderDetailsTable)
           .innerJoin(productsTable, eq(orderDetailsTable.product_id, productsTable.id))
@@ -311,6 +325,8 @@ export async function ownerRoutes(app: FastifyInstance) {
           discountAmount: ordersTable.discount_amount,
           deliveryFee: ordersTable.delivery_fee,
           createdAt: ordersTable.createdAt,
+          tableLabel: ordersTable.table_label,
+          serviceType: ordersTable.service_type,
           customerName: usersTable.name,
           customerEmail: usersTable.email,
           customerPhone: usersTable.phone,
@@ -375,6 +391,10 @@ export async function ownerRoutes(app: FastifyInstance) {
           createdAt: order.createdAt,
           discountAmount: order.discountAmount,
           deliveryFee: order.deliveryFee,
+          // Printed on the checkout slip, so a reprint prints them too. Frozen
+          // on the order: the table's label as it was when the bill was paid.
+          tableLabel: order.tableLabel,
+          serviceType: order.serviceType,
         },
         items: rows.map((i) => ({
           ...i,

@@ -2,6 +2,7 @@ import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "../db";
 import {
   diningTablesTable,
+  kitchenTicketsTable,
   tableSessionLinesTable,
   tableSessionsTable,
 } from "../db/schema";
@@ -329,6 +330,84 @@ export async function settleTableBill(tx: Tx, link: TableCheckoutLink, orderId: 
       ...(Number(left?.n ?? 0) === 0 ? { status: "paid", paid_at: now } : {}),
     })
     .where(eq(tableSessionsTable.id, link.sessionId));
+}
+
+/**
+ * The undo of settleTableBill, for a table sale that was cancelled: its lines
+ * go back on the table as unpaid. The usual reason to cancel is a mistake — the
+ * wrong method, the wrong item — and the next thing the cashier does is ring
+ * the bill up again, which only the table can do (it is what freezes the table
+ * label onto the order). Left pointing at the cancelled order, the items would
+ * read as paid forever and the floor's "sudah dibayar" would count money that
+ * was refunded.
+ *
+ * Only while the seating is still live. Once the host has cleared the table
+ * there is no bill to go back to, and the lines stay with the cancelled order
+ * as the record of what it was. A bill paid before its table was merged into
+ * another stays with the closed seating for the same reason.
+ *
+ * Called inside the cancel's transaction, after the order row is locked. The
+ * stock the cancel just returned leaves again when the bill is re-paid;
+ * sent_qty is kept, so the kitchen is not told about food it already made.
+ * Returns the seating it reopened, or null when there was none to reopen.
+ */
+export async function reopenCancelledTableBill(
+  tx: Tx,
+  outletId: number,
+  orderId: string,
+): Promise<string | null> {
+  const [line] = await tx
+    .select({ sessionId: tableSessionLinesTable.session_id })
+    .from(tableSessionLinesTable)
+    .where(eq(tableSessionLinesTable.order_id, orderId))
+    .limit(1);
+  if (!line) return null;
+
+  const [session] = await tx
+    .select({ id: tableSessionsTable.id, status: tableSessionsTable.status })
+    .from(tableSessionsTable)
+    .where(
+      and(
+        eq(tableSessionsTable.id, line.sessionId),
+        eq(tableSessionsTable.outlet_id, outletId),
+        LIVE_SESSION,
+        inArray(tableSessionsTable.status, ["open", "paid"]),
+      ),
+    )
+    .limit(1)
+    .for("update");
+  if (!session) return null;
+
+  const now = new Date();
+  await tx
+    .update(tableSessionLinesTable)
+    .set({ order_id: null, updated_at: now })
+    .where(
+      and(
+        eq(tableSessionLinesTable.session_id, session.id),
+        eq(tableSessionLinesTable.order_id, orderId),
+      ),
+    );
+
+  // Food on the table that nobody has paid for: the seating is open again.
+  // The version moves too, so a till holding this table reloads before paying.
+  await tx
+    .update(tableSessionsTable)
+    .set({
+      version: sql`${tableSessionsTable.version} + 1`,
+      updatedAt: now,
+      ...(session.status === "paid" ? { status: "open", paid_at: null } : {}),
+    })
+    .where(eq(tableSessionsTable.id, session.id));
+
+  // The kitchen tickets learnt the cancelled order's number. Forget it, so the
+  // re-payment hands them the new one — linkKitchenTickets only fills blanks.
+  await tx
+    .update(kitchenTicketsTable)
+    .set({ order_id: null, updated_at: now })
+    .where(and(eq(kitchenTicketsTable.order_id, orderId), eq(kitchenTicketsTable.source, "table")));
+
+  return session.id;
 }
 
 /** Unpaid lines of a seating, oldest first. */

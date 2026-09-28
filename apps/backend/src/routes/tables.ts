@@ -1121,6 +1121,9 @@ export async function tableRoutes(app: FastifyInstance) {
       const incoming = parsed as Exclude<ReturnType<typeof parseCartLine>, string>[];
       const ids = new Set(incoming.map((l) => l.id));
       if (ids.size !== incoming.length) throw new HttpError(400, "Ada baris keranjang ganda");
+      // The tab's customer name is the seating's guest name. Sent only when
+      // the till changed it; absent leaves the floor's as it is.
+      const guest = body.guestName === undefined ? {} : { guest_name: text(body.guestName, 100) };
 
       // Every product must be this outlet's own. A table bill is a place other
       // outlets' products must never be able to reach.
@@ -1246,7 +1249,10 @@ export async function tableRoutes(app: FastifyInstance) {
           await tx.delete(tableSessionLinesTable).where(inArray(tableSessionLinesTable.id, drop));
         }
 
-        await bumpVersion(tx, sessionId, await reconcileStatus(tx, sessionId, s.status));
+        await bumpVersion(tx, sessionId, {
+          ...(await reconcileStatus(tx, sessionId, s.status)),
+          ...guest,
+        });
         return sessionDetail(tx, access.outlet.id, sessionId);
       });
       publishFloor(access.outlet.id, "bill", [sessionId]);

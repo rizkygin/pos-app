@@ -40,6 +40,7 @@ import {
   HttpError,
   parseTableCheckoutLink,
   prepareTableCheckout,
+  reopenCancelledTableBill,
   settleTableBill,
 } from "../lib/tables";
 import { TAB_KEY, linkKitchenTickets } from "../lib/kitchen";
@@ -791,14 +792,24 @@ export async function mutationRoutes(app: FastifyInstance) {
           })
           .where(eq(ordersTable.id, orderId));
 
-        return { status: 200 as const, amount };
+        // A table's bill whose guests are still seated goes back on the table
+        // as unpaid, so it can be paid again the right way. See lib/tables.ts.
+        const reopenedSessionId = await reopenCancelledTableBill(tx, access.outlet.id, orderId);
+
+        return { status: 200 as const, amount, reopenedSessionId };
       });
 
       if (result.status !== 200) {
         return reply.status(result.status).send({ success: false, error: result.error });
       }
-      publishFloor(access.outlet.id, "order-cancel");
-      return { success: true, alreadyCancelled: result.alreadyCancelled ?? false, amount: result.amount ?? 0 };
+      publishFloor(access.outlet.id, "order-cancel", [result.reopenedSessionId]);
+      return {
+        success: true,
+        alreadyCancelled: result.alreadyCancelled ?? false,
+        amount: result.amount ?? 0,
+        // The bill is back on its table, unpaid: say so, so the till can.
+        tableBillReopened: !!result.reopenedSessionId,
+      };
     } catch (error: any) {
       return reply
         .status(500)

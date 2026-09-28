@@ -167,6 +167,11 @@ export function CancelOrderButton({
                   &ldquo;Pembatalan Order Kasir&rdquo;. Pesanan aslinya tetap
                   tersimpan di riwayat!. Tindakan ini tidak bisa dibatalkan.
                 </p>
+                <p>
+                  Kalau ini bill meja dan tamunya masih duduk, itemnya kembali
+                  ke bill meja sebagai belum dibayar, jadi bisa dibayar ulang
+                  dari kasir.
+                </p>
                 {error && (
                   <p className="font-bold text-destructive">{error}</p>
                 )}

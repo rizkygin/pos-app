@@ -205,6 +205,11 @@ type TableLink = {
   /** cartSignature() of the cart as last saved to / loaded from the table. */
   synced: string;
   /**
+   * The tab's customer name (trimmed) as last saved to / loaded from the
+   * table's guest name. Absent on tabs held from before it was tracked.
+   */
+  guest?: string;
+  /**
    * Quantity of each line as saved on the table. For a user who may not void
    * (Kasir-only — see canVoid), this is a floor: saved items can be added
    * to, never taken back. The server enforces it; this only locks the buttons.
@@ -1240,6 +1245,7 @@ export const CashierClient = ({
           label,
           version: s.version,
           synced: cartSignature(cartFromTable),
+          guest: s.guestName ?? '',
           savedQty: Object.fromEntries(cartFromTable.map((i) => [i.lineId, i.quantity])),
           canVoid: data.canVoid === true,
         };
@@ -1252,6 +1258,12 @@ export const CashierClient = ({
         let next: HeldTab[];
         if (existing) {
           const dirty = cartSignature(existing.cart) !== existing.table!.synced;
+          // A name typed here and not yet saved stays; otherwise the table's.
+          const prevGuest = existing.table!.guest;
+          const nameEdited =
+            prevGuest === undefined
+              ? !!existing.customerName.trim()
+              : existing.customerName.trim() !== prevGuest;
           const keepLocal =
             dirty &&
             cartSignature(existing.cart) !== link.synced &&
@@ -1264,7 +1276,7 @@ export const CashierClient = ({
                 ...existing,
                 label: tabLabel,
                 cart: cartFromTable,
-                customerName: existing.customerName || s.guestName || '',
+                customerName: nameEdited ? existing.customerName : (s.guestName ?? ''),
                 table: link,
               };
           next = tabsRef.current.map((t) => (t.id === existing.id ? target : t));
@@ -1314,7 +1326,17 @@ export const CashierClient = ({
   const tableSavingRef = useRef(0);
 
   const saveTableBill = useCallback(
-    async (tabId: string, link: TableLink, items: CartItem[]) => {
+    async (tabId: string, link: TableLink, items: CartItem[], name?: string) => {
+      // The name goes only when it moved off what the table holds, so saving
+      // an untouched tab can't wipe a guest name the host typed on the floor.
+      const guestName =
+        name === undefined
+          ? undefined
+          : link.guest === undefined
+            ? name || undefined
+            : name !== link.guest
+              ? name
+              : undefined;
       tableSavingRef.current += 1;
       try {
         const res = await fetch(
@@ -1323,7 +1345,7 @@ export const CashierClient = ({
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include',
-            body: JSON.stringify({ version: link.version, lines: items }),
+            body: JSON.stringify({ version: link.version, lines: items, guestName }),
           },
         );
         const data = await res.json().catch(() => ({}));
@@ -1340,6 +1362,7 @@ export const CashierClient = ({
           ...link,
           version: s.version,
           synced: cartSignature(items),
+          guest: name ?? link.guest,
           // What is saved now becomes the floor a Kasir-only user can't go under.
           savedQty: Object.fromEntries(
             s.lines.filter((l) => l.billNo === link.billNo).map((l) => [l.lineId, l.quantity]),
@@ -1902,7 +1925,10 @@ export const CashierClient = ({
   // The table this tab is the bill of, if any, and whether the cart on screen
   // has drifted from what the table holds.
   const activeTable = tabs.find((t) => t.id === activeTabId)?.table ?? null;
-  const tableDirty = !!activeTable && cartSignature(cart) !== activeTable.synced;
+  const tableDirty =
+    !!activeTable &&
+    (cartSignature(cart) !== activeTable.synced ||
+      (activeTable.guest !== undefined && customerName.trim() !== activeTable.guest));
   // Render-time twin of savedFloor(), for locking the buttons it would refuse.
   // A copy rather than a closure over activeTable: the React compiler treats a
   // captured object as mutable and would give up memoizing this component.
@@ -2219,7 +2245,7 @@ export const CashierClient = ({
   const saveActiveTable = async () => {
     if (!activeTable || tableBusy) return;
     setTableBusy(true);
-    const saved = await saveTableBill(activeIdRef.current, activeTable, cart);
+    const saved = await saveTableBill(activeIdRef.current, activeTable, cart, customerName.trim());
     setTableBusy(false);
     if (saved) setTableNotice({ ok: true, text: `Bill Meja ${activeTable.label} tersimpan` });
   };
@@ -2235,7 +2261,7 @@ export const CashierClient = ({
     try {
       let lines: ServerBillLine[];
       if (tableDirty) {
-        const saved = await saveTableBill(activeIdRef.current, activeTable, cart);
+        const saved = await saveTableBill(activeIdRef.current, activeTable, cart, customerName.trim());
         if (!saved) return;
         lines = saved.lines;
       } else {
