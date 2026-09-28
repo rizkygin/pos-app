@@ -25,7 +25,7 @@ export type AddProductInput = {
   menu_group_id?: number | null;
 };
 
-type ActionResult = { success: boolean; message?: string };
+type ActionResult = { success: boolean; message?: string; id?: string };
 
 async function postJson(path: string, body: unknown): Promise<ActionResult> {
   try {

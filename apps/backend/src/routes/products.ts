@@ -350,7 +350,9 @@ export async function productRoutes(app: FastifyInstance) {
       // the outlet into a category it wasn't browsable under before.
       await recalcOutletFeatures(access.outlet.id);
 
-      return reply.send({ success: true, message: "Product added successfully." });
+      // id returned so the form can go straight on to the parts that need a
+      // saved row (recipe, variants, add-ons) without a trip back to the list.
+      return reply.send({ success: true, message: "Product added successfully.", id });
     } catch (error) {
       app.log.error(error, "Failed to add product");
       return reply.status(500).send({ success: false, message: "Failed to add product." });

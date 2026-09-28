@@ -4,21 +4,16 @@ import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import {
   Plus,
   ArrowLeft,
-  Coffee,
-  Pizza,
-  Cookie,
   Package,
   Layers,
   ChevronUp,
   ChevronDown,
   ChevronsUpDown,
-  Tag,
-  DollarSign,
   Loader2,
   Image as ImageIcon,
+  ImagePlus,
   Edit,
   Trash2,
-  User2,
   Handbag,
   Share2,
   X,
@@ -32,6 +27,12 @@ import {
   Ruler,
   Workflow,
   SlidersHorizontal,
+  Circle,
+  CircleCheck,
+  TrendingUp,
+  TrendingDown,
+  Lock,
+  EyeOff,
   type LucideIcon,
 } from 'lucide-react';
 import { driver, type DriveStep } from 'driver.js';
@@ -41,7 +42,6 @@ import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   addProductAction,
-  AddProductInput,
   uploadImage,
   deleteProductAction,
   updateProductAction,
@@ -114,6 +114,8 @@ const CATEGORIES = ORDER_FEATURES.map((feature) => ({
   label: feature.label,
   category: feature.category,
   icon: feature.icon,
+  iconBg: feature.iconBg,
+  iconColor: feature.iconColor,
   isAvailable: feature.isAvailable,
 })).sort((a, b) => Number(b.isAvailable) - Number(a.isAvailable));
 
@@ -125,6 +127,8 @@ const INGREDIENT_CATEGORY = {
   label: 'Bahan (Stok Dapur)',
   category: 'bahan',
   icon: Package,
+  iconBg: 'bg-zinc-100',
+  iconColor: 'text-zinc-600',
   isAvailable: true,
 };
 
@@ -140,6 +144,8 @@ const ADDON_CATEGORY = {
   label: 'Tambahan (Add-on)',
   category: 'tambahan',
   icon: Layers,
+  iconBg: 'bg-violet-100',
+  iconColor: 'text-violet-600',
   isAvailable: true,
 };
 
@@ -203,6 +209,296 @@ const categoryOptions = (() => {
   });
 })();
 
+// ── Add/edit form ──────────────────────────────────────────────────────────
+
+const EMPTY_FORM = {
+  product_name: '',
+  price: '',
+  price_mark_down: '',
+  buying_price: '',
+  description: '',
+  unit: 'pcs',
+  lowest_price: '',
+  highest_price: '',
+  barcode: '',
+};
+
+/**
+ * What picking each kind means, in the OWNER's words. ORDER_FEATURES carries
+ * the customer's copy ("Makanan lezat dari restoran terdekat"), which tells an
+ * owner nothing about what the choice changes in this form.
+ */
+const TYPE_COPY: Record<string, { short: string; hint: string; example: string }> = {
+  makanan: { short: 'Makanan', hint: 'Nasi, mie, kue — dijual per porsi.', example: 'Nasi Goreng Spesial' },
+  minuman: { short: 'Minuman', hint: 'Kopi, teh, jus, es.', example: 'Es Kopi Susu' },
+  jasa: {
+    short: 'Jasa',
+    hint: 'Servis & reparasi. Harganya rentang, dipastikan saat terima order.',
+    example: 'Servis AC',
+  },
+  mart: { short: 'Belanja', hint: 'Sembako, obat, kebutuhan rumah.', example: 'Beras Premium 5 kg' },
+  'bahan bangunan': {
+    short: 'Bahan Bangunan',
+    hint: 'Semen, cat, besi. Barang besar boleh diantar sendiri.',
+    example: 'Semen 50 kg',
+  },
+  bahan: {
+    short: 'Bahan Dapur',
+    hint: 'Beras, minyak, gas. Tidak dijual — dipakai lewat resep.',
+    example: 'Beras',
+  },
+  tambahan: {
+    short: 'Add-on',
+    hint: 'Extra keju, telur ceplok — menempel di produk lain.',
+    example: 'Extra Keju',
+  },
+};
+
+// One-tap units per kind. The field stays free text (max 10 chars); these are
+// only the answers each kind of shop gives most, so nobody types "porsi" fifty
+// times while entering a menu.
+const UNIT_SUGGESTIONS: Record<string, string[]> = {
+  makanan: ['porsi', 'pcs', 'bungkus', 'box'],
+  minuman: ['gelas', 'cup', 'botol', 'pcs'],
+  jasa: ['unit', 'jam', 'hari', 'kali'],
+  mart: ['pcs', 'pack', 'kg', 'liter', 'lusin'],
+  'bahan bangunan': ['sak', 'batang', 'meter', 'lembar', 'kg', 'dus'],
+  bahan: ['kg', 'gram', 'liter', 'ml', 'pcs', 'butir'],
+  tambahan: ['porsi', 'pcs', 'shot'],
+};
+const DEFAULT_UNIT_SUGGESTIONS = ['pcs', 'porsi', 'pack', 'kg', 'liter'];
+
+const DISCOUNT_PRESETS = [10, 20, 25, 50];
+
+// Border, background and ring colour live together per tone so no input ever
+// carries two competing values for the same property.
+const INPUT_TONES = {
+  default: 'border-input bg-transparent focus-visible:ring-blue-500',
+  amber:
+    'border-amber-200 bg-amber-50/30 focus-visible:ring-amber-500 dark:border-amber-900/60 dark:bg-amber-950/20',
+  emerald:
+    'border-emerald-300 bg-emerald-50/40 focus-visible:ring-emerald-500 dark:border-emerald-900/60 dark:bg-emerald-950/20',
+} as const;
+type InputTone = keyof typeof INPUT_TONES;
+
+// Width and text size are left to the caller for the same reason.
+const fieldClass = (extra: string, tone: InputTone = 'default') =>
+  `rounded-xl border shadow-sm transition-colors placeholder:text-muted-foreground/60 focus-visible:outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50 ${INPUT_TONES[tone]} ${extra}`;
+
+// The pieces below are module-level on purpose: declared inside
+// ProductsManager they would get a fresh identity every render and remount,
+// dropping focus from the input being typed in.
+
+function FormSection({
+  id,
+  step,
+  title,
+  description,
+  children,
+}: {
+  id?: string;
+  step: number;
+  title: string;
+  description?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <section
+      id={id}
+      className="scroll-mt-16 rounded-2xl border bg-background p-4 shadow-sm md:p-6"
+    >
+      <header className="mb-4 flex items-start gap-3">
+        <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-blue-600 text-xs font-bold text-white">
+          {step}
+        </span>
+        <div className="min-w-0">
+          <h3 className="text-base font-bold leading-7">{title}</h3>
+          {description && (
+            <p className="text-xs text-muted-foreground">{description}</p>
+          )}
+        </div>
+      </header>
+      <div className="space-y-5">{children}</div>
+    </section>
+  );
+}
+
+function FieldLabel({
+  htmlFor,
+  required,
+  optional,
+  className = '',
+  children,
+}: {
+  htmlFor?: string;
+  required?: boolean;
+  optional?: boolean;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  const cls = `mb-1.5 flex items-center gap-1 text-sm font-semibold ${className}`;
+  const inner = (
+    <>
+      {children}
+      {required && <span className="text-rose-500">*</span>}
+      {optional && (
+        <span className="text-xs font-normal text-muted-foreground">(opsional)</span>
+      )}
+    </>
+  );
+  // A chip group has no single control to point at, so it gets a plain
+  // caption rather than a <label> that labels nothing.
+  return htmlFor ? (
+    <label htmlFor={htmlFor} className={cls}>
+      {inner}
+    </label>
+  ) : (
+    <p className={cls}>{inner}</p>
+  );
+}
+
+function Chip({
+  active,
+  disabled,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      disabled={disabled}
+      onClick={onClick}
+      className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+        active
+          ? 'border-blue-600 bg-blue-600 text-white'
+          : 'border-input bg-background text-muted-foreground hover:border-blue-300 hover:text-foreground'
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+const TOGGLE_TONES = {
+  teal: { on: 'border-teal-500 bg-teal-50 dark:bg-teal-950/30', track: 'bg-teal-600' },
+  blue: { on: 'border-blue-500 bg-blue-50 dark:bg-blue-950/30', track: 'bg-blue-600' },
+} as const;
+
+/** A question answered by one big switch, with the consequence spelled out. */
+function ToggleCard({
+  question,
+  checked,
+  onToggle,
+  onTitle,
+  offTitle,
+  onHint,
+  offHint,
+  tone = 'teal',
+  warnWhenOff = false,
+}: {
+  question: string;
+  checked: boolean;
+  onToggle: () => void;
+  onTitle: string;
+  offTitle: string;
+  onHint: string;
+  offHint: string;
+  tone?: keyof typeof TOGGLE_TONES;
+  warnWhenOff?: boolean;
+}) {
+  const t = TOGGLE_TONES[tone];
+  return (
+    <div>
+      <p className="mb-1.5 text-sm font-semibold">{question}</p>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={onToggle}
+        className={`flex w-full items-center justify-between gap-3 rounded-xl border-2 px-4 py-3 text-left transition-colors ${
+          checked
+            ? t.on
+            : warnWhenOff
+              ? 'border-amber-500 bg-amber-50 dark:bg-amber-950/30'
+              : 'border-border bg-muted/30'
+        }`}
+      >
+        <span>
+          <span className="block text-sm font-semibold">{checked ? onTitle : offTitle}</span>
+          <span className="block text-xs text-muted-foreground">
+            {checked ? onHint : offHint}
+          </span>
+        </span>
+        <span
+          className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+            checked ? t.track : 'bg-zinc-300 dark:bg-zinc-700'
+          }`}
+        >
+          <span
+            className={`absolute top-0.5 size-5 rounded-full bg-white shadow transition-all ${
+              checked ? 'left-5.5' : 'left-0.5'
+            }`}
+          />
+        </span>
+      </button>
+    </div>
+  );
+}
+
+/** Rupiah input: shows thousand separators, stores raw digits. */
+function MoneyInput({
+  id,
+  name,
+  value,
+  onChange,
+  placeholder,
+  required,
+  unit,
+  tone = 'default',
+}: {
+  id: string;
+  name: string;
+  value: string;
+  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  placeholder?: string;
+  required?: boolean;
+  unit?: string;
+  tone?: InputTone;
+}) {
+  return (
+    <div className="relative">
+      <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-sm font-medium text-muted-foreground">
+        Rp
+      </span>
+      <input
+        id={id}
+        name={name}
+        required={required}
+        inputMode="numeric"
+        autoComplete="off"
+        value={formatNumberInput(value)}
+        onChange={onChange}
+        placeholder={placeholder}
+        className={fieldClass(
+          `h-11 w-full pl-11 text-sm tabular-nums ${unit ? 'pr-20' : 'pr-3.5'}`,
+          tone,
+        )}
+      />
+      {unit && (
+        <span className="pointer-events-none absolute right-3.5 top-1/2 max-w-16 -translate-y-1/2 truncate text-xs text-muted-foreground">
+          / {unit}
+        </span>
+      )}
+    </div>
+  );
+}
+
 export const ProductsManager = ({
   outletId,
   initialProducts,
@@ -222,7 +518,11 @@ export const ProductsManager = ({
   // a plan whose Tambahan shelf is hidden would only ever build an empty
   // group; variants are whole products too, and land in the same etalase.
   const productOptionsAllowed = bahanAddonsAllowed;
-  const [view, setView] = useState<'list' | 'category' | 'form'>('list');
+  // No separate category screen any more: the kind is the first section of the
+  // form. An outlet with nothing yet lands straight in it.
+  const [view, setView] = useState<'list' | 'form'>(() =>
+    initialProducts.length > 0 ? 'list' : 'form',
+  );
   const [selectedCategory, setSelectedCategory] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [hasDiscount, setHasDiscount] = useState(false);
@@ -234,6 +534,30 @@ export const ProductsManager = ({
   // Can a courier carry it? Default yes — only bulky goods (besi, keramik,
   // kulkas) get switched off, and that sends the order down the no-courier flow.
   const [courierDeliverable, setCourierDeliverable] = useState(true);
+  // Form feedback lives on the page, not in alert(): a blocking dialog on a
+  // phone hides the very field the message is about.
+  const [formError, setFormError] = useState<string | null>(null);
+  const [imageError, setImageError] = useState<string | null>(null);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
+  // Which row's Edit is loading — opening it checks the image first, and a
+  // button that does nothing for a second reads as broken.
+  const [openingId, setOpeningId] = useState<string | null>(null);
+  // "Simpan & Tambah Lagi" run count, so a long menu entry session shows
+  // progress instead of the same blank form over and over.
+  const [savedCount, setSavedCount] = useState(0);
+  const [notice, setNotice] = useState<{ text: string; at: number } | null>(null);
+  const showNotice = (text: string) => setNotice({ text, at: Date.now() });
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), 5000);
+    return () => clearTimeout(t);
+  }, [notice]);
+  const pageTopRef = useRef<HTMLDivElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  // Which button asked for the submit; see submitWithIntent.
+  const intentRef = useRef<'new' | 'configure' | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   // Inventory list filters
@@ -812,17 +1136,7 @@ export const ProductsManager = ({
   );
 
   // Form State
-  const [formData, setFormData] = useState({
-    product_name: '',
-    price: '',
-    price_mark_down: '',
-    buying_price: '',
-    description: '',
-    unit: 'pcs',
-    lowest_price: '',
-    highest_price: '',
-    barcode: '',
-  });
+  const [formData, setFormData] = useState(EMPTY_FORM);
 
   // Service products (category "jasa") are priced as a negotiable range instead
   // of a fixed selling price + discount.
@@ -879,14 +1193,153 @@ export const ProductsManager = ({
   // a sack of flour costs the owner a step and buys nothing.
   const asksImage = !isInternalCategory;
 
-  const handleCategorySelect = (category: string) => {
+  const typeCopy = TYPE_COPY[selectedCategory];
+  const unitLabel = formData.unit.trim() || 'satuan';
+  const unitSuggestions = UNIT_SUGGESTIONS[selectedCategory] ?? DEFAULT_UNIT_SUGGESTIONS;
+
+  // The placeholder picture an image-less product is stored with. It is not a
+  // photo the owner chose, so the form offers an upload rather than a preview.
+  const hasRealImage =
+    !!imageUrl && imageUrl !== '/avatar.png' && imageUrl !== '/products/avatar.png';
+
+  // ── Money feedback ────────────────────────────────────────────────────────
+  const sellNum = Number(formData.price) || 0;
+  const buyNum = Number(formData.buying_price) || 0;
+  const discNum = hasDiscount ? Number(formData.price_mark_down) || 0 : 0;
+  const discountInvalid = hasDiscount && discNum > 0 && discNum >= sellNum;
+  const discountPct =
+    hasDiscount && sellNum > 0 && discNum > 0 && !discountInvalid
+      ? Math.round((1 - discNum / sellNum) * 100)
+      : null;
+  // What the customer actually pays, which is what the margin is made on.
+  const effectiveSell = discountPct !== null ? discNum : sellNum;
+  const showMargin =
+    asksSellingPrice && !usesPriceRange && effectiveSell > 0 && buyNum > 0;
+  const profit = effectiveSell - buyNum;
+  const marginPct = effectiveSell > 0 ? Math.round((profit / effectiveSell) * 100) : 0;
+  const lowNum = Number(formData.lowest_price) || 0;
+  const highNum = Number(formData.highest_price) || 0;
+  const rangeInvalid = usesPriceRange && lowNum > 0 && highNum > 0 && highNum < lowNum;
+
+  // ── Recipe / variants / add-ons ───────────────────────────────────────────
+  // All three hang off a saved row, so a new product shows them locked with a
+  // way through, instead of not at all — before, an owner only found them by
+  // saving, hunting the product down in the list and opening it again.
+  const showsRecipeEditor = recipeAllowed && recipeIngredientOptions.length > 0;
+  // Not for an internal kind (a topping has no sizes — the dish does) nor for
+  // a product that is already somebody's variant: one level deep.
+  const showsVariantEditor =
+    productOptionsAllowed && !isInternalCategory && !editingProduct?.variant_of;
+  const showsAddonEditor = productOptionsAllowed;
+  const extrasNames = [
+    showsRecipeEditor && 'Resep',
+    showsVariantEditor && 'Varian',
+    showsAddonEditor && 'Add-on',
+  ].filter(Boolean) as string[];
+  const showsExtras = extrasNames.length > 0;
+  const extrasTitle = extrasNames.join(' · ');
+
+  // ── Unsaved-changes guard ─────────────────────────────────────────────────
+  // A new product counts as touched once anything is typed or uploaded. An
+  // edit compares against how the product looked when it was opened.
+  const makeSnapshot = (d: {
+    formData: typeof EMPTY_FORM;
+    category: string;
+    image: string;
+    isForSale: boolean;
+    trackStock: boolean;
+    courierDeliverable: boolean;
+    menuGroupId: number | null;
+    features: string[];
+    hasDiscount: boolean;
+  }) =>
+    JSON.stringify([
+      d.formData,
+      d.category,
+      d.image,
+      d.isForSale,
+      d.trackStock,
+      d.courierDeliverable,
+      d.menuGroupId,
+      d.features,
+      d.hasDiscount,
+    ]);
+  const formSnapshot = makeSnapshot({
+    formData,
+    category: selectedCategory,
+    image: imageUrl,
+    isForSale,
+    trackStock,
+    courierDeliverable,
+    menuGroupId: selectedMenuGroupId,
+    features: selectedFeatures,
+    hasDiscount,
+  });
+  // Set where an existing product is opened (handleEdit) or a new one first
+  // becomes one ("Simpan & atur sekarang"); null for a new product.
+  const [baseline, setBaseline] = useState<string | null>(null);
+  const hasTypedAnything =
+    Object.entries(formData).some(([k, v]) => k !== 'unit' && v.trim() !== '') ||
+    hasRealImage;
+  const isDirty =
+    view === 'form' &&
+    (editingProductId
+      ? baseline !== null && baseline !== formSnapshot
+      : hasTypedAnything);
+
+  useEffect(() => {
+    if (!isDirty) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [isDirty]);
+
+  // Switching views keeps the scroll position of the shell, which opened the
+  // form halfway down whenever Edit was clicked on a lower row.
+  useEffect(() => {
+    pageTopRef.current?.scrollIntoView({ block: 'start' });
+  }, [view]);
+
+  const resetDraft = () => {
+    setFormData(EMPTY_FORM);
+    setImageUrl('');
+    setImageError(null);
+    setFormError(null);
+    setSelectedFeatures([]);
+    setHasDiscount(false);
+    setEditingProductId(null);
+    setGroupManagerOpen(false);
+    setBaseline(null);
+  };
+
+  /** Blank form. `category` preselects the kind (the Bahan/Tambahan shelves). */
+  const openNewForm = (category = '') => {
+    resetDraft();
     setSelectedCategory(category);
     setSelectedMenuGroupId(null);
     setIsForSale(false);
     // Ingredients exist to be counted: default them to tracked stock.
-    setTrackStock(category === 'bahan');
+    setTrackStock(category === INGREDIENT_CATEGORY.category);
     setCourierDeliverable(true);
+    setSavedCount(0);
     setView('form');
+  };
+
+  const closeForm = () => {
+    resetDraft();
+    setView('list');
+  };
+
+  const handleBack = () => {
+    if (isDirty && !window.confirm('Perubahan belum disimpan. Tetap keluar?')) return;
+    closeForm();
+  };
+
+  const chooseCategory = (category: string) => {
+    setSelectedCategory(category);
+    // A new product takes each kind's own starting point. An existing one is
+    // only being re-filed, so its settings stay as the owner left them.
+    if (!editingProductId) setTrackStock(category === INGREDIENT_CATEGORY.category);
   };
 
   const handleInputChange = (
@@ -902,15 +1355,43 @@ export const ProductsManager = ({
     setFormData((prev) => ({ ...prev, [name]: parseNumberInput(value) }));
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSubmitting(true);
+  /**
+   * Submit on behalf of a secondary button. Those are type="button" so that
+   * the form's only submit button is the plain Simpan — pressing Enter in a
+   * field must never mean "save and open a blank form" or "save and jump to
+   * the recipe". requestSubmit() fires the submit event synchronously, so the
+   * intent is read before it is cleared again.
+   */
+  const submitWithIntent = (intent: 'new' | 'configure') => {
+    intentRef.current = intent;
+    formRef.current?.requestSubmit();
+    intentRef.current = null;
+  };
 
-    const data: AddProductInput = {
-      ...formData,
-      category: selectedCategory,
-      outletId: outletId, // Correctly using outletId
-    } as any;
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const intent = intentRef.current ?? 'save';
+    if (isSubmitting || uploadingImage) return;
+    setFormError(null);
+
+    if (!selectedCategory) {
+      setFormError('Pilih jenis produk dulu.');
+      return;
+    }
+    if (asksSellingPrice && !usesPriceRange && discountInvalid) {
+      setFormError('Harga diskon harus lebih kecil dari harga jual.');
+      return;
+    }
+    if (rangeInvalid) {
+      setFormError(
+        isMaterialsProduct
+          ? '"Harga + diantar" tidak boleh lebih kecil dari harga barang.'
+          : 'Harga tertinggi tidak boleh lebih kecil dari harga terendah.',
+      );
+      return;
+    }
+
+    setIsSubmitting(true);
 
     // Categories that don't ask are always deliverable. Forced here rather than
     // trusting the state: an owner can set this on a bahan-bangunan product,
@@ -944,6 +1425,9 @@ export const ProductsManager = ({
     const sellingPriceToSave = asksSellingPrice
       ? { price: formData.price, price_mark_down: formData.price_mark_down }
       : { price: '0', price_mark_down: '0' };
+
+    const savedName = formData.product_name.trim();
+    const wasEditing = !!editingProductId;
 
     let result;
     if (editingProductId) {
@@ -981,28 +1465,50 @@ export const ProductsManager = ({
 
     setIsSubmitting(false);
 
-    if (result.success) {
-      // Reset and go back to list
-      setFormData({
-        product_name: '',
-        price: '',
-        price_mark_down: '',
-        buying_price: '',
-        description: '',
-        unit: 'pcs',
-        lowest_price: '',
-        highest_price: '',
-        barcode: '',
-      });
-      setImageUrl('');
-      setEditingProductId(null);
-      setSelectedFeatures([]);
-      setView('list');
-      // Re-run the server component so the list reflects the new/edited product.
-      router.refresh();
-    } else {
-      alert(result.message);
+    if (!result.success) {
+      setFormError(result.message ?? 'Gagal menyimpan produk. Coba lagi.');
+      return;
     }
+
+    // Re-run the server component so the list reflects the new/edited product.
+    router.refresh();
+
+    // Stay on the product, now saved, and unlock what needs a saved row. An
+    // older backend that does not return the id falls through to a plain save.
+    if (intent === 'configure' && !wasEditing && result.id) {
+      setEditingProductId(result.id);
+      setBaseline(formSnapshot);
+      showNotice(`"${savedName}" tersimpan. Sekarang atur ${extrasTitle.toLowerCase()} di bawah.`);
+      requestAnimationFrame(() =>
+        document
+          .getElementById('pf-extras')
+          ?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+      );
+      return;
+    }
+
+    // Bulk entry: the next product is usually the same kind, in the same
+    // menu section, sold the same way — so only what identifies THIS product
+    // is cleared.
+    if (intent === 'new' && !wasEditing) {
+      setSavedCount((c) => c + 1);
+      setFormData((prev) => ({ ...EMPTY_FORM, unit: prev.unit }));
+      setImageUrl('');
+      setImageError(null);
+      setHasDiscount(false);
+      setBaseline(null);
+      showNotice(`"${savedName}" tersimpan. Lanjut isi produk berikutnya.`);
+      requestAnimationFrame(() => {
+        pageTopRef.current?.scrollIntoView({ block: 'start' });
+        nameInputRef.current?.focus({ preventScroll: true });
+      });
+      return;
+    }
+
+    closeForm();
+    showNotice(
+      wasEditing ? `Perubahan "${savedName}" tersimpan.` : `"${savedName}" ditambahkan.`,
+    );
   };
 
   const handleToggleDiscount = (checked: boolean) => {
@@ -1010,39 +1516,57 @@ export const ProductsManager = ({
     if (!checked) setFormData((prev) => ({ ...prev, price_mark_down: '' }));
   };
 
+  // Rounded to Rp100: nobody prices a nasi goreng at Rp19.975.
+  const applyDiscountPct = (pct: number) => {
+    if (!sellNum) return;
+    const next = Math.round((sellNum * (100 - pct)) / 100 / 100) * 100;
+    setFormData((prev) => ({ ...prev, price_mark_down: String(next) }));
+  };
+
   const handleEdit = async (product: Product) => {
+    setOpeningId(product.id);
+    let image = '';
     if (product.image === 'avatar.png') {
-      setImageUrl('/avatar.png');
-      product.image = '/avatar.png';
+      image = '/avatar.png';
     } else {
       const result = await checkImageUrlAccessable(product.image);
-      if (!result?.success) {
-        setImageUrl('');
-      } else {
-        setImageUrl(product.image);
-      }
+      image = result?.success ? product.image : '';
     }
-    setHasDiscount(
-      !!product.price_mark_down && product.price_mark_down !== '0',
-    );
-    setSelectedFeatures(product.features ?? []);
-    setIsForSale(product.is_for_sale ?? true);
-    setTrackStock(product.track_stock ?? true);
-    setCourierDeliverable(product.courier_deliverable ?? true);
+    setOpeningId(null);
+    const opened = {
+      formData: {
+        product_name: product.product_name,
+        price: product.price,
+        price_mark_down: product.price_mark_down,
+        buying_price: product.buying_price,
+        description: product.description || '',
+        unit: product.unit,
+        lowest_price: product.lowest_price ?? '',
+        highest_price: product.highest_price ?? '',
+        barcode: product.barcode ?? '',
+      },
+      category: product.category,
+      image,
+      isForSale: product.is_for_sale ?? true,
+      trackStock: product.track_stock ?? true,
+      courierDeliverable: product.courier_deliverable ?? true,
+      menuGroupId: product.menu_group_id ?? null,
+      features: product.features ?? [],
+      hasDiscount: !!product.price_mark_down && product.price_mark_down !== '0',
+    };
+    resetDraft();
+    setImageUrl(opened.image);
+    setHasDiscount(opened.hasDiscount);
+    setSelectedFeatures(opened.features);
+    setIsForSale(opened.isForSale);
+    setTrackStock(opened.trackStock);
+    setCourierDeliverable(opened.courierDeliverable);
     setEditingProductId(product.id);
-    setSelectedCategory(product.category);
-    setSelectedMenuGroupId(product.menu_group_id ?? null);
-    setFormData({
-      product_name: product.product_name,
-      price: product.price,
-      price_mark_down: product.price_mark_down,
-      buying_price: product.buying_price,
-      description: product.description || '',
-      unit: product.unit,
-      lowest_price: product.lowest_price ?? '',
-      highest_price: product.highest_price ?? '',
-      barcode: product.barcode ?? '',
-    });
+    setSelectedCategory(opened.category);
+    setSelectedMenuGroupId(opened.menuGroupId);
+    setFormData(opened.formData);
+    setBaseline(makeSnapshot(opened));
+    setSavedCount(0);
     setView('form');
   };
 
@@ -1059,77 +1583,999 @@ export const ProductsManager = ({
     router.refresh();
   };
 
-  //handle Image Upload
+  // ── Photo ─────────────────────────────────────────────────────────────────
 
   const handleRemoveImage = async () => {
-    if (
-      imageUrl === '/products/avatar.png' ||
-      imageUrl === '/avatar.png' ||
-      imageUrl === ''
-    ) {
+    setImageError(null);
+    if (!hasRealImage) {
       setImageUrl('');
-      return;
-    }
-    if (editingProductId) {
-      const result = await removeImage(imageUrl);
-      if (result.success) {
-        const removeResult = await removeOnDatabase(imageUrl);
-        if (removeResult.success) {
-          setImageUrl('');
-          return;
-        }
-        alert(removeResult.message);
-      }
-      alert(result.message);
       return;
     }
     const result = await removeImage(imageUrl);
     if (!result.success) {
-      alert(result.message);
+      setImageError(result.message ?? 'Gagal menghapus foto.');
       return;
+    }
+    // A saved product still points at the file just deleted — clear that too.
+    if (editingProductId) {
+      const removeResult = await removeOnDatabase(imageUrl);
+      if (!removeResult.success) {
+        setImageError(removeResult.message ?? 'Gagal menghapus foto.');
+        return;
+      }
     }
     setImageUrl('');
   };
 
-  const ImageInputRef = useRef<HTMLInputElement>(null);
-
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (file.size >= 5000000) {
-        alert('Image size must be less than 5MB.');
-        setImageUrl('');
-        return;
-      }
-      const formData = new FormData();
-      formData.append('image', file);
-
-      const result = await uploadImage(formData);
-      if (result.success && result.imageUrl) {
-        setImageUrl(result.imageUrl);
-      }
-      if (!result.success) {
-        alert(result.message);
-      }
+  const uploadImageFile = async (file: File) => {
+    setImageError(null);
+    if (!file.type.startsWith('image/')) {
+      setImageError('File harus berupa gambar (JPG, PNG atau WEBP).');
+      return;
+    }
+    if (file.size >= 5000000) {
+      setImageError('Ukuran foto maksimal 5 MB.');
+      return;
+    }
+    const body = new FormData();
+    body.append('image', file);
+    setUploadingImage(true);
+    try {
+      const result = await uploadImage(body);
+      if (result.success && result.imageUrl) setImageUrl(result.imageUrl);
+      else setImageError(result.message ?? 'Gagal mengunggah foto.');
+    } finally {
+      setUploadingImage(false);
     }
   };
 
-  useEffect(() => {
-    if (initialProducts.length > 0) {
-      setView('list');
-    } else {
-      setView('category');
-    }
-  }, []);
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    // Cleared so picking the same file again after an error still fires.
+    e.target.value = '';
+    if (file) uploadImageFile(file);
+  };
 
+  // ── Form rendering ────────────────────────────────────────────────────────
+  // Plain render functions, not components, for the same reason as
+  // renderMenuGroupManager: an inline component remounts its inputs.
+
+  const busy = isSubmitting || uploadingImage;
+
+  // Kinds on offer. Bahan/Tambahan only on plans with the stock shelves.
+  const typeOptions = categoryOptions.filter(
+    (c) =>
+      bahanAddonsAllowed ||
+      !INTERNAL_CATEGORIES.some((i) => i.category === c.category),
+  );
+  const isInternalOption = (category: string) =>
+    INTERNAL_CATEGORIES.some((i) => i.category === category);
+
+  const renderNotice = () =>
+    notice && (
+      <div
+        role="status"
+        className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300"
+      >
+        <CircleCheck className="h-4 w-4 shrink-0" />
+        {notice.text}
+      </div>
+    );
+
+  const renderTypeSection = () => {
+    // Nothing picked yet: the whole choice, laid out big, with what each kind
+    // means. Every field below depends on it, so nothing else shows until then.
+    if (!selectedCategory) {
+      const tile = (c: (typeof typeOptions)[number]) => (
+        <button
+          key={c.category}
+          type="button"
+          onClick={() => chooseCategory(c.category)}
+          className="group flex flex-col items-start gap-2 rounded-2xl border-2 bg-background p-3 text-left transition-all hover:-translate-y-0.5 hover:border-blue-500 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 md:p-4"
+        >
+          <span className={`rounded-xl p-2 ${c.iconBg} ${c.iconColor} dark:bg-white/10`}>
+            <c.icon className="h-5 w-5 md:h-6 md:w-6" />
+          </span>
+          <span className="text-sm font-bold group-hover:text-blue-600 md:text-base">
+            {TYPE_COPY[c.category]?.short ?? c.label}
+          </span>
+          <span className="text-[11px] leading-snug text-muted-foreground md:text-xs">
+            {TYPE_COPY[c.category]?.hint}
+          </span>
+        </button>
+      );
+      const sellable = typeOptions.filter((c) => !isInternalOption(c.category));
+      const internal = typeOptions.filter((c) => isInternalOption(c.category));
+      return (
+        <FormSection
+          step={1}
+          title="Jenis produk"
+          description="Pilih dulu — isian di bawahnya menyesuaikan jenisnya."
+        >
+          <div className="space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Dijual ke pelanggan
+            </p>
+            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+              {sellable.map(tile)}
+            </div>
+          </div>
+          {internal.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Untuk dapur &amp; kasir
+              </p>
+              <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+                {internal.map(tile)}
+              </div>
+            </div>
+          )}
+        </FormSection>
+      );
+    }
+
+    return (
+      <FormSection step={1} title="Jenis produk" description={typeCopy?.hint}>
+        <div className="flex flex-wrap gap-2">
+          {typeOptions.map((c) => (
+            <Chip
+              key={c.category}
+              active={c.category === selectedCategory}
+              onClick={() => chooseCategory(c.category)}
+            >
+              <c.icon className="h-3.5 w-3.5" />
+              {TYPE_COPY[c.category]?.short ?? c.label}
+            </Chip>
+          ))}
+          {/* Legacy/renamed category no longer offered — keep it on screen so
+              an edit doesn't silently move the product. */}
+          {!typeOptions.some((c) => c.category === selectedCategory) && (
+            <Chip active onClick={() => {}}>
+              {selectedCategory}
+            </Chip>
+          )}
+        </div>
+      </FormSection>
+    );
+  };
+
+  const renderImageTile = () => (
+    <div className="w-24 shrink-0 sm:w-32">
+      {hasRealImage ? (
+        <div className="relative aspect-square overflow-hidden rounded-2xl border">
+          <Image
+            src={resolveProductImage(imageUrl)}
+            unoptimized={isBackendImage(imageUrl)}
+            fill
+            sizes="128px"
+            className="object-cover"
+            alt="Foto produk"
+          />
+          <button
+            type="button"
+            onClick={handleRemoveImage}
+            aria-label="Hapus foto"
+            title="Hapus foto"
+            className="absolute right-1.5 top-1.5 rounded-full bg-black/60 p-1 text-white transition-colors hover:bg-rose-600"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ) : (
+        <label
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragActive(true);
+          }}
+          onDragLeave={() => setDragActive(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragActive(false);
+            const file = e.dataTransfer.files?.[0];
+            if (file && !uploadingImage) uploadImageFile(file);
+          }}
+          className={`flex aspect-square cursor-pointer flex-col items-center justify-center gap-1 rounded-2xl border-2 border-dashed p-2 text-center transition-colors ${
+            dragActive
+              ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/40'
+              : 'border-blue-200 bg-blue-50/40 hover:bg-blue-50 dark:border-blue-900 dark:bg-blue-950/20 dark:hover:bg-blue-950/40'
+          } ${uploadingImage ? 'pointer-events-none' : ''}`}
+        >
+          {uploadingImage ? (
+            <Loader2 className="h-6 w-6 animate-spin text-blue-600" />
+          ) : (
+            <ImagePlus className="h-6 w-6 text-blue-600" />
+          )}
+          <span className="text-[11px] font-semibold text-blue-700 dark:text-blue-400">
+            {uploadingImage ? 'Mengunggah…' : 'Tambah foto'}
+          </span>
+          <span className="text-[10px] text-muted-foreground">maks. 5 MB</span>
+          <input
+            type="file"
+            accept="image/*"
+            className="sr-only"
+            disabled={uploadingImage}
+            onChange={handleImageUpload}
+          />
+        </label>
+      )}
+    </div>
+  );
+
+  const renderDetailSections = () => {
+    // Numbered in render order, so a hidden section never leaves a gap.
+    let step = 1;
+    const nextStep = () => ++step;
+    return (
+      <>
+        {/* ── Info ── */}
+        <FormSection step={nextStep()} title="Info produk">
+          <div className="flex items-start gap-4">
+            {asksImage && renderImageTile()}
+            <div className="min-w-0 flex-1">
+              <FieldLabel htmlFor="pf-name" required>
+                Nama produk
+              </FieldLabel>
+              <input
+                ref={nameInputRef}
+                id="pf-name"
+                required
+                name="product_name"
+                value={formData.product_name}
+                onChange={handleInputChange}
+                autoComplete="off"
+                className={fieldClass('h-11 w-full px-3.5 text-sm')}
+                placeholder={typeCopy ? `mis. ${typeCopy.example}` : 'Nama produk'}
+              />
+              {asksImage && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Foto boleh diseret ke kotak di samping. JPG, PNG atau WEBP.
+                </p>
+              )}
+            </div>
+          </div>
+          {imageError && (
+            <p className="-mt-2 text-xs font-medium text-rose-600">{imageError}</p>
+          )}
+          <div>
+            <FieldLabel htmlFor="pf-desc" optional>
+              Deskripsi
+            </FieldLabel>
+            <textarea
+              id="pf-desc"
+              name="description"
+              value={formData.description}
+              onChange={handleInputChange}
+              rows={3}
+              className={fieldClass('min-h-24 w-full resize-none px-3.5 py-2.5 text-sm')}
+              placeholder={
+                isInternalCategory
+                  ? 'Catatan untuk dapur, mis. merek atau ukuran kemasan.'
+                  : 'Isi, rasa, ukuran — yang perlu pelanggan tahu.'
+              }
+            />
+          </div>
+        </FormSection>
+
+        {/* ── Penjualan ──
+            ABOVE the prices deliberately: the two toggles together decide
+            whether this product is priced with one number or a band (see
+            isMaterialsProduct). Below the prices, flipping one would reshape a
+            section the owner had already filled in and scrolled past. */}
+        <FormSection
+          step={nextStep()}
+          title="Penjualan"
+          description={
+            isInternalCategory
+              ? 'Jenis ini tidak pernah tampil di menu pelanggan.'
+              : 'Tampil atau tidak di menu pelanggan, dan di bagian mana.'
+          }
+        >
+          <ToggleCard
+            question="Jual ke pelanggan ?"
+            checked={isForSale}
+            onToggle={() => setIsForSale((v) => !v)}
+            onTitle="Dijual ke pelanggan"
+            offTitle="Hanya inventaris"
+            onHint="Produk tampil di menu pelanggan."
+            offHint="Disembunyikan dari menu pelanggan; hanya untuk stok & faktur."
+          />
+          {isForSale && isInternalCategory && (
+            <p className="-mt-3 text-xs text-amber-700 dark:text-amber-500">
+              Kategori ini internal, jadi produknya tetap tidak muncul di menu
+              pelanggan. Sakelar ini cuma membukanya untuk faktur dan laporan.
+            </p>
+          )}
+
+          {/* Asked only for mart & bahan bangunan — see asksCourierQuestion. */}
+          {isForSale && asksCourierQuestion && (
+            <ToggleCard
+              question="Apakah produk ini bisa diantar kurir?"
+              checked={courierDeliverable}
+              onToggle={() => setCourierDeliverable((v) => !v)}
+              onTitle="Bisa diantar kurir"
+              offTitle="Tidak bisa diantar kurir"
+              onHint="Cukup ringan buat dibawa kurir (sembako, obat, cat, paku)."
+              offHint="Barang berat/besar (besi, keramik, wastafel, kulkas) — pesanan diantar sendiri oleh outlet, tanpa kurir."
+              tone="blue"
+              warnWhenOff
+            />
+          )}
+
+          {/* Grup Menu — not the same thing as the kind above: that is the
+              fixed platform list driving marketplace browse, this is purely
+              how THIS outlet's public menu is laid out. Meaningless for the
+              internal kinds, which never reach that menu. */}
+          {!isInternalCategory && (
+            <div>
+              <div className="flex items-center justify-between gap-2">
+                <FieldLabel optional>Grup menu</FieldLabel>
+                <button
+                  type="button"
+                  onClick={() => setGroupManagerOpen((v) => !v)}
+                  className="mb-1.5 text-xs font-bold text-blue-600 hover:text-blue-700"
+                >
+                  {groupManagerOpen ? 'Tutup' : 'Kelola grup'}
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                <Chip
+                  active={selectedMenuGroupId === null}
+                  onClick={() => setSelectedMenuGroupId(null)}
+                >
+                  Tanpa grup
+                </Chip>
+                {menuGroups.map((g) => (
+                  <Chip
+                    key={g.id}
+                    active={selectedMenuGroupId === g.id}
+                    onClick={() => setSelectedMenuGroupId(g.id)}
+                  >
+                    {g.name}
+                  </Chip>
+                ))}
+              </div>
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                Judul bagian di halaman menu pelanggan, mis. &quot;Nasi&quot; atau
+                &quot;Minuman Dingin&quot;. Tanpa grup = ikut kategorinya.
+              </p>
+              {groupManagerOpen && <div className="mt-2">{renderMenuGroupManager()}</div>}
+            </div>
+          )}
+
+          {isForSale && !isInternalCategory && (
+            <div>
+              <FieldLabel optional>Fitur produk</FieldLabel>
+              <div className="flex flex-wrap gap-1.5">
+                {/* Coming-soon services are left out: a greyed chip nobody
+                    can press is only noise. One already on the product stays
+                    so it can still be removed. */}
+                {CATEGORIES.filter(
+                  (f) => f.isAvailable || selectedFeatures.includes(f.id),
+                ).map((f) => (
+                  <Chip
+                    key={f.id}
+                    active={selectedFeatures.includes(f.id)}
+                    onClick={() =>
+                      setSelectedFeatures((prev) =>
+                        prev.includes(f.id)
+                          ? prev.filter((x) => x !== f.id)
+                          : [...prev, f.id],
+                      )
+                    }
+                  >
+                    {f.label}
+                  </Chip>
+                ))}
+              </div>
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                Membantu pelanggan menemukan produk ini saat menjelajah layanan.
+              </p>
+            </div>
+          )}
+        </FormSection>
+
+        {/* ── Harga ── */}
+        <FormSection
+          step={nextStep()}
+          title="Harga"
+          description={
+            asksSellingPrice
+              ? undefined
+              : 'Bahan tidak dijual — cukup harga belinya, untuk menghitung modal resep.'
+          }
+        >
+          {/* Satuan first: every price below reads "per <satuan>". */}
+          <div>
+            <FieldLabel htmlFor="pf-unit">Satuan</FieldLabel>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {unitSuggestions.map((u) => (
+                <Chip
+                  key={u}
+                  active={formData.unit === u}
+                  onClick={() => setFormData((prev) => ({ ...prev, unit: u }))}
+                >
+                  {u}
+                </Chip>
+              ))}
+              <input
+                id="pf-unit"
+                name="unit"
+                value={formData.unit}
+                onChange={handleInputChange}
+                maxLength={10}
+                list="unit-suggestions"
+                autoComplete="off"
+                className={fieldClass('h-8 w-28 px-3 text-xs')}
+                placeholder="lainnya…"
+              />
+              {/* Free text — the list is just autocomplete suggestions. */}
+              <datalist id="unit-suggestions">
+                <option value="pcs" />
+                <option value="porsi" />
+                <option value="ml" />
+                <option value="liter" />
+                <option value="gram" />
+                <option value="kg" />
+                <option value="pack" />
+                <option value="lusin" />
+                <option value="meter" />
+              </datalist>
+            </div>
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              Satuan hitung harga, stok &amp; resep (maks. 10 huruf).
+            </p>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            {usesPriceRange ? (
+              <>
+                <div>
+                  <FieldLabel htmlFor="pf-low" required>
+                    {isMaterialsProduct ? 'Harga barang' : 'Harga terendah'}
+                  </FieldLabel>
+                  <MoneyInput
+                    id="pf-low"
+                    name="lowest_price"
+                    required
+                    value={formData.lowest_price}
+                    onChange={handleMoneyChange}
+                    placeholder="50.000"
+                    unit={unitLabel}
+                  />
+                </div>
+                <div>
+                  <FieldLabel htmlFor="pf-high" required>
+                    {isMaterialsProduct ? 'Harga + diantar' : 'Harga tertinggi'}
+                  </FieldLabel>
+                  <MoneyInput
+                    id="pf-high"
+                    name="highest_price"
+                    required
+                    value={formData.highest_price}
+                    onChange={handleMoneyChange}
+                    placeholder="150.000"
+                    unit={unitLabel}
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground sm:col-span-2">
+                  {isMaterialsProduct ? (
+                    <>
+                      Pelanggan bayar <strong>Harga barang</strong>. Selisih ke{' '}
+                      <strong>Harga + diantar</strong> jadi jatah ongkos angkut —
+                      pian tetapkan angka pastinya setelah lihat alamat, dan tidak
+                      boleh lebih dari selisih itu.
+                    </>
+                  ) : (
+                    <>
+                      Layanan jasa memakai rentang harga. Nanti pian pilih harga
+                      pasti (di antara terendah &amp; tertinggi) saat menerima
+                      order.
+                    </>
+                  )}
+                </p>
+                {rangeInvalid && (
+                  <p className="text-xs font-medium text-rose-600 sm:col-span-2">
+                    {isMaterialsProduct
+                      ? '"Harga + diantar" tidak boleh lebih kecil dari harga barang.'
+                      : 'Harga tertinggi tidak boleh lebih kecil dari harga terendah.'}
+                  </p>
+                )}
+              </>
+            ) : asksSellingPrice ? (
+              <div>
+                <FieldLabel htmlFor="pf-price" required>
+                  Harga jual
+                </FieldLabel>
+                <MoneyInput
+                  id="pf-price"
+                  name="price"
+                  required
+                  value={formData.price}
+                  onChange={handleMoneyChange}
+                  placeholder="25.000"
+                  unit={unitLabel}
+                />
+              </div>
+            ) : null}
+
+            <div>
+              <FieldLabel
+                htmlFor="pf-buy"
+                optional={asksSellingPrice}
+                className="text-amber-700 dark:text-amber-500"
+              >
+                {asksSellingPrice ? 'Harga modal' : 'Harga beli'}
+              </FieldLabel>
+              <MoneyInput
+                id="pf-buy"
+                name="buying_price"
+                tone="amber"
+                value={formData.buying_price}
+                onChange={handleMoneyChange}
+                placeholder="15.000"
+                unit={unitLabel}
+              />
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                {asksSellingPrice
+                  ? 'Untuk menghitung untung. Tidak dilihat pelanggan.'
+                  : `Harga beli per ${unitLabel}.`}
+              </p>
+            </div>
+          </div>
+
+          {showMargin && (
+            <div
+              className={`flex items-start gap-2 rounded-xl px-3.5 py-2.5 text-sm ${
+                profit > 0
+                  ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'
+                  : profit === 0
+                    ? 'bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300'
+                    : 'bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300'
+              }`}
+            >
+              {profit >= 0 ? (
+                <TrendingUp className="mt-0.5 h-4 w-4 shrink-0" />
+              ) : (
+                <TrendingDown className="mt-0.5 h-4 w-4 shrink-0" />
+              )}
+              <span>
+                {profit > 0 ? (
+                  <>
+                    Untung <b>{rupiah(profit)}</b> per {unitLabel} · {marginPct}% dari
+                    harga {discountPct !== null ? 'setelah diskon' : 'jual'}
+                  </>
+                ) : profit === 0 ? (
+                  'Harga jual sama dengan modal — belum ada untung.'
+                ) : (
+                  <>
+                    Rugi <b>{rupiah(-profit)}</b> per {unitLabel} — harga jual di
+                    bawah modal.
+                  </>
+                )}
+              </span>
+            </div>
+          )}
+
+          {/* Not offered for range-priced kinds: the backend mirrors
+              price_mark_down to the range floor, so a discount entered there
+              would be silently discarded. Nor for ingredients, for the plainer
+              reason that there is no price to discount. */}
+          {asksSellingPrice && !usesPriceRange && (
+            <div className="space-y-3 rounded-xl border p-3.5">
+              <div className="flex items-center justify-between gap-3">
+                <span>
+                  <span className="block text-sm font-semibold">Ada diskon?</span>
+                  <span className="block text-xs text-muted-foreground">
+                    Pelanggan melihat harga lama dicoret.
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={hasDiscount}
+                  aria-label="Ada diskon"
+                  onClick={() => handleToggleDiscount(!hasDiscount)}
+                  className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
+                    hasDiscount ? 'bg-emerald-500' : 'bg-zinc-300 dark:bg-zinc-700'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow-md transition-transform ${
+                      hasDiscount ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+              {hasDiscount && (
+                <>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="mr-1 text-xs text-muted-foreground">Cepat:</span>
+                    {DISCOUNT_PRESETS.map((p) => (
+                      <Chip
+                        key={p}
+                        active={discountPct === p}
+                        disabled={!sellNum}
+                        onClick={() => applyDiscountPct(p)}
+                      >
+                        {p}%
+                      </Chip>
+                    ))}
+                  </div>
+                  <div>
+                    <FieldLabel htmlFor="pf-disc" required>
+                      Harga setelah diskon
+                    </FieldLabel>
+                    <MoneyInput
+                      id="pf-disc"
+                      name="price_mark_down"
+                      tone="emerald"
+                      required
+                      value={formData.price_mark_down}
+                      onChange={handleMoneyChange}
+                      placeholder="20.000"
+                      unit={unitLabel}
+                    />
+                  </div>
+                  {discountInvalid ? (
+                    <p className="text-xs font-medium text-rose-600">
+                      Harga diskon harus lebih kecil dari harga jual ({rupiah(sellNum)}).
+                    </p>
+                  ) : discountPct !== null ? (
+                    <p className="text-xs text-emerald-700 dark:text-emerald-400">
+                      Diskon {discountPct}% — dari {rupiah(sellNum)} jadi{' '}
+                      {rupiah(discNum)}.
+                    </p>
+                  ) : !sellNum ? (
+                    <p className="text-xs text-muted-foreground">
+                      Isi harga jual dulu untuk memakai tombol persen.
+                    </p>
+                  ) : null}
+                </>
+              )}
+            </div>
+          )}
+        </FormSection>
+
+        {/* ── Stok & kode ── */}
+        <FormSection
+          step={nextStep()}
+          title={asksStockQuestion ? 'Stok & kode barang' : 'Kode barang'}
+        >
+          {asksStockQuestion && (
+            <div>
+              <ToggleCard
+                question="Bagaimana stoknya dihitung?"
+                checked={trackStock}
+                onToggle={() => setTrackStock((v) => !v)}
+                onTitle="Punya stok sendiri"
+                offTitle="Ambil dari stok produk lain"
+                onHint="Stok bertambah/berkurang lewat kasir, faktur & opname."
+                offHint="Produk olahan, paket/eceran, atau jasa — stoknya dipotong dari produk lain (atau tidak dihitung sama sekali)."
+              />
+              {trackStock && !editingProductId && (
+                <p className="mt-1.5 text-xs text-muted-foreground">
+                  Jumlah stok awal diisi setelah produk tersimpan — lewat faktur
+                  pembelian atau stok opname.
+                </p>
+              )}
+            </div>
+          )}
+          <div>
+            <FieldLabel htmlFor="pf-barcode" optional>
+              Barcode / kode barang
+            </FieldLabel>
+            <div className="relative">
+              <Barcode className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <input
+                id="pf-barcode"
+                name="barcode"
+                value={formData.barcode}
+                onChange={handleInputChange}
+                // USB barcode scanners emulate typing + an Enter keystroke —
+                // without this, scanning into this field would submit the
+                // whole product form early instead of just filling it in.
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') e.preventDefault();
+                }}
+                maxLength={64}
+                autoComplete="off"
+                className={fieldClass('h-11 w-full pl-10 pr-3.5 font-mono text-sm')}
+                placeholder="Scan barcode atau ketik kode sendiri…"
+              />
+            </div>
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              Boleh barcode pabrik, boleh kode buatan sendiri (mis. RAK-A12) untuk
+              barang tanpa barcode. Harus unik per outlet, dan bisa dipakai
+              mencari barang saat stok opname.
+            </p>
+          </div>
+        </FormSection>
+
+        {/* ── Resep · Varian · Add-on ──
+            Composition: any saved product may have one, with or without stock
+            of its own — a menu item or pass-through bundle expanded at sale
+            time, or an in-house intermediate (sambal, adonan) produced in
+            batches. Variants: which product the line IS (Reguler / Large), one
+            level deep, so not on a product that is itself a variant. Add-ons:
+            what can be added to the line. All three save on their own. */}
+        {showsExtras && (
+          <FormSection
+            id="pf-extras"
+            step={nextStep()}
+            title={extrasTitle}
+            description={
+              editingProductId
+                ? 'Masing-masing tersimpan sendiri — tidak ikut tombol Simpan di bawah.'
+                : undefined
+            }
+          >
+            {editingProductId ? (
+              <>
+                {showsRecipeEditor && (
+                  <RecipeEditor
+                    productId={editingProductId}
+                    ingredients={recipeIngredientOptions}
+                    trackStock={trackStock}
+                  />
+                )}
+                {showsVariantEditor && (
+                  <VariantEditor
+                    productId={editingProductId}
+                    productName={
+                      formData.product_name || editingProduct?.product_name || ''
+                    }
+                  />
+                )}
+                {showsAddonEditor && (
+                  <AddonEditor
+                    productId={editingProductId}
+                    products={recipeIngredientOptions}
+                  />
+                )}
+              </>
+            ) : (
+              <div className="flex flex-col gap-3 rounded-xl border-2 border-dashed p-4 sm:flex-row sm:items-center">
+                <Lock className="h-5 w-5 shrink-0 text-muted-foreground" />
+                <p className="flex-1 text-sm text-muted-foreground">
+                  {extrasTitle} bisa diatur setelah produk tersimpan.
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => submitWithIntent('configure')}
+                  className="h-10 rounded-xl"
+                >
+                  Simpan &amp; atur sekarang
+                </Button>
+              </div>
+            )}
+          </FormSection>
+        )}
+      </>
+    );
+  };
+
+  const renderPreview = () => {
+    if (isInternalCategory) {
+      return (
+        <div className="rounded-2xl border bg-muted/30 p-4">
+          <p className="flex items-center gap-2 text-sm font-bold">
+            <EyeOff className="h-4 w-4 text-muted-foreground" />
+            Tidak tampil di menu pelanggan
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {selectedCategory === INGREDIENT_CATEGORY.category
+              ? 'Bahan dipakai lewat resep dan dihitung stoknya. Pelanggan tidak pernah melihatnya.'
+              : 'Muncul sebagai pilihan tambahan di kasir, pada produk yang menawarkannya. Grupnya diatur dari form produk tersebut.'}
+          </p>
+        </div>
+      );
+    }
+    const groupName =
+      selectedMenuGroupId != null ? groupById.get(selectedMenuGroupId)?.name : null;
+    const showStrike = !usesPriceRange && discountPct !== null;
+    const shownPrice = usesPriceRange ? lowNum : showStrike ? discNum : sellNum;
+    const name = formData.product_name.trim();
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Pratinjau di menu
+          </p>
+          <span
+            className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+              isForSale
+                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-400'
+                : 'bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-400'
+            }`}
+          >
+            {isForSale ? 'Tampil' : 'Belum tampil'}
+          </span>
+        </div>
+        {/* Always dark: it mirrors the public /menu page, which is. */}
+        <div className="rounded-2xl bg-zinc-950 p-4">
+          {groupName && (
+            <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-amber-300/80">
+              {groupName}
+            </p>
+          )}
+          <div
+            className={`mx-auto w-full max-w-56 overflow-hidden rounded-2xl border border-white/10 bg-white/5 transition-opacity ${
+              isForSale ? '' : 'opacity-50'
+            }`}
+          >
+            <div className="relative aspect-4/3 w-full overflow-hidden bg-white/5">
+              {hasRealImage ? (
+                <Image
+                  src={resolveProductImage(imageUrl)}
+                  unoptimized={isBackendImage(imageUrl)}
+                  fill
+                  sizes="224px"
+                  className="object-cover"
+                  alt=""
+                />
+              ) : (
+                <div className="flex h-full items-center justify-center text-white/20">
+                  <ImageIcon className="h-8 w-8" />
+                </div>
+              )}
+              <div className="absolute inset-0 bg-linear-to-t from-black/70 via-black/5 to-transparent" />
+              {showStrike && (
+                <span className="absolute left-2 top-2 rounded-full bg-rose-500/90 px-2 py-0.5 text-[10px] font-black text-white">
+                  -{discountPct}%
+                </span>
+              )}
+            </div>
+            <div className="flex flex-col gap-1 p-3">
+              <p
+                className={`line-clamp-2 text-sm font-bold leading-snug ${
+                  name ? 'text-white' : 'italic text-white/30'
+                }`}
+              >
+                {name || 'Nama produk'}
+              </p>
+              {formData.description.trim() && (
+                <p className="line-clamp-2 text-[11px] leading-relaxed text-white/45">
+                  {formData.description}
+                </p>
+              )}
+              <div className="pt-1">
+                {usesPriceRange && (
+                  <span className="block text-[10px] font-bold leading-none text-white/45">
+                    mulai
+                  </span>
+                )}
+                <span className="block text-[15px] font-black text-white">
+                  {rupiah(shownPrice)}
+                </span>
+                {showStrike && (
+                  <span className="block text-[11px] leading-none text-white/35 line-through">
+                    {rupiah(sellNum)}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+        {!isForSale && (
+          <p className="text-xs text-muted-foreground">
+            Nyalakan <b>Jual ke pelanggan online</b> di bagian Penjualan supaya
+            produk ini muncul di menu.
+          </p>
+        )}
+      </div>
+    );
+  };
+
+  const renderChecklist = () => {
+    const items: { label: string; done: boolean; optional?: boolean }[] = [
+      { label: 'Jenis produk', done: !!selectedCategory },
+      { label: 'Nama produk', done: !!formData.product_name.trim() },
+    ];
+    if (usesPriceRange) {
+      items.push({
+        label: isMaterialsProduct ? 'Harga barang & antar' : 'Rentang harga',
+        done: lowNum > 0 && highNum > 0 && !rangeInvalid,
+      });
+    } else if (asksSellingPrice) {
+      items.push({ label: 'Harga jual', done: sellNum > 0 });
+    }
+    if (asksImage) items.push({ label: 'Foto', done: hasRealImage, optional: true });
+    items.push({
+      label: asksSellingPrice ? 'Harga modal' : 'Harga beli',
+      done: buyNum > 0,
+      optional: true,
+    });
+    return (
+      <div className="hidden rounded-2xl border bg-background p-4 lg:block">
+        <p className="mb-2.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Kelengkapan
+        </p>
+        <ul className="space-y-1.5">
+          {items.map((it) => (
+            <li key={it.label} className="flex items-center gap-2 text-sm">
+              {it.done ? (
+                <CircleCheck className="h-4 w-4 shrink-0 text-emerald-600" />
+              ) : (
+                <Circle className="h-4 w-4 shrink-0 text-muted-foreground/50" />
+              )}
+              <span className={it.done ? '' : 'text-muted-foreground'}>{it.label}</span>
+              {it.optional && (
+                <span className="text-[11px] text-muted-foreground">(opsional)</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  };
+
+  // Sticky at the bottom of the viewport the whole way down a long form: on a
+  // phone the old button sat below the image uploader, several screens away
+  // from the price the owner had just typed.
+  const renderSaveBar = () => (
+    <div className="sticky bottom-[calc(0.75rem+env(safe-area-inset-bottom))] z-20 mt-5 rounded-2xl border bg-background/95 p-3 shadow-xl backdrop-blur">
+      {formError && (
+        <p
+          role="alert"
+          className="mb-2.5 flex items-start gap-2 rounded-lg bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700 dark:bg-rose-950/40 dark:text-rose-300"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          {formError}
+        </p>
+      )}
+      <div className="flex items-center gap-2">
+        <p className="mr-auto hidden text-xs text-muted-foreground sm:block">
+          {uploadingImage
+            ? 'Menunggu foto selesai diunggah…'
+            : isDirty
+              ? 'Ada perubahan yang belum disimpan.'
+              : editingProductId
+                ? 'Belum ada perubahan.'
+                : savedCount > 0
+                  ? `${savedCount} produk ditambahkan.`
+                  : ''}
+        </p>
+        {!editingProductId && (
+          <Button
+            type="button"
+            variant="outline"
+            disabled={busy}
+            onClick={() => submitWithIntent('new')}
+            className="h-11 flex-1 rounded-xl px-3 text-[13px] sm:flex-none sm:px-4 sm:text-sm"
+          >
+            Simpan &amp; Tambah Lagi
+          </Button>
+        )}
+        <Button
+          type="submit"
+          disabled={busy}
+          className="h-11 flex-1 rounded-xl bg-blue-600 px-6 font-bold text-white shadow-lg shadow-blue-600/20 hover:bg-blue-700 sm:flex-none"
+        >
+          {isSubmitting ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Menyimpan…
+            </>
+          ) : editingProductId ? (
+            'Simpan Perubahan'
+          ) : (
+            'Simpan'
+          )}
+        </Button>
+      </div>
+    </div>
+  );
   return (
-    <div className="space-y-6 mt-4">
+    <div ref={pageTopRef} className="mt-4 scroll-mt-16 space-y-6">
       {view === 'list' && (
         <>
+          {renderNotice()}
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4 md:mb-6">
             <div>
               <h2 className="text-xl md:text-3xl font-extrabold tracking-tight text-foreground">
-                Menajemen Produk
+                Manajemen Produk
               </h2>
               <p className="text-sm text-muted-foreground mt-1">
                 {/* Explicit space: the transform swallows the one between an
@@ -1183,23 +2629,7 @@ export const ProductsManager = ({
                 Share Produk
               </Button>
               <Button
-                onClick={() => {
-                  setEditingProductId(null);
-                  setFormData({
-                    product_name: '',
-                    price: '',
-                    price_mark_down: '',
-                    buying_price: '',
-                    description: '',
-                    unit: 'pcs',
-                    lowest_price: '',
-                    highest_price: '',
-                    barcode: '',
-                  });
-                  setImageUrl('');
-                  setSelectedFeatures([]);
-                  setView('category');
-                }}
+                onClick={() => openNewForm()}
                 data-tour="add-product"
                 className="order-first sm:order-0 w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-lg shadow-blue-600/20 transition-all sm:hover:scale-105"
               >
@@ -1234,7 +2664,7 @@ export const ProductsManager = ({
                 Mulai bangun inventaris dengan menambahkan produk pertama Anda.
               </p>
               <Button
-                onClick={() => setView('category')}
+                onClick={() => openNewForm()}
                 variant="outline"
                 className="rounded-xl border-dashed hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 transition-colors"
               >
@@ -1457,7 +2887,15 @@ export const ProductsManager = ({
                         : 'Semua isi etalase pian masih berupa bahan atau tambahan. Tambah satu produk yang bisa dibeli pelanggan.'}
                   </p>
                   <Button
-                    onClick={() => setView('category')}
+                    onClick={() =>
+                      openNewForm(
+                        tab === 'bahan'
+                          ? INGREDIENT_CATEGORY.category
+                          : tab === 'tambahan'
+                            ? ADDON_CATEGORY.category
+                            : '',
+                      )
+                    }
                     variant="outline"
                     className="mt-4 rounded-xl border-dashed hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600"
                   >
@@ -1735,10 +3173,15 @@ export const ProductsManager = ({
                                 )}
                                 <button
                                   onClick={() => handleEdit(product)}
-                                  className="p-1.5 rounded-lg bg-muted/60 text-muted-foreground hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                                  disabled={openingId !== null}
+                                  className="p-1.5 rounded-lg bg-muted/60 text-muted-foreground hover:text-blue-600 hover:bg-blue-50 transition-colors disabled:opacity-60"
                                   aria-label="Edit produk"
                                 >
-                                  <Edit className="h-4 w-4" />
+                                  {openingId === product.id ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <Edit className="h-4 w-4" />
+                                  )}
                                 </button>
                                 <button
                                   onClick={() => handleDelete(product.id)}
@@ -1773,703 +3216,75 @@ export const ProductsManager = ({
         </>
       )}
 
-      {view === 'category' && (
-        <div className="max-w-4xl mx-auto">
+      {view === 'form' && (
+        <div className="mx-auto max-w-6xl">
           <Button
+            type="button"
             variant="ghost"
-            onClick={() => setView('list')}
-            className="mb-6 hover:bg-muted/50 text-muted-foreground hover:text-foreground -ml-4 rounded-xl"
+            onClick={handleBack}
+            className="mb-3 -ml-3 rounded-xl text-muted-foreground hover:bg-muted/50 hover:text-foreground"
           >
             <ArrowLeft className="mr-2 h-4 w-4" />
-            Kembali Ke Etalase
+            Daftar Produk
           </Button>
 
-          <div className="mb-4 md:mb-8 text-center">
-            <h2 className="text-xl md:text-3xl font-extrabold tracking-tight text-foreground">
-              Pilih Layanan Pian
+          <div className="mb-5">
+            <h2 className="text-xl font-extrabold tracking-tight text-foreground md:text-3xl">
+              {editingProductId ? 'Edit Produk' : 'Tambah Produk'}
             </h2>
-            <p className="text-muted-foreground mt-2 text-sm md:text-lg">
-              Apa jenis produk yang pian tambahkan?
+            <p className="mt-1 text-sm text-muted-foreground">
+              {editingProductId ? (
+                <>
+                  Perubahan berlaku setelah pian tekan <b>Simpan</b>.
+                  {editingProduct?.variant_of && (
+                    <>
+                      {' '}Produk ini varian dari{' '}
+                      <b>
+                        {productNameById.get(editingProduct.variant_of) ?? 'produk lain'}
+                      </b>
+                      .
+                    </>
+                  )}
+                </>
+              ) : (
+                'Yang bertanda * wajib diisi. Sisanya boleh dilengkapi nanti.'
+              )}
             </p>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-6">
-            {[
-              ...CATEGORIES,
-              ...(bahanAddonsAllowed ? INTERNAL_CATEGORIES : []),
-            ].map((cat) => (
-              <button
-                key={cat.id}
-                disabled={!cat.isAvailable}
-                onClick={() => handleCategorySelect(cat.category)}
-                className={`flex flex-col items-center justify-center p-4 md:p-8 rounded-2xl md:rounded-3xl border-2 transition-all group relative overflow-hidden ${
-                  !cat.isAvailable
-                    ? 'bg-muted/30 cursor-not-allowed opacity-50'
-                    : 'hover:-translate-y-1 hover:shadow-xl bg-background hover:border-blue-500'
-                }`}
-              >
-                <div
-                  className={`p-3 md:p-4 rounded-xl md:rounded-2xl mb-2 md:mb-4 transition-transform duration-300 relative z-10 shadow-sm ${
-                    !cat.isAvailable
-                      ? 'text-muted-foreground bg-muted/50'
-                      : 'text-amber-500 bg-amber-50 group-hover:scale-110'
-                  }`}
-                >
-                  <cat.icon className="h-6 w-6 md:h-10 md:w-10" />
-                </div>
-                <span
-                  className={`font-bold text-sm md:text-lg relative z-10 transition-colors text-center ${
-                    !cat.isAvailable
-                      ? 'text-muted-foreground'
-                      : 'text-foreground group-hover:text-blue-600'
-                  }`}
-                >
-                  {cat.label}
-                </span>
-                {cat.isAvailable && (
-                  <div className="absolute inset-0 bg-gradient-to-b from-transparent to-muted/10 opacity-0 group-hover:opacity-100 transition-opacity" />
-                )}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+          {notice && <div className="mb-5">{renderNotice()}</div>}
 
-      {view === 'form' && (
-        <div className="max-w-2xl mx-auto">
-          <Button
-            variant="ghost"
-            onClick={() => setView('category')}
-            className="mb-6 hover:bg-muted/50 text-muted-foreground hover:text-foreground -ml-4 rounded-xl"
+          {/* The save bar sits OUTSIDE the grid on purpose: a sticky grid item
+              is pinned only within its own row, which for a bar in a row of
+              its own means not at all. */}
+          {/* Scroll margins keep a focused field clear of the sticky header
+              above and the sticky save bar below — on a phone, tapping
+              "Harga modal" otherwise scrolled it to sit right under the bar. */}
+          <form
+            ref={formRef}
+            onSubmit={handleSubmit}
+            className="[&_input]:scroll-mb-28 [&_input]:scroll-mt-16 [&_textarea]:scroll-mb-28 [&_textarea]:scroll-mt-16"
           >
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            Back to Categories
-          </Button>
-
-          <div className="bg-background border rounded-2xl md:rounded-3xl p-4 md:p-8 shadow-sm relative overflow-hidden">
-            <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-blue-500 to-purple-500" />
-
-            <div className="flex items-center gap-4 mb-8">
-              <div className="p-3 rounded-xl bg-blue-50 text-blue-600">
-                <Package className="h-6 w-6" />
+            <div
+              className={`grid items-start gap-5 ${
+                selectedCategory ? 'lg:grid-cols-[minmax(0,1fr)_300px]' : ''
+              }`}
+            >
+              <div className="min-w-0 space-y-5">
+                {renderTypeSection()}
+                {selectedCategory && renderDetailSections()}
               </div>
-              <div>
-                <h2 className="text-2xl font-bold tracking-tight">
-                  {editingProductId ? 'Edit' : 'Tambah produk'} {selectedCategory}
-                </h2>
-                <p className="text-muted-foreground text-sm font-medium">
-                  Tambahkan sesuai yang sebenarnya{' '}
-                  {editingProductId ? 'update' : 'add to'} your inventory.
-                </p>
-              </div>
+
+              {selectedCategory && (
+                <aside className="space-y-4 lg:sticky lg:top-14">
+                  {renderPreview()}
+                  {renderChecklist()}
+                </aside>
+              )}
             </div>
 
-            <form onSubmit={handleSubmit} className="space-y-6">
-              <div className="space-y-2">
-                <label className="text-sm font-bold flex items-center gap-2">
-                  <Tag className="h-4 w-4 text-muted-foreground" />
-                  Nama Produk
-                </label>
-                <input
-                  required
-                  name="product_name"
-                  value={formData.product_name}
-                  onChange={handleInputChange}
-                  className="flex h-12 w-full rounded-xl border border-input bg-transparent px-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-                  placeholder="e.g. Signature Iced Latte"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-bold flex items-center gap-2">
-                  <Layers className="h-4 w-4 text-muted-foreground" />
-                  Kategori
-                </label>
-                <select
-                  value={selectedCategory}
-                  onChange={(e) => setSelectedCategory(e.target.value)}
-                  className="flex h-12 w-full rounded-xl border border-input bg-background px-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-                >
-                  {categoryOptions
-                    .filter(
-                      (c) =>
-                        bahanAddonsAllowed ||
-                        (c.category !== INGREDIENT_CATEGORY.category &&
-                          c.category !== ADDON_CATEGORY.category),
-                    )
-                    .map((c) => (
-                      <option key={c.category} value={c.category}>
-                        {c.label} ({c.category})
-                      </option>
-                    ))}
-                  {/* Legacy/renamed category no longer in the option list —
-                      keep it selectable so an edit doesn't silently move it. */}
-                  {selectedCategory &&
-                    !categoryOptions.some((c) => c.category === selectedCategory) && (
-                      <option value={selectedCategory}>{selectedCategory}</option>
-                    )}
-                </select>
-              </div>
-
-              {/* ── Grup Menu ──
-                  Not the same thing as Kategori above: that one is the fixed
-                  platform list that drives marketplace browse, this is purely
-                  how THIS outlet's public menu is laid out. Optional — an
-                  unset product falls back to its category on the menu page. */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="text-sm font-bold flex items-center gap-2">
-                    <Layers className="h-4 w-4 text-muted-foreground" />
-                    Grup Menu
-                    <span className="text-xs font-normal text-muted-foreground">(opsional)</span>
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => setGroupManagerOpen((v) => !v)}
-                    className="text-xs font-bold text-blue-600 hover:text-blue-700"
-                  >
-                    {groupManagerOpen ? 'Tutup' : 'Kelola grup'}
-                  </button>
-                </div>
-                <select
-                  value={selectedMenuGroupId ?? ''}
-                  onChange={(e) =>
-                    setSelectedMenuGroupId(e.target.value ? Number(e.target.value) : null)
-                  }
-                  className="flex h-12 w-full rounded-xl border border-input bg-background px-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-                >
-                  <option value="">— Tanpa grup —</option>
-                  {menuGroups.map((g) => (
-                    <option key={g.id} value={g.id}>
-                      {g.name}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-xs text-muted-foreground">
-                  Menentukan judul &amp; urutan bagian di halaman menu publik.
-                </p>
-                {groupManagerOpen && renderMenuGroupManager()}
-              </div>
-
-              {/* Both toggles sit ABOVE the price fields deliberately: together
-                  they decide whether this product is priced with one number or a
-                  band (see isMaterialsProduct). Below the prices, flipping one
-                  would reshape a section the owner had already filled in and
-                  scrolled past. */}
-              <div className="space-y-2">
-                <label className="text-sm font-bold flex items-center gap-2">
-                  <Layers className="h-4 w-4 text-muted-foreground" />
-                  Jual ke pelanggan online?
-                </label>
-                <button
-                  type="button"
-                  onClick={() => setIsForSale((v) => !v)}
-                  className={`flex w-full items-center justify-between rounded-xl border-2 px-4 py-3 text-left transition-colors ${
-                    isForSale
-                      ? 'border-teal-500 bg-teal-50 dark:bg-teal-950/30'
-                      : 'border-border bg-muted/30'
-                  }`}
-                >
-                  <span>
-                    <span className="block text-sm font-semibold">
-                      {isForSale ? 'Dijual ke pelanggan' : 'Hanya inventaris'}
-                    </span>
-                    <span className="block text-xs text-muted-foreground">
-                      {isForSale
-                        ? 'Produk tampil di menu pelanggan.'
-                        : 'Disembunyikan dari menu pelanggan; hanya untuk stok & faktur.'}
-                    </span>
-                  </span>
-                  <span
-                    className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
-                      isForSale ? 'bg-teal-600' : 'bg-zinc-300 dark:bg-zinc-700'
-                    }`}
-                  >
-                    <span
-                      className={`absolute top-0.5 size-5 rounded-full bg-white shadow transition-all ${
-                        isForSale ? 'left-[22px]' : 'left-0.5'
-                      }`}
-                    />
-                  </span>
-                </button>
-                {isForSale && isInternalCategory && (
-                  <p className="text-xs text-amber-700 dark:text-amber-500">
-                    Kategori ini internal, jadi produknya tetap tidak muncul di
-                    menu pelanggan. Sakelar ini cuma membukanya untuk faktur dan
-                    laporan.
-                  </p>
-                )}
-              </div>
-
-              {/* Asked only for mart & bahan bangunan — see asksCourierQuestion. */}
-              {isForSale && asksCourierQuestion && (
-                <div className="space-y-2">
-                  <label className="text-sm font-bold flex items-center gap-2">
-                    <Truck className="h-4 w-4 text-muted-foreground" />
-                    Apakah produk ini bisa diantar kurir?
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => setCourierDeliverable((v) => !v)}
-                    className={`flex w-full items-center justify-between rounded-xl border-2 px-4 py-3 text-left transition-colors ${
-                      courierDeliverable
-                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/30'
-                        : 'border-amber-500 bg-amber-50 dark:bg-amber-950/30'
-                    }`}
-                  >
-                    <span>
-                      <span className="block text-sm font-semibold">
-                        {courierDeliverable
-                          ? 'Bisa diantar kurir'
-                          : 'Tidak bisa diantar kurir'}
-                      </span>
-                      <span className="block text-xs text-muted-foreground">
-                        {courierDeliverable
-                          ? 'Cukup ringan buat dibawa kurir (sembako, obat, cat, paku).'
-                          : 'Barang berat/besar (besi, keramik, wastafel, kulkas) — pesanan diantar sendiri oleh outlet, tanpa kurir.'}
-                      </span>
-                    </span>
-                    <span
-                      className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
-                        courierDeliverable
-                          ? 'bg-blue-600'
-                          : 'bg-zinc-300 dark:bg-zinc-700'
-                      }`}
-                    >
-                      <span
-                        className={`absolute top-0.5 size-5 rounded-full bg-white shadow transition-all ${
-                          courierDeliverable ? 'left-[22px]' : 'left-0.5'
-                        }`}
-                      />
-                    </span>
-                  </button>
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 gap-4 md:gap-6">
-                {usesPriceRange ? (
-                  <>
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold flex items-center gap-2">
-                        <DollarSign className="h-4 w-4 text-muted-foreground" />
-                        {isMaterialsProduct ? 'Harga Barang' : 'Harga Terendah'}
-                      </label>
-                      <div className="relative">
-                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground font-medium text-sm">
-                          Rp
-                        </span>
-                        <input
-                          required
-                          name="lowest_price"
-                          inputMode="numeric"
-                          value={formatNumberInput(formData.lowest_price)}
-                          onChange={handleMoneyChange}
-                          className="flex h-12 w-full rounded-xl border border-input bg-transparent pl-12 pr-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-                          placeholder="50.000"
-                        />
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold flex items-center gap-2">
-                        <DollarSign className="h-4 w-4 text-muted-foreground" />
-                        {isMaterialsProduct ? 'Harga + Diantar' : 'Harga Tertinggi'}
-                      </label>
-                      <div className="relative">
-                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground font-medium text-sm">
-                          Rp
-                        </span>
-                        <input
-                          required
-                          name="highest_price"
-                          inputMode="numeric"
-                          value={formatNumberInput(formData.highest_price)}
-                          onChange={handleMoneyChange}
-                          className="flex h-12 w-full rounded-xl border border-input bg-transparent pl-12 pr-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-                          placeholder="150.000"
-                        />
-                      </div>
-                    </div>
-                    <p className="col-span-2 -mt-1 text-xs text-muted-foreground">
-                      {isMaterialsProduct ? (
-                        <>
-                          Pelanggan bayar <strong>Harga Barang</strong>. Selisih ke{' '}
-                          <strong>Harga + Diantar</strong> jadi jatah ongkos angkut —
-                          pian tetapkan angka pastinya setelah lihat alamat, dan
-                          tidak boleh lebih dari selisih itu.
-                        </>
-                      ) : (
-                        <>
-                          Layanan jasa memakai rentang harga. Nanti pian pilih harga
-                          pasti (di antara terendah &amp; tertinggi) saat menerima
-                          order.
-                        </>
-                      )}
-                    </p>
-                  </>
-                ) : asksSellingPrice ? (
-                  <div className="space-y-2">
-                    <label className="text-sm font-bold flex items-center gap-2">
-                      <DollarSign className="h-4 w-4 text-muted-foreground" />
-                      Harga Jual
-                    </label>
-                    <div className="relative">
-                      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground font-medium text-sm">
-                        Rp
-                      </span>
-                      <input
-                        required
-                        name="price"
-                        inputMode="numeric"
-                        value={formatNumberInput(formData.price)}
-                        onChange={handleMoneyChange}
-                        className="flex h-12 w-full rounded-xl border border-input bg-transparent pl-12 pr-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-                        placeholder="25.000"
-                      />
-                    </div>
-                  </div>
-                ) : null}
-                <div className="space-y-2">
-                  <label className="text-sm font-bold flex items-center gap-2 text-amber-600">
-                    <DollarSign className="h-4 w-4" />
-                    Harga Beli (Modal)
-                  </label>
-                  <div className="relative">
-                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-amber-600/70 font-medium text-sm">
-                      Rp
-                    </span>
-                    <input
-                      name="buying_price"
-                      inputMode="numeric"
-                      value={formatNumberInput(formData.buying_price)}
-                      onChange={handleMoneyChange}
-                      className="flex h-12 w-full rounded-xl border border-amber-200 bg-amber-50/30 pl-12 pr-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
-                      placeholder="15.000"
-                    />
-                  </div>
-                </div>
-                <div
-                  // Hidden for both range-priced kinds: the backend mirrors
-                  // price_mark_down to the range floor, so a discount entered
-                  // here would be silently discarded. Hidden for ingredients for
-                  // the plainer reason that there is no price to discount.
-                  className={`col-span-2 space-y-3 ${
-                    usesPriceRange || !asksSellingPrice ? 'hidden' : ''
-                  }`}
-                >
-                  <label className="flex items-center justify-between cursor-pointer">
-                    <span className="text-sm font-bold text-muted-foreground">
-                      Ada Diskon?
-                    </span>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={hasDiscount}
-                      onClick={() => handleToggleDiscount(!hasDiscount)}
-                      className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${hasDiscount ? 'bg-emerald-500' : 'bg-muted'}`}
-                    >
-                      <span
-                        className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow-md ring-0 transition-transform duration-200 ${hasDiscount ? 'translate-x-5' : 'translate-x-0'}`}
-                      />
-                    </button>
-                  </label>
-                  {hasDiscount && (
-                    <div className="relative">
-                      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-emerald-600/70 font-medium text-sm">
-                        Rp
-                      </span>
-                      <input
-                        required
-                        name="price_mark_down"
-                        inputMode="numeric"
-                        value={formatNumberInput(formData.price_mark_down)}
-                        onChange={handleMoneyChange}
-                        className="flex h-12 w-full rounded-xl border border-emerald-300 bg-emerald-50/40 pl-12 pr-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                        placeholder="Harga setelah diskon"
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-bold flex items-center gap-2">
-                  <Package className="h-4 w-4 text-muted-foreground" />
-                  Satuan
-                </label>
-                <input
-                  name="unit"
-                  value={formData.unit}
-                  onChange={handleInputChange}
-                  maxLength={10}
-                  list="unit-suggestions"
-                  className="flex h-12 w-full rounded-xl border border-input bg-transparent px-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-                  placeholder="pcs, ml, kg, porsi…"
-                />
-                {/* Free text — the list is just autocomplete suggestions. */}
-                <datalist id="unit-suggestions">
-                  <option value="pcs" />
-                  <option value="porsi" />
-                  <option value="ml" />
-                  <option value="liter" />
-                  <option value="gram" />
-                  <option value="kg" />
-                  <option value="pack" />
-                  <option value="lusin" />
-                  <option value="meter" />
-                </datalist>
-                <p className="text-xs text-muted-foreground">
-                  Satuan hitung stok & resep (maks. 10 huruf) — bebas diisi.
-                </p>
-              </div>
-
-              <div className="space-y-2">
-                  <label className="text-sm font-bold flex items-center gap-2">
-                    <Barcode className="h-4 w-4 text-muted-foreground" />
-                    Barcode / Kode barang
-                    <span className="font-normal text-xs text-muted-foreground">(opsional)</span>
-                  </label>
-                  <input
-                    name="barcode"
-                    value={formData.barcode}
-                    onChange={handleInputChange}
-                    // USB barcode scanners emulate typing + an Enter keystroke —
-                    // without this, scanning into this field would submit the
-                    // whole product form early instead of just filling it in.
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') e.preventDefault();
-                    }}
-                    maxLength={64}
-                    className="flex h-12 w-full rounded-xl border border-input bg-transparent px-4 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 font-mono"
-                    placeholder="Scan barcode atau ketik kode sendiri…"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Boleh barcode dari pabrik, boleh kode buatan sendiri (mis. RAK-A12) untuk
-                    barang yang tidak punya barcode. Harus unik per outlet, dan bisa dipakai
-                    untuk mencari barang saat stok opname.
-                  </p>
-                </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-bold flex items-center gap-2">
-                  <Layers className="h-4 w-4 text-muted-foreground" />
-                  Description
-                </label>
-                <textarea
-                  name="description"
-                  value={formData.description}
-                  onChange={handleInputChange}
-                  className="flex min-h-[100px] w-full rounded-xl border border-input bg-transparent px-4 py-3 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 resize-none"
-                  placeholder="Describe your product..."
-                />
-              </div>
-
-              {isForSale && !isInternalCategory && (
-                <div className="space-y-3">
-                  <label className="text-sm font-bold flex items-center gap-2">
-                    <Tag className="h-4 w-4 text-muted-foreground" />
-                    Fitur Produk
-                    <span className="text-xs font-light text-muted-foreground ml-2">
-                      Pilih fitur produk untuk memudahkan pelanggan menemukan
-                      produk Anda.
-                    </span>
-                  </label>
-                  <div className="flex flex-wrap gap-2">
-                    {CATEGORIES.map((f) => {
-                      const active = selectedFeatures.includes(f.id);
-                      return (
-                        <button
-                          key={f.id}
-                          type="button"
-                          disabled={!f.isAvailable}
-                          onClick={() =>
-                            setSelectedFeatures((prev) =>
-                              prev.includes(f.id)
-                                ? prev.filter((x) => x !== f.id)
-                                : [...prev, f.id],
-                            )
-                          }
-                          className={`px-3 py-1.5 rounded-full text-xs font-bold border-2 transition-all duration-150 ${
-                            !f.isAvailable
-                              ? 'border-border bg-muted/30 text-muted-foreground/40 cursor-not-allowed'
-                              : active
-                                ? 'border-blue-500 bg-blue-500 text-white shadow-sm'
-                                : 'border-border bg-background text-muted-foreground hover:border-blue-300 hover:text-blue-600'
-                          }`}
-                        >
-                          {f.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {selectedFeatures.length > 0 && (
-                    <p className="text-xs text-muted-foreground">
-                      {selectedFeatures.length} fitur dipilih
-                    </p>
-                  )}
-                </div>
-              )}
-
-
-              {asksStockQuestion && (
-              <div className="space-y-2">
-                <label className="text-sm font-bold flex items-center gap-2">
-                  <Layers className="h-4 w-4 text-muted-foreground" />
-                  Apakah Produk ini dapat dikelola stoknya?
-                </label>
-                <button
-                  type="button"
-                  onClick={() => setTrackStock((v) => !v)}
-                  className={`flex w-full items-center justify-between rounded-xl border-2 px-4 py-3 text-left transition-colors ${
-                    trackStock
-                      ? 'border-teal-500 bg-teal-50 dark:bg-teal-950/30'
-                      : 'border-border bg-muted/30'
-                  }`}
-                >
-                  <span>
-                    <span className="block text-sm font-semibold">
-                      {trackStock
-                        ? 'Punya stok sendiri'
-                        : 'Ambil dari stok produk lain'}
-                    </span>
-                    <span className="block text-xs text-muted-foreground">
-                      {trackStock
-                        ? 'Stok bertambah/berkurang lewat kasir, faktur & opname.'
-                        : 'Produk olahan, paket/eceran, atau jasa — stoknya dipotong dari produk lain (atau tidak dihitung sama sekali).'}
-                    </span>
-                  </span>
-                  <span
-                    className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
-                      trackStock
-                        ? 'bg-teal-600'
-                        : 'bg-zinc-300 dark:bg-zinc-700'
-                    }`}
-                  >
-                    <span
-                      className={`absolute top-0.5 size-5 rounded-full bg-white shadow transition-all ${
-                        trackStock ? 'left-[22px]' : 'left-0.5'
-                      }`}
-                    />
-                  </span>
-                </button>
-              </div>
-              )}
-
-              {/* Composition editor: any saved product may have one, with or
-                  without stock of its own. Without = a menu item or a
-                  pass-through sub-composition, expanded at sale time. With =
-                  an in-house intermediate (sambal, adonan) that is PRODUCED in
-                  batches and then drawn down like any other stock.
-                  Serves food (nasi goreng -> beras) and non-food alike
-                  ("Batako 10 pcs" -> 10 batako) — the decrement never looks at
-                  category. Absence of a composition is a valid permanent state,
-                  so nothing is shown or nagged otherwise. */}
-              {editingProductId &&
-                recipeAllowed &&
-                recipeIngredientOptions.length > 0 && (
-                  <RecipeEditor
-                    productId={editingProductId}
-                    ingredients={recipeIngredientOptions}
-                    trackStock={trackStock}
-                  />
-                )}
-
-              {/* Variants — the OTHER question a product can ask, and the one
-                  that is constantly mistaken for the first. An add-on adds a
-                  line to the order; a variant decides which product the line
-                  is. Sized as an add-on, a Large reports a Reguler plus an
-                  abstract "upsize" and takes its extra milk out of nobody's
-                  stock. Placed above the add-on editor so the owner meets the
-                  right tool first when what they want is a size.
-
-                  Not offered for an internal category (a topping has no sizes
-                  of its own — the dish it hangs off does) nor for a product
-                  that is already somebody's variant: one level deep. */}
-              {editingProductId &&
-                productOptionsAllowed &&
-                !isInternalCategory &&
-                !editingProduct?.variant_of && (
-                  <VariantEditor
-                    productId={editingProductId}
-                    productName={
-                      formData.product_name ||
-                      editingProduct?.product_name ||
-                      ''
-                    }
-                  />
-                )}
-
-              {/* Add-on groups. Saved independently of the product form, like
-                  the composition above: attaching a group is a single PUT, so
-                  the owner is never made to re-save the whole product to change
-                  what toppings it offers. */}
-              {editingProductId && productOptionsAllowed && (
-                <AddonEditor
-                  productId={editingProductId}
-                  products={recipeIngredientOptions}
-                />
-              )}
-
-              {asksImage && (
-              <div className="space-y-2">
-                <label className="text-sm font-bold flex items-center gap-2">
-                  <ImageIcon className="h-4 w-4 text-muted-foreground" />
-                  Product Image
-                </label>
-                <span className="text-xs text-muted-foreground">
-                  Ukuran File Maksimal 5 MB
-                </span>
-                {imageUrl ? (
-                  <div className="relative w-full h-48 rounded-xl overflow-hidden border">
-                    <Image
-                      src={resolveProductImage(imageUrl)}
-                      unoptimized={isBackendImage(imageUrl)}
-                      fill
-                      className="object-cover"
-                      alt="Product Image Preview"
-                    />
-                    <Button
-                      type="button"
-                      variant="destructive"
-                      size="sm"
-                      className="absolute top-2 right-2 rounded-xl shadow-md"
-                      onClick={handleRemoveImage}
-                    >
-                      Remove
-                    </Button>
-                  </div>
-                ) : (
-                  <input
-                    type="file"
-                    name="image"
-                    accept="image/*"
-                    ref={ImageInputRef}
-                    onChange={handleImageUpload}
-                    className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-xl border-blue-200 bg-blue-50/50 hover:bg-blue-50 transition-colors text-blue-600 font-bold p-4 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-                  />
-                )}
-              </div>
-              )}
-
-              <div className="pt-4 flex justify-end">
-                <Button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="w-full sm:w-auto px-8 rounded-xl bg-blue-600 hover:bg-blue-700 h-12 text-md font-bold shadow-lg shadow-blue-600/20"
-                >
-                  {isSubmitting ? (
-                    <>
-                      <Loader2 className="mr-2 h-5 w-5 animate-spin" />{' '}
-                      Saving...
-                    </>
-                  ) : editingProductId ? (
-                    'Update Product'
-                  ) : (
-                    'Publish Product'
-                  )}
-                </Button>
-              </div>
-            </form>
-          </div>
+            {selectedCategory && renderSaveBar()}
+          </form>
         </div>
       )}
 
