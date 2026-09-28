@@ -1,4 +1,4 @@
-import { and, eq, gte, isNull, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "../db";
 import { kitchenTicketsTable, tableSessionLinesTable, type ServiceType } from "../db/schema";
 import { getUTCRangeFromLocalDate } from "./timezone";
@@ -20,6 +20,11 @@ export type KitchenLine = {
   variant: string | null;
   note: string | null;
   addons: { name: string; qty: number }[];
+  /**
+   * Set when the note was edited after this line reached the kitchen, so the
+   * screen can point at it. Absent on a line whose note came with it.
+   */
+  noteChangedAt?: string;
 };
 
 /**
@@ -121,6 +126,73 @@ export async function insertKitchenTicket(
     })
     .returning({ id: kitchenTicketsTable.id, ticketNo: kitchenTicketsTable.ticket_no });
   return row;
+}
+
+/**
+ * Carry each line's current note onto the live tickets already holding it.
+ * A ticket is only made for units the kitchen has not seen, so "jangan pedas"
+ * typed after a dish was sent would otherwise never reach the screen — the
+ * next send finds no new units and makes no ticket.
+ *
+ * Only tickets still being worked (Masuk / Dikerjakan / Ditahan) change: a
+ * dish already Siap is out of the kitchen. Counter tickets are matched within
+ * their till tab; table tickets by line alone, since a merge or move-lines
+ * carries lines to another seating while their tickets keep the old one.
+ * Returns how many tickets changed.
+ */
+export async function syncKitchenNotes(
+  tx: Tx,
+  t: {
+    outletId: number;
+    source: "table" | "counter";
+    /** The till tab, for counter tickets. */
+    sourceKey?: string;
+    lines: { lineId: string; note: string | null }[];
+  },
+): Promise<number> {
+  if (!t.lines.length) return 0;
+  const want = new Map(t.lines.map((l) => [l.lineId, l.note || null]));
+  const ids = [...want.keys()];
+  await lockKitchen(tx, t.outletId);
+  const now = new Date();
+  const live = await tx
+    .select({ id: kitchenTicketsTable.id, lines: kitchenTicketsTable.lines })
+    .from(kitchenTicketsTable)
+    .where(
+      and(
+        eq(kitchenTicketsTable.outlet_id, t.outletId),
+        eq(kitchenTicketsTable.source, t.source),
+        t.sourceKey ? eq(kitchenTicketsTable.source_key, t.sourceKey) : undefined,
+        inArray(kitchenTicketsTable.status, ["open", "in_progress", "hold"]),
+        gte(kitchenTicketsTable.created_at, new Date(now.getTime() - TICKET_ACTIVE_WINDOW_MS)),
+        sql`exists (
+          select 1
+            from jsonb_array_elements(${kitchenTicketsTable.lines}) e
+           where e ->> 'lineId' = any(ARRAY[${sql.join(
+             ids.map((id) => sql`${id}`),
+             sql`, `,
+           )}]::text[])
+        )`,
+      ),
+    );
+  let touched = 0;
+  for (const ticket of live) {
+    let changed = false;
+    const lines = (ticket.lines as KitchenLine[]).map((l) => {
+      if (!want.has(l.lineId)) return l;
+      const note = want.get(l.lineId) ?? null;
+      if ((l.note ?? null) === note) return l;
+      changed = true;
+      return { ...l, note, noteChangedAt: now.toISOString() };
+    });
+    if (!changed) continue;
+    await tx
+      .update(kitchenTicketsTable)
+      .set({ lines, updated_at: now })
+      .where(eq(kitchenTicketsTable.id, ticket.id));
+    touched++;
+  }
+  return touched;
 }
 
 /**

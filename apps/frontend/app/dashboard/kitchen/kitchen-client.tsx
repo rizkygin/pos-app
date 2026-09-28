@@ -42,6 +42,8 @@ type Ticket = {
     variant: string | null;
     note: string | null;
     addons: { name: string; qty: number }[];
+    /** When the note was edited after this dish reached the kitchen. */
+    noteChangedAt?: string;
   }[];
   status: Status;
   statusAt: string;
@@ -322,9 +324,17 @@ export function KitchenClient() {
   const isLate = (t: Ticket) => (t.status === 'open' || t.status === 'in_progress') && ageOf(t) > lateAfterMs;
 
   // A ticket that just landed in Masuk rings, a few chimes and done — the
-  // kitchen is loud and the screen is not always being looked at.
+  // kitchen is loud and the screen is not always being looked at. A note
+  // changed on a dish already being worked rings the same way.
   const freshArrival =
-    now > 0 && tickets.some((t) => t.status === 'open' && serverNow - Date.parse(t.createdAt) < FRESH_MS);
+    now > 0 &&
+    tickets.some(
+      (t) =>
+        (t.status === 'open' && serverNow - Date.parse(t.createdAt) < FRESH_MS) ||
+        (t.status !== 'done' &&
+          t.status !== 'cancelled' &&
+          t.lines.some((l) => l.noteChangedAt && serverNow - Date.parse(l.noteChangedAt) < FRESH_MS)),
+    );
   const alarm = useOrderAlarm(freshArrival, 'pos_kitchen_ticket_muted');
 
   // ── actions ─────────────────────────────────────────────────────────────
@@ -712,9 +722,16 @@ function TicketCard({
               {ln.variant && (
                 <div className="text-[clamp(11px,0.9vw,13px)] leading-snug text-muted-foreground">{ln.variant}</div>
               )}
-              {ln.note && (
+              {(ln.note || ln.noteChangedAt) && (
                 <div className="text-[clamp(11px,0.9vw,13px)] font-semibold leading-snug text-amber-700 dark:text-amber-400">
-                  {ln.note}
+                  {ln.noteChangedAt && (
+                    // Edited after the dish reached the kitchen — the cook may
+                    // already be making it the old way.
+                    <span className="mr-1 inline-block rounded-[5px] bg-amber-500 px-1 py-px align-[1px] text-[clamp(9px,0.7vw,11px)] font-extrabold tracking-wider text-white dark:bg-amber-600">
+                      DIUBAH {hhmm(ln.noteChangedAt)}
+                    </span>
+                  )}
+                  {ln.note ?? <span className="opacity-75">Catatan dihapus</span>}
                 </div>
               )}
               {ln.addons.map((a, i) => (

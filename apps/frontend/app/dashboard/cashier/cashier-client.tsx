@@ -2209,6 +2209,7 @@ export const CashierClient = ({
         return;
       }
       if (data.ticket) setTableNotice({ ok: true, text: `Masuk layar dapur · #${data.ticket.ticketNo}` });
+      else if (data.notesUpdated) setTableNotice({ ok: true, text: 'Catatan diperbarui di layar dapur' });
     } catch {
       setTableNotice({ ok: false, text: 'Tiket tercetak, tapi layar dapur tidak terjangkau.' });
     }
@@ -2260,10 +2261,8 @@ export const CashierClient = ({
       const fresh = lines.filter(
         (l) => l.billNo === activeTable.billNo && l.quantity > l.sentQty,
       );
-      if (fresh.length === 0) {
-        setTableNotice({ ok: true, text: 'Semua pesanan meja ini sudah dikirim ke dapur.' });
-        return;
-      }
+      // Sent even with nothing new: a note edited after its dish went out
+      // still has to reach the kitchen screen.
       const sent = await fetch(
         `${API_URL}/api/table-sessions/${encodeURIComponent(activeTable.sessionId)}/sent?timezone=${encodeURIComponent(viewerTimezone())}`,
         {
@@ -2275,6 +2274,16 @@ export const CashierClient = ({
       );
       if (!sent.ok) {
         setTableNotice({ ok: false, text: 'Gagal menandai pesanan terkirim ke dapur.' });
+        return;
+      }
+      if (fresh.length === 0) {
+        const done = await sent.json().catch(() => ({}));
+        setTableNotice({
+          ok: true,
+          text: done?.notesUpdated
+            ? 'Catatan diperbarui di layar dapur.'
+            : 'Semua pesanan meja ini sudah dikirim ke dapur.',
+        });
         return;
       }
       setReceipt({

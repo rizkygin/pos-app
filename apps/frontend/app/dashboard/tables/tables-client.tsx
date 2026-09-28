@@ -551,16 +551,17 @@ export function TablesClient({ cashierName }: { cashierName: string }) {
     const detail = await fetchDetail(session.id);
     if (!detail) return setBusy(false);
     const fresh = detail.lines.filter((l) => l.quantity > l.sentQty);
-    if (fresh.length === 0) {
-      setBusy(false);
-      flash(true, 'Semua pesanan sudah dikirim ke dapur');
-      return;
-    }
+    // Sent even with nothing new: a note edited after its dish went out still
+    // has to reach the kitchen screen.
     const res = await floorApi('POST', `/api/table-sessions/${session.id}/sent?timezone=${encodeURIComponent(tz)}`, {
       lineIds: fresh.map((l) => l.lineId),
     });
     setBusy(false);
     if (!res.ok) return flash(false, res.error);
+    if (fresh.length === 0) {
+      flash(true, res.data?.notesUpdated ? 'Catatan diperbarui di layar dapur' : 'Semua pesanan sudah dikirim ke dapur');
+      return;
+    }
     setReceipt({
       variant: 'kitchen',
       heading: `Tiket Dapur · Meja ${seatingLabel(session)}`,

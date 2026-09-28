@@ -10,6 +10,7 @@ import {
   TICKET_STATUSES,
   insertKitchenTicket,
   lockKitchen,
+  syncKitchenNotes,
   type KitchenLine,
   type TicketStatus,
 } from "../lib/kitchen";
@@ -198,10 +199,18 @@ export async function kitchenRoutes(app: FastifyInstance) {
       if (bad) throw new HttpError(400, bad);
       const lines = parsed as KitchenLine[];
 
-      const ticket = await db.transaction(async (tx) => {
+      const { ticket, notesUpdated } = await db.transaction(async (tx) => {
         // Before reading what was sent: two presses racing must not both see
         // the same "nothing sent yet" and hand the kitchen the cart twice.
         await lockKitchen(tx, access.outlet.id);
+        // A note typed after the dish was sent rides on the ticket the kitchen
+        // already has — the units below are only what is new.
+        const notesUpdated = await syncKitchenNotes(tx, {
+          outletId: access.outlet.id,
+          source: "counter",
+          sourceKey: tabKey,
+          lines,
+        });
         const earlier = await tx
           .select({ lines: kitchenTicketsTable.lines })
           .from(kitchenTicketsTable)
@@ -218,8 +227,8 @@ export async function kitchenRoutes(app: FastifyInstance) {
         const fresh = lines
           .map((l) => ({ ...l, qty: l.qty - (sent.get(l.lineId) ?? 0) }))
           .filter((l) => l.qty > 0);
-        if (!fresh.length) return null;
-        return insertKitchenTicket(tx, {
+        if (!fresh.length) return { ticket: null, notesUpdated };
+        const ticket = await insertKitchenTicket(tx, {
           outletId: access.outlet.id,
           timezone: timezoneOf(request),
           source: "counter",
@@ -231,9 +240,10 @@ export async function kitchenRoutes(app: FastifyInstance) {
           lines: fresh,
           createdBy: access.userId,
         });
+        return { ticket, notesUpdated };
       });
-      if (ticket) publishFloor(access.outlet.id, "ticket");
-      return { success: true, ticket };
+      if (ticket || notesUpdated) publishFloor(access.outlet.id, "ticket");
+      return { success: true, ticket, notesUpdated };
     });
   });
 

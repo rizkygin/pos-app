@@ -37,6 +37,7 @@ import { publishFloor, subscribeFloor } from "../lib/floor-events";
 import {
   KITCHEN_CALL_TTL_MS,
   insertKitchenTicket,
+  syncKitchenNotes,
   tableKitchenLine,
   type KitchenLine,
 } from "../lib/kitchen";
@@ -1298,10 +1299,21 @@ export async function tableRoutes(app: FastifyInstance) {
       const lineIds: string[] | null = Array.isArray(body.lineIds)
         ? body.lineIds.filter((x: unknown) => typeof x === "string").slice(0, 300)
         : null;
-      if (lineIds && lineIds.length === 0) return { success: true };
-      const ticket = await db.transaction(async (tx) => {
+      // An empty list marks nothing sent, but still carries edited notes over.
+      const marks = !lineIds || lineIds.length > 0;
+      const { ticket, notesUpdated } = await db.transaction(async (tx) => {
         const s = await lockLiveSession(tx, access.outlet.id, sessionId);
-        const fresh = (await unpaidLines(tx, sessionId, lineIds ?? undefined))
+        const unpaid = await unpaidLines(tx, sessionId);
+        // A note edited after its dish was sent rides on the ticket the
+        // kitchen already has; the units below are only what is new.
+        const notesUpdated = await syncKitchenNotes(tx, {
+          outletId: access.outlet.id,
+          source: "table",
+          lines: unpaid.map((l) => ({ lineId: l.id, note: l.note })),
+        });
+        const listed = lineIds ? new Set(lineIds) : null;
+        const fresh = unpaid
+          .filter((l) => !listed || listed.has(l.id))
           .map(tableKitchenLine)
           .filter((l): l is KitchenLine => l !== null);
         let made: { id: number; ticketNo: number } | null = null;
@@ -1318,20 +1330,22 @@ export async function tableRoutes(app: FastifyInstance) {
             createdBy: access.userId,
           });
         }
-        await tx
-          .update(tableSessionLinesTable)
-          .set({ sent_qty: sql`${tableSessionLinesTable.quantity}`, updated_at: new Date() })
-          .where(
-            and(
-              eq(tableSessionLinesTable.session_id, sessionId),
-              isNull(tableSessionLinesTable.order_id),
-              lineIds ? inArray(tableSessionLinesTable.id, lineIds) : undefined,
-            ),
-          );
-        return made;
+        if (marks) {
+          await tx
+            .update(tableSessionLinesTable)
+            .set({ sent_qty: sql`${tableSessionLinesTable.quantity}`, updated_at: new Date() })
+            .where(
+              and(
+                eq(tableSessionLinesTable.session_id, sessionId),
+                isNull(tableSessionLinesTable.order_id),
+                lineIds ? inArray(tableSessionLinesTable.id, lineIds) : undefined,
+              ),
+            );
+        }
+        return { ticket: made, notesUpdated };
       });
-      publishFloor(access.outlet.id, "kitchen", [sessionId]);
-      return { success: true, ticket };
+      if (marks || notesUpdated) publishFloor(access.outlet.id, "kitchen", [sessionId]);
+      return { success: true, ticket, notesUpdated };
     });
   });
 
