@@ -34,6 +34,7 @@ import {
 } from "../lib/tables";
 import { getOpenShift } from "../lib/shift";
 import { publishFloor, subscribeFloor } from "../lib/floor-events";
+import { openEventStream } from "../lib/sse";
 import {
   KITCHEN_CALL_TTL_MS,
   insertKitchenTicket,
@@ -608,43 +609,15 @@ export async function tableRoutes(app: FastifyInstance) {
    * lib/floor-events.ts); the device re-reads what it needs. Authorised once,
    * at connect — the stream itself carries nothing but "changed", so a device
    * whose access is revoked learns nothing from staying connected, and every
-   * re-read it triggers is checked again.
-   *
-   * A comment line every 20s keeps idle proxies from closing the connection,
-   * and `retry` tells the browser how soon to reconnect when one does anyway.
+   * re-read it triggers is checked again. Keep-alive and reconnect: see
+   * lib/sse.ts.
    */
   app.get("/api/floor/stream", async (request, reply) => {
     const access = await requireOutletAccess(request, reply, LIVE_LISTENERS);
     if (!access) return;
 
-    reply.hijack();
-    const res = reply.raw;
-    // Hijacking skips Fastify's send pipeline, so the headers already set on
-    // the reply — CORS above all, which a credentialed cross-origin
-    // EventSource cannot do without — are copied across by hand.
-    const headers: Record<string, string | string[]> = {};
-    for (const [k, v] of Object.entries(reply.getHeaders())) {
-      if (v !== undefined) headers[k] = Array.isArray(v) ? v.map(String) : String(v);
-    }
-    res.writeHead(200, {
-      ...headers,
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-      // nginx-style proxies buffer responses unless told not to.
-      "X-Accel-Buffering": "no",
-    });
-    res.write("retry: 3000\n\n");
-    res.write("event: ready\ndata: {}\n\n");
-
-    const unsubscribe = subscribeFloor(access.outlet.id, (event) => {
-      res.write(`event: floor\ndata: ${JSON.stringify(event)}\n\n`);
-    });
-    const ping = setInterval(() => res.write(": ping\n\n"), 20_000);
-    request.raw.on("close", () => {
-      clearInterval(ping);
-      unsubscribe();
-    });
+    const stream = openEventStream(request, reply);
+    stream.onClose(subscribeFloor(access.outlet.id, (event) => stream.send("floor", event)));
   });
 
   // ── Layout: zones, tables, walls ───────────────────────────────────────────

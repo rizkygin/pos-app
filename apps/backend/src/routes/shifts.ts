@@ -5,6 +5,8 @@ import { cashierShiftsTable, usersTable } from "../db/schema";
 import { hasFeature, requireOutletAccess } from "../lib/outlet-access";
 import { buildShiftReport, getOpenShift, listRecentShifts, listShiftsInRange } from "../lib/shift";
 import { money } from "../lib/money-sql";
+import { publishShift, subscribeShift } from "../lib/shift-events";
+import { openEventStream } from "../lib/sse";
 
 /**
  * Cashier shifts: open the drawer with a float, close it with a count.
@@ -25,6 +27,10 @@ import { money } from "../lib/money-sql";
  * alternative is a till that can never be reconciled and takings stranded
  * behind a paywall, which is the same "data held hostage" the expiry rules
  * elsewhere are written to avoid.
+ *
+ * Every open and close is pushed to the outlet's other tills over
+ * GET /api/shifts/stream (lib/shift-events.ts), so a shift opened on the
+ * Android app shows up on the web cashier and the other way round.
  */
 
 const SHIFT_FEATURE = "cashierShift";
@@ -66,6 +72,23 @@ export async function shiftRoutes(app: FastifyInstance) {
 
     const report = await buildShiftReport(open.id, access.outlet.id);
     return { success: true, shift: report, canOpen };
+  });
+
+  /**
+   * Live updates for the outlet's shift, as Server-Sent Events.
+   *
+   * Pushes a `shift` event — `{ reason: "open" | "close", shiftId, at }` — when
+   * any device opens or closes this outlet's shift; the device re-reads
+   * /api/shifts/current. Authorised once, at connect, on the same permission
+   * as that read, and like it deliberately NOT plan-gated: a till on a lapsed
+   * plan still has to learn that its open shift was closed elsewhere.
+   */
+  app.get("/api/shifts/stream", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, "cashier");
+    if (!access) return;
+
+    const stream = openEventStream(request, reply);
+    stream.onClose(subscribeShift(access.outlet.id, (event) => stream.send("shift", event)));
   });
 
   /** Recent shifts, for reprinting a slip that jammed or went missing. */
@@ -216,6 +239,7 @@ export async function shiftRoutes(app: FastifyInstance) {
           opening_float: openingFloat.toFixed(2),
         })
         .returning({ id: cashierShiftsTable.id });
+      publishShift(access.outlet.id, "open", shift.id);
 
       const report = await buildShiftReport(shift.id, access.outlet.id);
       return { success: true, shift: report };
@@ -317,6 +341,7 @@ export async function shiftRoutes(app: FastifyInstance) {
     if (result.status !== 200) {
       return reply.status(result.status).send({ success: false, error: result.error });
     }
+    publishShift(access.outlet.id, "close", result.shiftId);
 
     const report = await buildShiftReport(result.shiftId, access.outlet.id);
     return { success: true, shift: report };

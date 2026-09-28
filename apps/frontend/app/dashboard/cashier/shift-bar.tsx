@@ -30,6 +30,10 @@ import {
  * Selling without an open shift is allowed — the bar nags, it does not block.
  * Blocking the till because someone forgot to tap a button is how a feature
  * gets switched off for good, and the sale still has to happen either way.
+ *
+ * The outlet's one shift is shared with every other till (the Android app, a
+ * second tablet), so the bar listens on /api/shifts/stream and re-reads when
+ * any of them opens or closes it.
  */
 
 const fmt = (n: number) =>
@@ -86,6 +90,13 @@ export function ShiftBar({
     onShiftChangeRef.current = onShiftChange;
   });
   const [shift, setShift] = useState<ShiftReport | null>(null);
+  // The open shift's id as last shown, to tell a load that found another
+  // device's open or close apart from one that only refreshed the figures.
+  // Written wherever `shift` is.
+  const shiftIdRef = useRef<number | null>(null);
+  // Bumped by every load and by our own open/close, so a read that was already
+  // in flight when either happened can't land afterwards with the old state.
+  const loadSeqRef = useRef(0);
   const [loading, setLoading] = useState(true);
   const [dialog, setDialog] = useState<'open' | 'close' | null>(null);
   const [report, setReport] = useState<ShiftReport | null>(null);
@@ -97,23 +108,36 @@ export function ShiftBar({
   const [noteInput, setNoteInput] = useState('');
 
   const load = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     try {
       const res = await fetch(`${API_URL}/api/shifts/current`, {
         credentials: 'include',
       });
+      if (seq !== loadSeqRef.current) return;
       if (!res.ok) {
         setShift(null);
         return;
       }
       const body = await res.json();
-      setShift(body.shift ?? null);
-      onShiftChangeRef.current?.(body.shift?.shift.id ?? null);
+      if (seq !== loadSeqRef.current) return;
+      const next: ShiftReport | null = body.shift ?? null;
+      const nextId = next?.shift.id ?? null;
+      // Opened or closed on another device under an open dialog: Buka Shift
+      // would only 409, and a count typed into Tutup Shift was for a drawer
+      // that is no longer the one open.
+      if (nextId !== shiftIdRef.current) setDialog(null);
+      shiftIdRef.current = nextId;
+      setShift(next);
+      onShiftChangeRef.current?.(nextId);
     } catch {
+      if (seq !== loadSeqRef.current) return;
       // Offline or backend down. The bar goes quiet rather than throwing a
       // dialog over a screen someone is trying to sell from.
       setShift(null);
     } finally {
-      setLoading(false);
+      // Only the read that counts: the mount read and the stream's first
+      // `ready` race, and the loser must not reveal "Shift belum dibuka".
+      if (seq === loadSeqRef.current) setLoading(false);
     }
   }, []);
 
@@ -122,6 +146,42 @@ export function ShiftBar({
     // shift open must keep seeing it until someone closes it.
     load();
   }, [load, refreshSignal]);
+
+  // Live: another till opened or closed the shift. Not needed on a plan
+  // without shifts once nothing is open — nobody there can open one.
+  const live = canUseShift || shift !== null;
+  useEffect(() => {
+    if (!live || typeof EventSource === 'undefined') return;
+    let es: EventSource | null = null;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let disposed = false;
+    const connect = () => {
+      es = new EventSource(`${API_URL}/api/shifts/stream`, { withCredentials: true });
+      // (Re)connected: whatever changed while we were not listening.
+      es.addEventListener('ready', () => void load());
+      es.addEventListener('shift', () => void load());
+      es.onerror = () => {
+        // An HTTP error (a deploy's 502, an expired session) closes the
+        // stream for good instead of letting the browser retry. Start over.
+        if (es?.readyState === EventSource.CLOSED && !disposed) {
+          es.close();
+          retry = setTimeout(connect, 5000);
+        }
+      };
+    };
+    connect();
+    // A tablet that slept may have held a dead connection the whole time.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void load();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      disposed = true;
+      clearTimeout(retry);
+      es?.close();
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [live, load]);
 
   const openShift = async () => {
     setSubmitting(true);
@@ -141,12 +201,16 @@ export function ShiftBar({
         // 409 carries the shift that already exists, so a second tap lands the
         // cashier on the running shift instead of an error they can't act on.
         if (body?.shift) {
+          loadSeqRef.current++;
+          shiftIdRef.current = body.shift.shift.id;
           setShift(body.shift);
           onShiftChangeRef.current?.(body.shift.shift.id);
         }
         setError(body?.error ?? 'Gagal membuka shift');
         return;
       }
+      loadSeqRef.current++;
+      shiftIdRef.current = body.shift.shift.id;
       setShift(body.shift);
       onShiftChangeRef.current?.(body.shift.shift.id);
       setDialog(null);
@@ -176,6 +240,8 @@ export function ShiftBar({
         setError(body?.error ?? 'Gagal menutup shift');
         return;
       }
+      loadSeqRef.current++;
+      shiftIdRef.current = null;
       setShift(null);
       onShiftChangeRef.current?.(null);
       setDialog(null);
