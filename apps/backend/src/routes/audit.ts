@@ -3,6 +3,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { db, reportDb } from "../db";
 import { cashierShiftsTable } from "../db/schema";
 import { requireOutletOwnerOrAdmin } from "../lib/outlet-access";
+import { lateCashSql } from "../lib/shift";
 import { money, orderDiscount } from "../lib/money-sql";
 import { getUTCRangeFromLocalDate } from "../lib/timezone";
 import { loadFailure } from "./reports";
@@ -331,9 +332,10 @@ export async function auditRoutes(app: FastifyInstance) {
               cashierName: cashierShiftsTable.cashier_name,
               openedAt: cashierShiftsTable.opened_at,
               closedAt: cashierShiftsTable.closed_at,
-              expectedCash: cashierShiftsTable.expected_cash,
+              // As the slip prints them: frozen, plus the shift's late sales.
+              expectedCash: sql<string | null>`${cashierShiftsTable.expected_cash} + ${lateCashSql(cashierShiftsTable.id)}`,
               countedCash: cashierShiftsTable.counted_cash,
-              variance: cashierShiftsTable.variance,
+              variance: sql<string | null>`${cashierShiftsTable.variance} - ${lateCashSql(cashierShiftsTable.id)}`,
             })
             .from(cashierShiftsTable)
             .where(

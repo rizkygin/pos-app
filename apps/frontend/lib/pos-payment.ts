@@ -37,13 +37,44 @@ export const POS_PAYMENT_OPTIONS: {
   { value: 'transfer', label: 'Transfer', chip: 'Transfer', short: 'TRANSFER' },
 ];
 
+/**
+ * Bayar Campuran: one sale paid several ways. The order's paymentMethod reads
+ * 'mixed' and note.payments lists what each method covered. Never offered as
+ * a chip — the cashier builds the tender list instead. See the backend's
+ * lib/pos-payment.ts for how each tender is booked.
+ */
+export const MIXED_PAYMENT = 'mixed';
+
+/** What one method covered of a mixed sale. Amounts sum to the bill. */
+export type PosTender = { method: PosPaymentMethod; amount: number };
+
+/** The most rows one sale takes; the backend refuses more (MAX_TENDERS there). */
+export const MAX_TENDERS = 10;
+
 const LABELS: Record<string, string> = {
   ...Object.fromEntries(POS_PAYMENT_OPTIONS.map((o) => [o.value, o.label])),
   // Legacy rows, still readable.
   non_cash: 'Non-Tunai',
+  [MIXED_PAYMENT]: 'Campuran',
 };
 
 export const posPaymentLabel = (v: string) => LABELS[v] ?? v;
 
 /** Everything that isn't physical money in the drawer. */
 export const isCashMethod = (v: string) => v === 'cash';
+
+/**
+ * A bill in N equal shares, as the pre-bill prints them: everyone but the last
+ * pays the rounded-up share ("Rp X/org"), the last pays what is left, so the
+ * shares sum to the bill exactly and match the slip the table was handed.
+ */
+export function evenShares(total: number, n: number): number[] {
+  if (!(n > 1) || !(total > 0)) return [Math.max(0, total)];
+  const share = Math.ceil(total / n);
+  // Greedy, so a tiny bill split many ways (Rp 5 among 4: 2, 2, 1) runs out
+  // of money before it runs out of people instead of handing out a zero or a
+  // negative tender.
+  const shares: number[] = [];
+  for (let left = total; left > 0; left -= share) shares.push(Math.min(share, left));
+  return shares;
+}

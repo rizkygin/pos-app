@@ -1,9 +1,9 @@
 import { and, eq, isNull, desc } from "drizzle-orm";
-import { sql } from "drizzle-orm";
+import { sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { db } from "../db";
 import { cashierShiftsTable, outletsTable } from "../db/schema";
 import { money, orderDiscount } from "./money-sql";
-import { posPaymentLabel } from "./pos-payment";
+import { MIXED_PAYMENT, posPaymentLabel } from "./pos-payment";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -35,6 +35,144 @@ export async function getOpenShiftId(tx: Tx | typeof db, outletId: number) {
   return shift?.id ?? null;
 }
 
+/**
+ * How far a till's clock may be off from the server's before a sale it stamps
+ * next to a shift's opening or closing reads as the other side of it.
+ */
+const SALE_CLOCK_SLACK_MS = 60_000;
+
+/** The shift a sale is filed under, and whether it got there after the close. */
+export type SaleShift = { id: number; afterClose: boolean };
+
+/**
+ * Cash a closed shift's own late sales put in (getShiftForSale's `afterClose`):
+ * drawer money that expected_cash, frozen at the count, could not have known
+ * about. Every reader adds it on top of the frozen figures — expected up,
+ * variance down by the same amount — instead of it being written into them,
+ * so the columns keep what the slip said when it was signed and the late part
+ * is always visible as the difference.
+ *
+ * A late sale voided afterwards still counts: its cash went into this drawer
+ * and the refund comes out of whichever one is open then, the same as any
+ * other sale voided after its shift closed.
+ */
+export const lateCashSql = (shiftId: SQL | AnyColumn | number) => sql`(
+  select coalesce(sum(${money(sql`ci.money_amount`)}), 0)
+    from "cashFlows" cf
+    join "cashInDetailTable" ci on ci.id = cf.cash_in_detail_id
+    join orders o on o.id = cf.order_id
+   where cf.shift_id = ${shiftId}
+     and ci.type = 'cash'
+     and o.shift_id = cf.shift_id
+     and o.after_shift_close
+)`;
+
+/**
+ * An order as the tenders that paid it: one (method, amount) row per tender,
+ * for a lateral join. `o` is any alias carrying the order's `note` (a `json`
+ * column, not jsonb — hence the json_* functions);
+ * `collected` is what the order took in (lines − discount + tax on top).
+ *
+ * A single-method sale is one row: its method, the whole of `collected`. A
+ * mixed sale (Bayar Campuran) is one row per entry of note.payments, scaled so
+ * the rows sum to `collected` exactly. The stored amounts were checked against
+ * the server's total at checkout and already add up; scaling only guards the
+ * slip's promise that its payment lines foot to its own total, the same
+ * promise a single-method row keeps by construction. See lib/pos-payment.ts.
+ */
+export const orderTendersSql = (o: SQL, collected: SQL) => sql`(
+  select e ->> 'method' as method,
+         ${collected} * (e ->> 'amount')::numeric
+           / nullif(sum((e ->> 'amount')::numeric) over (), 0) as amount
+    from json_array_elements(
+           case when ${o}.note ->> 'paymentMethod' = ${MIXED_PAYMENT}
+                 and json_typeof(${o}.note -> 'payments') = 'array'
+                then ${o}.note -> 'payments' end
+         ) e
+  union all
+  select coalesce(nullif(${o}.note ->> 'paymentMethod', ''), 'cash'), ${collected}
+   where not coalesce(${o}.note ->> 'paymentMethod' = ${MIXED_PAYMENT}
+                      and json_typeof(${o}.note -> 'payments') = 'array', false)
+)`;
+
+/**
+ * The shift a counter sale belongs to.
+ *
+ * An offline till (the Android app's queue) sends its sales when it
+ * reconnects, and by then the shift it sold in may have been closed on another
+ * device and the next one opened. So a till that says which shift it rang the
+ * sale up under (`claimedShiftId`) is believed when that shift is this
+ * outlet's and the sale time falls inside it, give or take the clock slack —
+ * even if it has closed since. Such a sale comes back `afterClose`: it counts
+ * as that shift's sale like any other, and its cash raises the drawer's
+ * expected total on top of the frozen count (lateCashSql), so the slip names
+ * it on its own line (buildShiftReport's `lateSales`) as what moved SELISIH.
+ *
+ * Without a claim that holds, the open shift, unless the till says the sale
+ * happened before that shift was opened — then none. Stamping it onto the new
+ * shift would put cash the last close already counted into this drawer's
+ * expected total: the old shift reads "lebih", this one "kurang", and the
+ * cashier who just opened it is blamed for money that was never in their
+ * drawer. Left on no shift it is still in every date-based report, just on no
+ * closing slip — the same rule a backdated manual cash entry follows.
+ *
+ * `soldAt` null (the sale is happening now) is always the open shift; a claim
+ * with no sale time to check it against is not taken.
+ *
+ * The shift row is locked FOR KEY SHARE until the sale commits, so a close
+ * racing it either sees this sale in the drawer or waits and finds it filed as
+ * arrived after — never a sale inside a count that did not include it.
+ */
+export async function getShiftForSale(
+  tx: Tx,
+  outletId: number,
+  soldAt: Date | null,
+  claimedShiftId: number | null = null,
+): Promise<SaleShift | null> {
+  if (soldAt && claimedShiftId !== null) {
+    const [claimed] = await tx
+      .select({
+        id: cashierShiftsTable.id,
+        openedAt: cashierShiftsTable.opened_at,
+        closedAt: cashierShiftsTable.closed_at,
+      })
+      .from(cashierShiftsTable)
+      .where(
+        and(
+          eq(cashierShiftsTable.id, claimedShiftId),
+          eq(cashierShiftsTable.outlet_id, outletId),
+        ),
+      )
+      .limit(1)
+      .for("key share");
+    const at = soldAt.getTime();
+    if (
+      claimed &&
+      at >= new Date(claimed.openedAt).getTime() - SALE_CLOCK_SLACK_MS &&
+      (claimed.closedAt === null || at <= new Date(claimed.closedAt).getTime() + SALE_CLOCK_SLACK_MS)
+    ) {
+      return { id: claimed.id, afterClose: claimed.closedAt !== null };
+    }
+  }
+
+  const [open] = await tx
+    .select({ id: cashierShiftsTable.id, openedAt: cashierShiftsTable.opened_at })
+    .from(cashierShiftsTable)
+    .where(
+      and(
+        eq(cashierShiftsTable.outlet_id, outletId),
+        isNull(cashierShiftsTable.closed_at),
+      ),
+    )
+    .limit(1)
+    .for("key share");
+  if (!open) return null;
+  if (soldAt && soldAt.getTime() < new Date(open.openedAt).getTime() - SALE_CLOCK_SLACK_MS) {
+    return null;
+  }
+  return { id: open.id, afterClose: false };
+}
+
 export type ShiftPaymentLine = {
   method: string;
   label: string;
@@ -60,7 +198,10 @@ export type ShiftReport = {
     openingFloat: number;
     cashIn: number;
     cashOut: number;
-    /** openingFloat + cashIn - cashOut. Frozen once the shift is closed. */
+    /**
+     * openingFloat + cashIn - cashOut. Frozen once the shift is closed, plus
+     * the cash of any sale that arrived after the close (lateSales.cash).
+     */
     expectedCash: number;
     /**
      * How much of the drawer is tax the shop is holding for the tax office.
@@ -99,20 +240,34 @@ export type ShiftReport = {
      */
     collected: number;
     orderCount: number;
+    /**
+     * Of orderCount, the sales paid several ways (Bayar Campuran). Each sits
+     * in more than one payment line, so the lines' counts add up to more than
+     * orderCount by this much; the slip says so rather than leave it a puzzle.
+     */
+    mixedOrderCount: number;
     itemCount: number;
   };
   payments: ShiftPaymentLine[];
   cancelled: { count: number; amount: number };
+  /**
+   * Sales rung up in this shift that reached the server after it was closed
+   * (an offline till's queue), voided or not. Already inside every figure
+   * above, like any other sale of the shift; listed on their own because
+   * `cash` is what moved expectedCash and variance off the signed count.
+   * `amount` is what customers handed over, tax on top included.
+   */
+  lateSales: { count: number; amount: number; cash: number };
   topProducts: { name: string; qty: number; amount: number }[];
 };
 
 /**
  * Everything the closing slip prints, for one shift.
  *
- * Four small indexed queries rather than one clever join: they aggregate over
- * different grains (orders, cash movements, voided orders, product lines) and
- * fusing them would either fan rows out and double count the money, or need
- * enough DISTINCTs to cost more than the four round trips. Each one is bounded
+ * Five small indexed queries rather than one clever join: they aggregate over
+ * different grains (orders, cash movements, voided orders, late arrivals,
+ * product lines) and fusing them would either fan rows out and double count
+ * the money, or need enough DISTINCTs to cost more than the five round trips. Each one is bounded
  * by a single shift, so none of them is a report-sized query — this runs on the
  * live pool, not reportDb, because a cashier waiting to go home should not
  * queue behind an owner's three-month analysis.
@@ -140,16 +295,25 @@ export async function buildShiftReport(
   const isOpen = shift.closed_at === null;
 
   // ── Sales, bucketed by how they were paid ─────────────────────────────────
-  // One pass gives both the payment breakdown and the revenue totals, which is
-  // the point: computing them separately is how the two end up disagreeing.
+  // One statement gives both the payment breakdown and the revenue totals,
+  // which is the point: computing them separately is how the two end up
+  // disagreeing.
   //
-  // Net per bucket is gross minus that order's discount, so the payment lines
-  // sum to TOTAL PENJUALAN NETTO exactly. A cashier who has to explain a
-  // discrepancy should never be handed a slip whose own sections don't add up.
+  // They are two grains, though. The totals are counted per ORDER; the payment
+  // lines per TENDER, because a mixed sale (Bayar Campuran) sits in two lines
+  // at once — its cash part under Tunai, its QRIS part under QRIS. So the lines
+  // come from the tender expansion and the totals from the orders, and the
+  // 'total' row below is the only place orderCount is read from: summing the
+  // lines' counts would count a mixed sale twice.
+  //
+  // Each line is what was tendered, so the lines sum to `collected` exactly. A
+  // cashier who has to explain a discrepancy should never be handed a slip
+  // whose own sections don't add up.
+  const collected = sql`(po.gross - po.discount + po.tax_on_top)`;
   const salesResult = await db.execute(sql`
     with per_order as (
       select o.id,
-             coalesce(nullif(o.note ->> 'paymentMethod', ''), 'cash') as method,
+             o.note,
              ${orderDiscount(sql`o`)} as discount,
              coalesce(o.tax_amount, 0) as tax,
              -- What this order actually put in the till. Exclusive tax was
@@ -170,20 +334,35 @@ export async function buildShiftReport(
         from orders o
        where o.shift_id = ${shiftId}
          and o.deleted_at is null
+    ),
+    lines as (
+      select t.method,
+             count(distinct po.id)::int as order_count,
+             sum(t.amount)::float8      as amount,
+             -- The tax riding on each tender, in proportion to its share of
+             -- the order: only the part tendered in cash is in the drawer.
+             coalesce(sum(po.tax_on_top * t.amount / nullif(${collected}, 0)), 0)::float8 as tax_on_top
+        from per_order po
+        cross join lateral ${orderTendersSql(sql`po`, collected)} t
+       group by t.method
     )
-    select method,
-           count(*)::int             as order_count,
-           sum(gross)::float8        as gross,
-           sum(discount)::float8     as discount,
-           sum(tax)::float8          as tax,
-           sum(tax_on_top)::float8   as tax_on_top,
-           sum(items)::int           as items
+    select 'line' as kind, method, order_count, amount, tax_on_top,
+           null::float8 as gross, null::float8 as discount, null::float8 as tax,
+           null::int as items, null::int as mixed_count
+      from lines
+    union all
+    select 'total', null, count(*)::int, null, sum(tax_on_top)::float8,
+           sum(gross)::float8, sum(discount)::float8, sum(tax)::float8,
+           sum(items)::int,
+           count(*) filter (where note ->> 'paymentMethod' = ${MIXED_PAYMENT})::int
       from per_order
-     group by method
-     order by sum(gross - discount + tax_on_top) desc
   `);
 
-  const paymentRows = salesResult.rows as any[];
+  const salesRows = salesResult.rows as any[];
+  const totalsRow = salesRows.find((r) => r.kind === "total") ?? {};
+  const paymentRows = salesRows
+    .filter((r) => r.kind === "line")
+    .sort((a, b) => Number(b.amount) - Number(a.amount));
   // Payment lines report what was TENDERED, tax included — they are what a
   // cashier reconciles against EDC settlements and the cash in the drawer, and
   // the customer tendered the tax too. So they foot to `collected`, not to
@@ -191,20 +370,21 @@ export async function buildShiftReport(
   const payments: ShiftPaymentLine[] = paymentRows.map((r) => ({
     method: String(r.method),
     label: posPaymentLabel(String(r.method)),
-    amount: Number(r.gross) - Number(r.discount) + Number(r.tax_on_top),
+    amount: Number(r.amount),
     orderCount: Number(r.order_count),
   }));
 
-  const gross = paymentRows.reduce((a, r) => a + Number(r.gross), 0);
-  const discount = paymentRows.reduce((a, r) => a + Number(r.discount), 0);
-  const tax = paymentRows.reduce((a, r) => a + Number(r.tax), 0);
-  const taxOnTop = paymentRows.reduce((a, r) => a + Number(r.tax_on_top), 0);
-  // Only the cash bucket's tax actually landed in the till.
+  const gross = Number(totalsRow.gross ?? 0);
+  const discount = Number(totalsRow.discount ?? 0);
+  const tax = Number(totalsRow.tax ?? 0);
+  const taxOnTop = Number(totalsRow.tax_on_top ?? 0);
+  // Only the cash tenders' tax actually landed in the till.
   const taxInDrawer = paymentRows
     .filter((r) => String(r.method) === "cash")
     .reduce((a, r) => a + Number(r.tax_on_top), 0);
-  const orderCount = paymentRows.reduce((a, r) => a + Number(r.order_count), 0);
-  const itemCount = paymentRows.reduce((a, r) => a + Number(r.items), 0);
+  const orderCount = Number(totalsRow.order_count ?? 0);
+  const mixedOrderCount = Number(totalsRow.mixed_count ?? 0);
+  const itemCount = Number(totalsRow.items ?? 0);
 
   // ── The drawer ────────────────────────────────────────────────────────────
   // Only type='cash' movements count. A QRIS sale books as 'transfer' and must
@@ -214,7 +394,8 @@ export async function buildShiftReport(
     select coalesce(sum(case when ci.type = 'cash'
                              then ${money(sql`ci.money_amount`)} else 0 end), 0)::float8 as cash_in,
            coalesce(sum(case when co.type = 'cash'
-                             then ${money(sql`co.money_amount`)} else 0 end), 0)::float8 as cash_out
+                             then ${money(sql`co.money_amount`)} else 0 end), 0)::float8 as cash_out,
+           ${lateCashSql(shiftId)}::float8 as late_cash
       from "cashFlows" cf
       left join "cashInDetailTable"  ci on ci.id = cf.cash_in_detail_id
       left join "cashOutDetailTable" co on co.id = cf.cash_out_detail_id
@@ -222,14 +403,18 @@ export async function buildShiftReport(
   `);
   const cashIn = Number((cashResult.rows[0] as any)?.cash_in ?? 0);
   const cashOut = Number((cashResult.rows[0] as any)?.cash_out ?? 0);
+  const lateCash = Number((cashResult.rows[0] as any)?.late_cash ?? 0);
 
   const openingFloat = Number(shift.opening_float ?? 0);
   // A closed shift reports the figure that was on its slip, not a recomputed
   // one: a cancellation booked after the count would otherwise quietly move the
-  // discrepancy someone already signed for.
+  // discrepancy someone already signed for. The one thing added on top is the
+  // shift's own sales that arrived after the count — they were sold into this
+  // drawer, and leaving them out would call a drawer holding them "lebih".
   const expectedCash = isOpen
     ? openingFloat + cashIn - cashOut
-    : Number(shift.expected_cash ?? 0);
+    : Number(shift.expected_cash ?? 0) + lateCash;
+  const variance = shift.variance === null ? null : Number(shift.variance) - lateCash;
 
   // ── Voided sales ──────────────────────────────────────────────────────────
   // Shown, not hidden. A cancellation reverses the money in the ledger, so it
@@ -254,6 +439,30 @@ export async function buildShiftReport(
   const cancelled = {
     count: Number((cancelledResult.rows[0] as any)?.count ?? 0),
     amount: Number((cancelledResult.rows[0] as any)?.amount ?? 0),
+  };
+
+  // ── Arrived after the close ───────────────────────────────────────────────
+  // Priced like the payment lines: what was tendered, exclusive tax on top.
+  // Voided ones too, because their cash is in lateCash (see lateCashSql); the
+  // cash figure is that ledger sum, so this line and the drawer can't disagree.
+  const lateResult = await db.execute(sql`
+    select count(*)::int as count,
+           coalesce(sum(
+             coalesce((select sum(${money(sql`od.summary_price`)})
+                         from "orderDetails" od where od.order_id = o.id), 0)
+             - ${orderDiscount(sql`o`)}
+             + case when coalesce(o.tax_inclusive, false) then 0
+                    else coalesce(o.tax_amount, 0) end
+           ), 0)::float8 as amount
+      from orders o
+     where o.shift_id = ${shiftId}
+       and o.after_shift_close
+  `);
+  const late = lateResult.rows[0] as any;
+  const lateSales = {
+    count: Number(late?.count ?? 0),
+    amount: Number(late?.amount ?? 0),
+    cash: lateCash,
   };
 
   // ── What actually sold ────────────────────────────────────────────────────
@@ -294,7 +503,7 @@ export async function buildShiftReport(
       expectedCash,
       taxInDrawer,
       countedCash: shift.counted_cash === null ? null : Number(shift.counted_cash),
-      variance: shift.variance === null ? null : Number(shift.variance),
+      variance,
       closingNote: shift.closing_note ?? null,
     },
     revenue: {
@@ -308,10 +517,12 @@ export async function buildShiftReport(
       tax,
       collected: gross - discount + taxOnTop,
       orderCount,
+      mixedOrderCount,
       itemCount,
     },
     payments,
     cancelled,
+    lateSales,
     topProducts: (topResult.rows as any[]).map((r) => ({
       name: String(r.name ?? ""),
       qty: Number(r.qty),
@@ -320,17 +531,21 @@ export async function buildShiftReport(
   };
 }
 
-/** Most recent shifts at an outlet, newest first — the reprint list. */
+/**
+ * Most recent shifts at an outlet, newest first — the reprint list. Expected
+ * and variance carry late sales the way the slip does; NULL (open) stays NULL.
+ */
 export async function listRecentShifts(outletId: number, limit: number) {
+  const lateCash = lateCashSql(cashierShiftsTable.id);
   return db
     .select({
       id: cashierShiftsTable.id,
       cashierName: cashierShiftsTable.cashier_name,
       openedAt: cashierShiftsTable.opened_at,
       closedAt: cashierShiftsTable.closed_at,
-      expectedCash: cashierShiftsTable.expected_cash,
+      expectedCash: sql<string | null>`${cashierShiftsTable.expected_cash} + ${lateCash}`,
       countedCash: cashierShiftsTable.counted_cash,
-      variance: cashierShiftsTable.variance,
+      variance: sql<string | null>`${cashierShiftsTable.variance} - ${lateCash}`,
     })
     .from(cashierShiftsTable)
     .where(eq(cashierShiftsTable.outlet_id, outletId))
@@ -354,6 +569,12 @@ export type ShiftListRow = {
   nonCashCollected: number;
   orderCount: number;
   cancelledCount: number;
+  /**
+   * Arrived after the close, voided or not: already in every figure here, as
+   * on the slip — counted so the page can say what moved the variance.
+   */
+  lateCount: number;
+  lateAmount: number;
   cashIn: number;
   cashOut: number;
   expectedCash: number;
@@ -389,17 +610,25 @@ export async function listShiftsInRange(
              coalesce(sum(case when o.deleted_at is null then po.gross - po.discount else 0 end), 0)::float8 as net,
              coalesce(sum(case when o.deleted_at is null then coalesce(o.tax_amount, 0) else 0 end), 0)::float8 as tax,
              coalesce(sum(case when o.deleted_at is null then po.gross - po.discount + po.tax_on_top else 0 end), 0)::float8 as collected,
-             coalesce(sum(case when o.deleted_at is null and po.method = 'cash'
-                               then po.gross - po.discount + po.tax_on_top else 0 end), 0)::float8 as cash_collected
+             -- The cash TENDERS, not the cash orders: a mixed sale adds only
+             -- the part of it that was paid in cash.
+             coalesce(sum(case when o.deleted_at is null then pc.cash else 0 end), 0)::float8 as cash_collected,
+             count(*) filter (where o.after_shift_close)::int as late_count,
+             coalesce(sum(case when o.after_shift_close
+                               then po.gross - po.discount + po.tax_on_top else 0 end), 0)::float8 as late_amount
         from orders o
         cross join lateral (
-          select coalesce(nullif(o.note ->> 'paymentMethod', ''), 'cash') as method,
-                 ${orderDiscount(sql`o`)} as discount,
+          select ${orderDiscount(sql`o`)} as discount,
                  case when coalesce(o.tax_inclusive, false) then 0
                       else coalesce(o.tax_amount, 0) end as tax_on_top,
                  coalesce((select sum(${money(sql`od.summary_price`)})
                              from "orderDetails" od where od.order_id = o.id), 0) as gross
         ) po
+        cross join lateral (
+          select coalesce(sum(t.amount), 0) as cash
+            from ${orderTendersSql(sql`o`, sql`(po.gross - po.discount + po.tax_on_top)`)} t
+           where t.method = 'cash'
+        ) pc
        where o.outlet_id = ${outletId}
          and o.shift_id is not null
        group by o.shift_id
@@ -425,12 +654,15 @@ export async function listShiftsInRange(
            s.closing_note,
            coalesce(sa.order_count, 0)     as order_count,
            coalesce(sa.cancelled_count, 0) as cancelled_count,
+           coalesce(sa.late_count, 0)      as late_count,
+           coalesce(sa.late_amount, 0)     as late_amount,
            coalesce(sa.net, 0)             as net,
            coalesce(sa.tax, 0)             as tax,
            coalesce(sa.collected, 0)       as collected,
            coalesce(sa.cash_collected, 0)  as cash_collected,
            coalesce(c.cash_in, 0)          as cash_in,
-           coalesce(c.cash_out, 0)         as cash_out
+           coalesce(c.cash_out, 0)         as cash_out,
+           ${lateCashSql(sql`s.id`)}::float8 as late_cash
       from cashier_shifts s
       left join sales sa on sa.shift_id = s.id
       left join cash  c  on c.shift_id  = s.id
@@ -447,6 +679,7 @@ export async function listShiftsInRange(
     const cashOut = Number(r.cash_out);
     const collected = Number(r.collected);
     const cashCollected = Number(r.cash_collected);
+    const lateCash = Number(r.late_cash);
     return {
       id: Number(r.id),
       cashierName: String(r.cashier_name),
@@ -461,13 +694,15 @@ export async function listShiftsInRange(
       nonCashCollected: collected - cashCollected,
       orderCount: Number(r.order_count),
       cancelledCount: Number(r.cancelled_count),
+      lateCount: Number(r.late_count),
+      lateAmount: Number(r.late_amount),
       cashIn,
       cashOut,
-      // Closed shifts report the frozen figure from their slip (see
-      // buildShiftReport for why); an open one is computed live.
-      expectedCash: isOpen ? openingFloat + cashIn - cashOut : Number(r.expected_cash ?? 0),
+      // Closed shifts report the frozen figure from their slip plus late cash
+      // (see buildShiftReport for why); an open one is computed live.
+      expectedCash: isOpen ? openingFloat + cashIn - cashOut : Number(r.expected_cash ?? 0) + lateCash,
       countedCash: r.counted_cash === null ? null : Number(r.counted_cash),
-      variance: r.variance === null ? null : Number(r.variance),
+      variance: r.variance === null ? null : Number(r.variance) - lateCash,
       closingNote: r.closing_note ?? null,
     };
   });

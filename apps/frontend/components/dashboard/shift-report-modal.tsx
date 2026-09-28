@@ -53,12 +53,29 @@ export type ShiftReport = {
     /** What customers handed over: the figure the payment lines foot to. */
     collected: number;
     orderCount: number;
+    /**
+     * Of orderCount, the sales paid several ways (Bayar Campuran). Each is in
+     * more than one payment line, so the lines' (Nx) add up to more than
+     * orderCount by this much. Absent from a backend that predates it.
+     */
+    mixedOrderCount?: number;
     itemCount: number;
   };
   payments: { method: string; label: string; amount: number; orderCount: number }[];
   cancelled: { count: number; amount: number };
+  /**
+   * Sales rung up in this shift that reached the server after it closed (an
+   * offline till's queue). Already inside every figure above — SALDO SISTEM
+   * and SELISIH included — and listed apart because `cash` is how far they
+   * moved the drawer off the count that was signed.
+   * Optional only for a report fetched before the server sent it.
+   */
+  lateSales?: { count: number; amount: number; cash: number };
   topProducts: { name: string; qty: number; amount: number }[];
 };
+
+const LATE_LABEL = "Masuk setelah tutup shift";
+const LATE_NOTE = "Sudah termasuk di saldo sistem & selisih di atas.";
 
 const fmt = (n: number) =>
   new Intl.NumberFormat("id-ID", {
@@ -179,6 +196,15 @@ function buildShiftEscposBase64(r: ShiftReport, paper: PaperWidth): string {
     else if ((r.drawer.variance ?? 0) < 0) line("Uang laci KURANG.");
     else line("Uang laci LEBIH.");
   }
+  // Right under SELISIH, because it is usually what explains it: cash from an
+  // offline till that the system only learned of after the count.
+  if (r.lateSales && r.lateSales.count > 0) {
+    divider();
+    line(`${LATE_LABEL}:`);
+    row(`  ${r.lateSales.count} transaksi`, fmt(r.lateSales.amount));
+    if (r.lateSales.cash > 0) row("  Tunai", fmt(r.lateSales.cash));
+    for (const l of wrap(LATE_NOTE, b.width)) line(l);
+  }
   line("");
 
   // ── 2. Revenue ───────────────────────────────────────────────────────────
@@ -225,6 +251,10 @@ function buildShiftEscposBase64(r: ShiftReport, paper: PaperWidth): string {
     // doesn't foot is the first sign something is missing.
     row("TOTAL", fmt(r.revenue.collected));
     bold(false);
+    // Why the (Nx) above add up to more than Jumlah Transaksi.
+    if (r.revenue.mixedOrderCount) {
+      line(`Termasuk ${r.revenue.mixedOrderCount} trx bayar campuran`);
+    }
   }
   line("");
 
@@ -331,6 +361,14 @@ function buildShiftHtml(r: ShiftReport, paper: PaperWidth): string {
               : "Uang laci LEBIH."
         }</div>`;
 
+  const lateRows =
+    r.lateSales && r.lateSales.count > 0
+      ? `<div class="dv"></div><div class="b sm">${escapeHtml(LATE_LABEL)}:</div>` +
+        row(`\u00a0\u00a0${r.lateSales.count} transaksi`, fmt(r.lateSales.amount)) +
+        (r.lateSales.cash > 0 ? row("\u00a0\u00a0Tunai", fmt(r.lateSales.cash)) : "") +
+        `<div class="sm">${escapeHtml(LATE_NOTE)}</div>`
+      : "";
+
   const paymentRows =
     r.payments.length === 0
       ? `<div class="sm">Belum ada transaksi.</div>`
@@ -338,7 +376,10 @@ function buildShiftHtml(r: ShiftReport, paper: PaperWidth): string {
           .map((p) => row(`${p.label} (${p.orderCount}x)`, fmt(p.amount)))
           .join("") +
         `<div class="dv"></div>` +
-        row("TOTAL", fmt(r.revenue.collected), "b");
+        row("TOTAL", fmt(r.revenue.collected), "b") +
+        (r.revenue.mixedOrderCount
+          ? `<div class="sm">Termasuk ${r.revenue.mixedOrderCount} trx bayar campuran</div>`
+          : "");
 
   const topRows = r.topProducts.length
     ? section("[ 4. PRODUK TERLARIS ]") +
@@ -385,6 +426,7 @@ function buildShiftHtml(r: ShiftReport, paper: PaperWidth): string {
       : ""
   }
   ${drawerCount}
+  ${lateRows}
   ${section("[ 2. RINCIAN PENDAPATAN ]")}
   ${row("Penjualan Kotor", fmt(r.revenue.gross))}
   ${row("Diskon/Promo", `-${fmt(r.revenue.discount)}`)}
@@ -444,7 +486,7 @@ export function ShiftReportModal({ report, onClose, heading }: Props) {
     }
   };
 
-  const { shift, drawer, revenue, payments, cancelled, topProducts } = report;
+  const { shift, drawer, revenue, payments, cancelled, lateSales, topProducts } = report;
   const title = heading ?? (shift.isOpen ? "Ringkasan Shift Berjalan" : "Shift Ditutup");
 
   // Fixed white surface, like the receipt preview: this is a picture of a piece
@@ -561,6 +603,15 @@ export function ShiftReportModal({ report, onClose, heading }: Props) {
                 />
               </>
             )}
+            {lateSales && lateSales.count > 0 && (
+              <>
+                <div className="border-t border-dashed border-gray-300 my-2" />
+                <p className="font-bold text-xs">{LATE_LABEL}:</p>
+                <Row indent label={`${lateSales.count} transaksi`} value={fmt(lateSales.amount)} />
+                {lateSales.cash > 0 && <Row indent label="Tunai" value={fmt(lateSales.cash)} />}
+                <p className="text-[11px] text-gray-500">{LATE_NOTE}</p>
+              </>
+            )}
 
             <div className="border-t border-dashed border-gray-300 my-3" />
             <p className="font-bold text-xs mb-2">[ 2. RINCIAN PENDAPATAN ]</p>
@@ -595,6 +646,11 @@ export function ShiftReportModal({ report, onClose, heading }: Props) {
                 ))}
                 <div className="border-t border-dashed border-gray-300 my-2" />
                 <Row label="TOTAL" value={fmt(revenue.collected)} strong />
+                {!!revenue.mixedOrderCount && (
+                  <p className="mt-1 text-[11px] text-gray-500">
+                    Termasuk {revenue.mixedOrderCount} trx bayar campuran
+                  </p>
+                )}
               </>
             )}
 

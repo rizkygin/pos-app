@@ -60,6 +60,46 @@ export function posCashflowTypeFor(method: string) {
   return method === 'cash' ? ('cash' as const) : ('transfer' as const);
 }
 
+/**
+ * One sale paid several ways (Bayar Campuran): a table splitting its bill,
+ * half cash and half QRIS. Written as orders.note.paymentMethod ONLY alongside
+ * orders.note.payments — the list of what each method actually covered — and
+ * never handed to posCashflowTypeFor: every tender books its own cash-in row
+ * with its own type, which is what keeps the drawer honest.
+ *
+ * A single-tender sale never carries `payments`, so every order written before
+ * this, and every till that doesn't send it, reads exactly as it always did.
+ */
+export const MIXED_PAYMENT = 'mixed';
+
+export type PosTender = { method: PosPaymentMethod; amount: number };
+
+export const MAX_TENDERS = 10;
+
+/**
+ * The `payments` field of a checkout body. `null` when there is none (a
+ * single-method sale — the path every existing till takes), 'invalid' when it
+ * is there but unusable, otherwise the tenders in the order given.
+ *
+ * Amounts are each tender's SHARE of the bill, not the cash handed over: the
+ * change on a cash tender stays in amountPaid/changeDue like any cash sale.
+ * Whether they add up to the bill can only be checked once the server has
+ * priced it — see the checkout route.
+ */
+export function parsePosTenders(raw: unknown): PosTender[] | null | 'invalid' {
+  if (raw == null) return null;
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_TENDERS) return 'invalid';
+  const tenders: PosTender[] = [];
+  for (const t of raw) {
+    const method = (t as any)?.method;
+    const amount = Math.round(Number((t as any)?.amount) * 100) / 100;
+    if (!(POS_PAYMENT_METHODS as readonly string[]).includes(method)) return 'invalid';
+    if (!Number.isFinite(amount) || amount <= 0) return 'invalid';
+    tenders.push({ method, amount });
+  }
+  return tenders;
+}
+
 /** Report labels. The keys are machine values; these are what a human reads. */
 // Kept short on purpose: these print on a 32-character line next to a rupiah
 // figure and a transaction count, and the label is the part that gets trimmed
@@ -71,6 +111,7 @@ export const POS_PAYMENT_LABELS: Record<string, string> = {
   credit: 'KREDIT (EDC)',
   transfer: 'TRANSFER',
   [LEGACY_NON_CASH]: 'NON-TUNAI',
+  [MIXED_PAYMENT]: 'CAMPURAN',
 };
 
 export const posPaymentLabel = (v: string) =>

@@ -675,6 +675,8 @@ export const cashierShiftsTable = pgTable(
     expected_cash: numeric('expected_cash', { precision: 14, scale: 2 }),
     // counted - expected. Stored rather than computed on read so it stays the
     // number that was on the printed slip: negative = short, positive = over.
+    // Both are AS SIGNED; readers add the shift's late sales on top
+    // (orders.after_shift_close, lib/shift.ts lateCashSql).
     variance: numeric('variance', { precision: 14, scale: 2 }),
     closing_note: varchar('closing_note', { length: 255 }),
   },
@@ -737,6 +739,13 @@ export const ordersTable = pgTable(
     // dining_tables.session_id back to NULL. NULL on every counter sale.
     // Laporan per Meja groups on it.
     table_label: varchar('table_label', { length: 40 }),
+
+    // Arrived after its shift was closed (migration 0085): an offline till's
+    // queued sale, filed under the shift it was rung up in. It counts as that
+    // shift's sale like any other; its cash is added on read to the frozen
+    // expected_cash/variance (lib/shift.ts lateCashSql), and the slip lists it
+    // on its own line as what moved SELISIH. Never true without a shift_id.
+    after_shift_close: boolean('after_shift_close').default(false).notNull(),
 
     // --- Tax, frozen at the moment of sale ---
     //

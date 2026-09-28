@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { Printer, X, CheckCircle } from "lucide-react";
 import { resolveOutletImage } from "@/lib/image-src";
-import { posPaymentLabel } from "@/lib/pos-payment";
+import { MIXED_PAYMENT, posPaymentLabel } from "@/lib/pos-payment";
 import { SERVICE_TYPE_LABEL, type ServiceType } from "@/lib/service-type";
 import { buildOrderLabelBatch, openOrderLabelApp, type OrderLabel } from "@/lib/labelbridge";
 import { resolveReceiptSettings, type ReceiptPrintSettings } from "@/lib/receipt-settings";
@@ -91,6 +91,12 @@ export type ReceiptData = {
      * misleading "Kembali Rp 0".
      */
     paymentMethod?: string;
+    /**
+     * Bayar Campuran (paymentMethod 'mixed'): what each method covered. Each
+     * prints as its own line; amountPaid/changeDue then describe only the cash
+     * handed over for the cash rows.
+     */
+    payments?: { method: string; amount: number }[];
     amountPaid?: number;
     changeDue?: number;
     date: Date;
@@ -233,6 +239,28 @@ type Flight = { top: number; left: number; width: number; height: number; transf
 
 const fmt = (n: number) =>
     new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 0 }).format(n);
+
+/**
+ * A mixed payment's lines for the slip: each method and what it covered, then,
+ * when part of it was cash, the notes handed over and the change — the same
+ * two lines a cash sale prints. Empty for a single-method sale, which keeps
+ * printing exactly as it always has. Shared by all three renderers so the
+ * printed slips and the on-screen one can't disagree.
+ */
+function mixedPaymentLines(data: ReceiptData): { label: string; value: string; bold?: boolean }[] {
+    if (data.paymentMethod !== MIXED_PAYMENT || !data.payments?.length) return [];
+    const lines: { label: string; value: string; bold?: boolean }[] = data.payments.map((p) => ({
+        label: posPaymentLabel(p.method),
+        value: fmt(p.amount),
+    }));
+    const cash = data.payments.filter((p) => p.method === "cash").reduce((n, p) => n + p.amount, 0);
+    if (cash > 0) {
+        const change = data.changeDue ?? 0;
+        lines.push({ label: "Tunai diterima", value: fmt(cash + change) });
+        lines.push({ label: "Kembali", value: fmt(change), bold: true });
+    }
+    return lines;
+}
 
 const esc = (s: string) =>
     String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] as string));
@@ -602,7 +630,14 @@ function buildReceiptEscposBase64(data: ReceiptData, paper: PaperWidth, logoByte
         // Only a cash sale has money tendered and change given. Everything else
         // names the method instead — a "Kembali Rp 0" under a QRIS payment
         // reads as a receipt for a transaction that didn't happen that way.
-        if (data.paymentMethod === "cash") {
+        const mixed = mixedPaymentLines(data);
+        if (mixed.length > 0) {
+            for (const l of mixed) {
+                if (l.bold) bold(true);
+                row(l.label, l.value);
+                if (l.bold) bold(false);
+            }
+        } else if (data.paymentMethod === "cash") {
             row("Tunai", fmt(data.amountPaid ?? 0));
             row("Kembali", fmt(data.changeDue ?? 0));
         } else {
@@ -938,9 +973,17 @@ export function ReceiptModal({ data, onClose, heading = "Pesanan Berhasil!", var
 
         // No payment method (Order Lobby pickup slip) -> skip the block entirely,
         // including its divider, rather than printing a misleading zero.
+        const mixedLines = mixedPaymentLines(data);
         const paymentHtml = !data.paymentMethod
             ? ""
-            : (data.paymentMethod === "cash"
+            : (mixedLines.length > 0
+                  ? mixedLines
+                        .map(
+                            (l) =>
+                                `<div class="row${l.bold ? " b" : ""}"><span>${esc(l.label)}</span><span>${l.value}</span></div>`,
+                        )
+                        .join("")
+                  : data.paymentMethod === "cash"
                   ? `<div class="row"><span>Tunai</span><span>${fmt(data.amountPaid ?? 0)}</span></div>` +
                     `<div class="row b"><span>Kembali</span><span>${fmt(data.changeDue ?? 0)}</span></div>`
                   : `<div class="row b"><span>Pembayaran</span><span>${esc(posPaymentLabel(data.paymentMethod))}</span></div>`) +
@@ -1563,7 +1606,17 @@ export function ReceiptPaper({ data, paperWidth }: { data: ReceiptData; paperWid
             {/* Payment — omitted for a courier pickup slip (see ReceiptData). */}
             {data.paymentMethod && (
                 <>
-                    {data.paymentMethod !== 'cash' ? (
+                    {mixedPaymentLines(data).length > 0 ? (
+                        mixedPaymentLines(data).map((l, i) => (
+                            <div
+                                key={i}
+                                className={`flex justify-between ${l.bold ? "font-bold text-sm" : "text-xs mb-1"}`}
+                            >
+                                <span className={l.bold ? undefined : "text-gray-500"}>{l.label}</span>
+                                <span className={l.bold ? "text-emerald-600" : undefined}>{l.value}</span>
+                            </div>
+                        ))
+                    ) : data.paymentMethod !== 'cash' ? (
                         <div className="flex justify-between font-bold text-sm">
                             <span>Pembayaran</span>
                             <span className="text-blue-600">

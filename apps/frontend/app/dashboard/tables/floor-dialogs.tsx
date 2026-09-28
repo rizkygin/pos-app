@@ -489,8 +489,9 @@ export type SplitRequest =
 /**
  * Pisah Bill. Two honest ways to split, because they are two different
  * things at the till:
- *   Bagi rata — one bill, read as N equal shares. It is still paid as ONE
- *               order; the shares are printed so the table can settle it.
+ *   Bagi rata — one bill, read as N equal shares. It is still ONE order, but
+ *               the till opens it as N tenders (Bayar Campuran), so each
+ *               share can be paid its own way — cash, QRIS, card.
  *   Per item  — lines assigned to separate bills, each paid on its own with
  *               its own method. A line of 3 can be broken 2 + 1.
  */
@@ -708,7 +709,7 @@ export function SplitDialog({
         </div>
         <p className="text-[11px] text-muted-foreground">
           {mode === 'even'
-            ? 'Bagi rata tetap dibayar sebagai satu transaksi; bagian per orang dicetak di bill. Sebelum pajak & diskon.'
+            ? 'Tetap satu transaksi, tapi di kasir tiap bagian bisa dibayar dengan metodenya sendiri (tunai, QRIS, kartu). Bagian per orang dicetak di bill. Sebelum pajak & diskon.'
             : 'Setiap bill dibayar terpisah di kasir, dengan metode bayarnya sendiri. Sebelum pajak & diskon.'}
         </p>
 

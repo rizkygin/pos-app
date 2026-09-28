@@ -46,7 +46,14 @@ import {
 } from '@/lib/labelbridge';
 import { API_URL } from '@/lib/api-url';
 import { viewerTimezone } from '@/app/dashboard/tables/floor-api';
-import { POS_PAYMENT_OPTIONS, type PosPaymentMethod } from '@/lib/pos-payment';
+import {
+  MAX_TENDERS,
+  MIXED_PAYMENT,
+  POS_PAYMENT_OPTIONS,
+  evenShares,
+  type PosPaymentMethod,
+  type PosTender,
+} from '@/lib/pos-payment';
 import {
   DEFAULT_SERVICE_TYPE,
   SERVICE_TYPES,
@@ -217,6 +224,11 @@ type TableLink = {
   savedQty?: Record<string, number>;
   /** Owner or floor staff: may reduce or remove saved items. */
   canVoid?: boolean;
+  /**
+   * Bagi rata on the floor: the table asked to split this bill N ways. The
+   * till opens it as N equal tenders so each share can be paid its own way.
+   */
+  splitCount?: number | null;
 };
 
 /** An open table bill as the till's "Meja" picker lists it (GET /api/table-sessions). */
@@ -250,6 +262,33 @@ const cartSignature = (items: CartItem[]) =>
     ]),
   );
 
+/**
+ * One row of a mixed payment (Bayar Campuran): a method and the part of the
+ * bill it covers. The amount is kept as the typed digits, like the cash field,
+ * so a half-typed figure survives a tab switch exactly as it was.
+ */
+type TenderRow = { id: string; method: PosPaymentMethod; amountInput: string };
+
+const tenderRow = (method: PosPaymentMethod, amount = 0): TenderRow => ({
+  id: crypto.randomUUID(),
+  method,
+  amountInput: amount > 0 ? String(amount) : '',
+});
+
+/**
+ * A mixed payment in progress. While `even` is set the rows' typed amounts are
+ * ignored and each row shows its equal share of whatever the bill comes to NOW
+ * — a table opened as "Bagi rata 3" before its discount or promo is applied
+ * must still split the final total three ways. Typing an amount into any row
+ * freezes the shares and turns it off; the Bagi rata button turns it back on.
+ */
+type MixedPay = { rows: TenderRow[]; even: boolean };
+
+const splitEvenly = (n: number, method: PosPaymentMethod = 'cash'): MixedPay => ({
+  rows: Array.from({ length: Math.max(2, n) }, () => tenderRow(method)),
+  even: true,
+});
+
 // A parked/held order kept in localStorage so a cashier can juggle several open
 // carts (e.g. one per table) and check out later without losing anything.
 type HeldTab = {
@@ -275,6 +314,12 @@ type HeldTab = {
   paymentMethod: PosPaymentMethod;
   amountPaidInput: string;
   /**
+   * Bayar Campuran: the bill paid several ways, one row per method. null is
+   * the ordinary single-method sale (paymentMethod above). Absent on tabs held
+   * from before it existed, which reads the same as null.
+   */
+  mixedPay?: MixedPay | null;
+  /**
    * Membership attached to this tab. Only the inputs are held, never the
    * quote: a tab parked for an hour must re-ask the server what its promo and
    * points are worth, because both can have changed in the meantime.
@@ -298,6 +343,7 @@ const newHeldTab = (label: string): HeldTab => ({
   discountInput: '',
   paymentMethod: 'cash',
   amountPaidInput: '0',
+  mixedPay: null,
   memberPhone: '',
   promoCode: '',
   pointsToRedeem: 0,
@@ -681,6 +727,8 @@ export const CashierClient = ({
   const [noteDraft, setNoteDraft] = useState('');
   const [amountPaidInput, setAmountPaidInput] = useState('0');
   const [paymentMethod, setPaymentMethod] = useState<PosPaymentMethod>('cash');
+  // Bayar Campuran rows; null = one method for the whole bill (the norm).
+  const [mixedPay, setMixedPay] = useState<MixedPay | null>(null);
   // ── Membership: inputs here, every figure from the server's quote ──
   const [memberPhone, setMemberPhone] = useState('');
   const [promoCode, setPromoCode] = useState('');
@@ -821,7 +869,9 @@ export const CashierClient = ({
   // Snapping to cash keeps the lock honest wherever the mismatch came from.
   useEffect(() => {
     if (lazyMode && paymentMethod !== 'cash') setPaymentMethod('cash');
-  }, [lazyMode, paymentMethod]);
+    // Nor can uang pas be half QRIS.
+    if (lazyMode && mixedPay) setMixedPay(null);
+  }, [lazyMode, paymentMethod, mixedPay]);
 
   const toggleLazyMode = () => {
     setLazyMode((v) => {
@@ -873,6 +923,7 @@ export const CashierClient = ({
     setDiscountInput(t.discountInput);
     setPaymentMethod(t.paymentMethod);
     setAmountPaidInput(t.amountPaidInput);
+    setMixedPay(t.mixedPay ?? null);
     setMemberPhone(t.memberPhone ?? '');
     setPromoCode(t.promoCode ?? '');
     setPointsToRedeem(t.pointsToRedeem ?? 0);
@@ -897,6 +948,7 @@ export const CashierClient = ({
           pagerNumber: t.pagerNumber ?? '',
           orderNote: t.orderNote ?? '',
           serviceType: isServiceType(t.serviceType) ? t.serviceType : DEFAULT_SERVICE_TYPE,
+          mixedPay: Array.isArray(t.mixedPay?.rows) ? t.mixedPay : null,
           // Tabs parked before add-ons existed have no lineId, and every cart
           // handler now addresses lines by it. Minted here rather than left
           // undefined, or the first tap on such a tab would edit every line at
@@ -939,6 +991,7 @@ export const CashierClient = ({
             discountInput,
             paymentMethod,
             amountPaidInput,
+            mixedPay,
             memberPhone,
             promoCode,
             pointsToRedeem,
@@ -957,6 +1010,7 @@ export const CashierClient = ({
     discountInput,
     paymentMethod,
     amountPaidInput,
+    mixedPay,
     memberPhone,
     promoCode,
     pointsToRedeem,
@@ -1194,6 +1248,7 @@ export const CashierClient = ({
     closed: boolean;
     tables: { id: number; label: string }[];
     lines: ServerBillLine[];
+    splitCount?: number | null;
   };
 
   /**
@@ -1248,6 +1303,18 @@ export const CashierClient = ({
           guest: s.guestName ?? '',
           savedQty: Object.fromEntries(cartFromTable.map((i) => [i.lineId, i.quantity])),
           canVoid: data.canVoid === true,
+          splitCount: s.splitCount ?? null,
+        };
+        // Bagi rata on the floor arrives as that many equal tenders, all cash
+        // until the cashier says otherwise — the point of splitting a bill is
+        // usually that each person pays their own way. Only when the split is
+        // new to this tab, so re-opening a bill doesn't undo the methods the
+        // cashier already picked; a bill that stopped being split drops it.
+        const floorSplit = (s.splitCount ?? 0) > 1 ? s.splitCount! : null;
+        const mixedFor = (prev?: HeldTab): MixedPay | null => {
+          if (!floorSplit) return (prev?.table?.splitCount ?? 0) > 1 ? null : (prev?.mixedPay ?? null);
+          if (prev?.mixedPay && prev.table?.splitCount === floorSplit) return prev.mixedPay;
+          return splitEvenly(floorSplit);
         };
         const tabLabel = `Meja ${label}${billNo > 1 ? ` · Bill ${String.fromCharCode(64 + billNo)}` : ''}`;
 
@@ -1277,6 +1344,7 @@ export const CashierClient = ({
                 label: tabLabel,
                 cart: cartFromTable,
                 customerName: nameEdited ? existing.customerName : (s.guestName ?? ''),
+                mixedPay: mixedFor(existing),
                 table: link,
               };
           next = tabsRef.current.map((t) => (t.id === existing.id ? target : t));
@@ -1288,6 +1356,7 @@ export const CashierClient = ({
             ...newHeldTab(tabLabel),
             cart: cartFromTable,
             customerName: s.guestName ?? '',
+            mixedPay: mixedFor(),
             table: link,
           };
           // An untouched empty tab is replaced rather than left behind, so
@@ -1647,6 +1716,7 @@ export const CashierClient = ({
     setCart([]);
     setDiscountInput('');
     setAmountPaidInput('0');
+    setMixedPay(null);
     setOrderNote('');
     // The member came with the order, so they go with it. Leaving a phone
     // attached to an emptied cart is how the next customer earns someone
@@ -1904,14 +1974,104 @@ export const CashierClient = ({
   // can never be insufficient. Everything about tendering and change is against
   // grandTotal — the customer pays the tax too, and taking cash against the
   // pre-tax figure would hand back the tax as change.
+  //
+  // Bayar Campuran moves that "against" from grandTotal to the cash rows only:
+  // the QRIS half was paid on the terminal, and the notes handed over only
+  // have to cover the cash half. Each row's share is the even split of the
+  // CURRENT total while the split is still even (see MixedPay), else what the
+  // cashier typed.
+  const tenderAmounts = useMemo(() => {
+    if (!mixedPay) return [];
+    if (mixedPay.even) {
+      const shares = evenShares(grandTotal, mixedPay.rows.length);
+      return mixedPay.rows.map((_, i) => shares[i] ?? 0);
+    }
+    return mixedPay.rows.map((r) => parseFloat(r.amountInput) || 0);
+  }, [mixedPay, grandTotal]);
+  // Positive: still owed. Negative: the rows cover more than the bill. Either
+  // way the sale can't go — the server refuses tenders that don't add up.
+  const tenderLeft = mixedPay
+    ? grandTotal - tenderAmounts.reduce((n, a) => n + a, 0)
+    : 0;
+  const tendersInvalid =
+    !!mixedPay && (Math.abs(tenderLeft) >= 1 || tenderAmounts.some((a) => !(a > 0)));
+  const cashDue = mixedPay
+    ? mixedPay.rows.reduce((n, r, i) => n + (r.method === 'cash' ? tenderAmounts[i] : 0), 0)
+    : grandTotal;
+  const takesCash = mixedPay ? cashDue > 0 : paymentMethod === 'cash';
   const amountPaid = lazyMode ? grandTotal : parseFloat(amountPaidInput) || 0;
-  const changeDue = Math.max(0, amountPaid - grandTotal);
+  const changeDue = takesCash ? Math.max(0, amountPaid - cashDue) : 0;
   const isInsufficient =
     !lazyMode &&
-    paymentMethod === 'cash' &&
+    takesCash &&
     amountPaidInput.trim() !== '' &&
-    amountPaid < grandTotal;
-  const checkoutDisabled = cart.length === 0 || isInsufficient;
+    amountPaid < cashDue;
+  const checkoutDisabled = cart.length === 0 || isInsufficient || tendersInvalid;
+  // What goes to the server and onto the slip: null for a one-method sale.
+  const saleTenders = useMemo<PosTender[] | null>(
+    () =>
+      mixedPay
+        ? mixedPay.rows.map((r, i) => ({ method: r.method, amount: tenderAmounts[i] }))
+        : null,
+    [mixedPay, tenderAmounts],
+  );
+  // Everything the customer handed over, change included. amountPaid minus
+  // changeDue is the bill on every sale, however it was paid, which is what
+  // lets a slip or an order page print "Diterima" without knowing the mode.
+  const handedOver = saleTenders
+    ? grandTotal + changeDue
+    : paymentMethod === 'cash' && amountPaid > 0
+      ? amountPaid
+      : grandTotal;
+
+  // ── Bayar Campuran: editing the rows ──
+  // Starts as two even halves: the method already picked, and the other of
+  // cash/QRIS — the split a counter sees most.
+  const startMixedPay = () =>
+    setMixedPay({
+      rows: [tenderRow(paymentMethod), tenderRow(paymentMethod === 'cash' ? 'qris' : 'cash')],
+      even: true,
+    });
+
+  const setTenderMethod = (id: string, method: PosPaymentMethod) =>
+    setMixedPay(
+      (m) => m && { ...m, rows: m.rows.map((r) => (r.id === id ? { ...r, method } : r)) },
+    );
+
+  // Typing an amount freezes every row at what it shows now (the even shares,
+  // if it was even) and then applies the edit. With two rows the other one
+  // takes the rest: "QRIS 70rb, sisanya tunai" is one field to type, not two.
+  const setTenderAmount = (index: number, digits: string) => {
+    const amounts = [...tenderAmounts];
+    amounts[index] = parseFloat(digits) || 0;
+    if (amounts.length === 2) amounts[1 - index] = Math.max(0, grandTotal - amounts[index]);
+    setMixedPay(
+      (m) =>
+        m && {
+          even: false,
+          rows: m.rows.map((r, i) => ({
+            ...r,
+            amountInput: i === index ? digits : amounts[i] > 0 ? String(amounts[i]) : '',
+          })),
+        },
+    );
+  };
+
+  // A new row starts with whatever is still owed; on an even split it just
+  // takes its share like the others.
+  const addTender = () =>
+    setMixedPay((m) => {
+      if (!m || m.rows.length >= MAX_TENDERS) return m;
+      const row = tenderRow('cash', m.even ? 0 : Math.max(0, tenderLeft));
+      return { ...m, rows: [...m.rows, row] };
+    });
+
+  // Two is the floor: one row is a single-method sale, which is what the
+  // X on the card is for.
+  const removeTender = (id: string) =>
+    setMixedPay((m) =>
+      m && m.rows.length > 2 ? { ...m, rows: m.rows.filter((r) => r.id !== id) } : m,
+    );
 
   // Two live orders on one buzzer is exactly the mix-up the number is meant to
   // prevent, so surface the clash instead of silently allowing it.
@@ -2125,9 +2285,9 @@ export const CashierClient = ({
       taxAmount: tax.applies ? tax.amount : undefined,
       taxInclusive: taxConfig.inclusive,
       total: grandTotal,
-      paymentMethod,
-      amountPaid:
-        paymentMethod === 'cash' && amountPaid > 0 ? amountPaid : grandTotal,
+      paymentMethod: saleTenders ? MIXED_PAYMENT : paymentMethod,
+      payments: saleTenders ?? undefined,
+      amountPaid: handedOver,
       changeDue,
       date: new Date(),
       outletName,
@@ -2156,8 +2316,9 @@ export const CashierClient = ({
       tax,
       taxConfig,
       paymentMethod,
+      saleTenders,
+      handedOver,
       canUsePager,
-      amountPaid,
       changeDue,
       outletName,
       outletAddress,
@@ -2172,7 +2333,7 @@ export const CashierClient = ({
   // tab standing — the order isn't finished until the food is handed over and
   // the pager comes back, which is what Checkout marks.
   const printCustomerReceipt = () => {
-    if (cart.length === 0 || isInsufficient) return;
+    if (checkoutDisabled) return;
     setReceipt({
       data: buildReceiptData(),
       variant: 'customer',
@@ -2341,7 +2502,7 @@ export const CashierClient = ({
   };
 
   const handleCheckout = useCallback(async () => {
-    if (cart.length === 0 || isInsufficient) return;
+    if (checkoutDisabled) return;
     // Guard against duplicate submissions (double-click / Cmd+Enter key-repeat):
     // the ref flips synchronously so a second call bails before any await.
     if (submittingRef.current) return;
@@ -2382,11 +2543,9 @@ export const CashierClient = ({
     const snapshotCustomerName = customerName.trim();
     const snapshotPagerNumber = canUsePager ? pagerNumber.trim() : '';
     const snapshotServiceType = recordedServiceType;
-    const snapshotPaymentMethod = paymentMethod;
-    const snapshotAmountPaid =
-      snapshotPaymentMethod === 'cash' && amountPaid > 0
-        ? amountPaid
-        : snapshotGrandTotal;
+    const snapshotTenders = saleTenders;
+    const snapshotPaymentMethod: string = snapshotTenders ? MIXED_PAYMENT : paymentMethod;
+    const snapshotAmountPaid = handedOver;
     const snapshotChangeDue = Math.max(
       0,
       snapshotAmountPaid - snapshotGrandTotal,
@@ -2444,6 +2603,7 @@ export const CashierClient = ({
       taxInclusive: taxConfig.inclusive,
       total: snapshotGrandTotal,
       paymentMethod: snapshotPaymentMethod,
+      payments: snapshotTenders ?? undefined,
       amountPaid: snapshotAmountPaid,
       changeDue: snapshotChangeDue,
       date: snapshotTime,
@@ -2519,6 +2679,9 @@ export const CashierClient = ({
           cashierName,
           discountAmount: snapshotDiscountAmount,
           paymentMethod: snapshotPaymentMethod,
+          // Bayar Campuran: what each method covered. The server checks them
+          // against the bill it prices and books each on its own side.
+          payments: snapshotTenders ?? undefined,
           amountPaid: snapshotAmountPaid,
           changeDue: snapshotChangeDue,
           memberPhone: snapshotMemberPhone || null,
@@ -2537,6 +2700,20 @@ export const CashierClient = ({
         setCheckoutFailure({
           title: 'Bill Meja Berubah',
           message: `${text}\n\nMuat ulang bill, periksa lagi, lalu bayar.`,
+          canRetry: false,
+        });
+        return;
+      }
+      // The bill the server priced isn't the one the tenders were split
+      // against (a promo lapsed, points were spent elsewhere). Nothing was
+      // booked; re-quote so the screen shows the real total, and let the
+      // cashier re-split it — an even split follows the new total by itself.
+      if (response.status === 409 && data?.code === 'PAYMENT_MISMATCH') {
+        setQuoteNonce((n) => n + 1);
+        setCheckoutFailure({
+          title: 'Total Berubah',
+          message:
+            data?.error?.message || 'Total berubah. Atur ulang pembayaran campuran.',
           canRetry: false,
         });
         return;
@@ -2645,15 +2822,16 @@ export const CashierClient = ({
   }, [
     cart,
     cartTotal,
-    amountPaid,
     customerName,
     pagerNumber,
     recordedServiceType,
     discountAmount,
     discountLabel,
     finalTotal,
-    isInsufficient,
+    checkoutDisabled,
     paymentMethod,
+    saleTenders,
+    handedOver,
     canUsePager,
     canUseMembership,
     memberPhone,
@@ -3778,7 +3956,102 @@ export const CashierClient = ({
               While Lazy Mode is on the other four are disabled rather than
               hidden: lazy mode is a cash sale by definition, and a cashier who
               reaches for QRIS needs to see WHY it won't take, not find the row
-              silently missing two thirds of its buttons. */}
+              silently missing two thirds of its buttons.
+
+              Bayar Campuran swaps the chips for one row per method, because
+              then there is no single method to pick. */}
+          {mixedPay ? (
+            <div className="mb-2 rounded-xl border bg-muted/30 px-3 py-2">
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <span className="text-sm font-semibold text-muted-foreground">
+                  Bayar campuran
+                </span>
+                <div className="flex items-center gap-1">
+                  {/* Lit while the rows follow the total in equal shares; one
+                      tap puts a hand-edited split back to equal. */}
+                  <button
+                    type="button"
+                    onClick={() => setMixedPay((m) => m && { ...m, even: true })}
+                    title="Bagi total sama rata ke semua baris"
+                    className={`rounded-md border px-2 py-0.5 text-[11px] font-bold transition-colors ${
+                      mixedPay.even
+                        ? 'border-blue-600 bg-blue-600 text-white'
+                        : 'border-border text-muted-foreground hover:bg-muted'
+                    }`}
+                  >
+                    Bagi rata
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMixedPay(null)}
+                    title="Batal, bayar dengan satu metode"
+                    aria-label="Batal bayar campuran"
+                    className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+              {mixedPay.rows.map((r, i) => (
+                <div key={r.id} className="mb-1 flex items-center gap-1.5">
+                  <select
+                    value={r.method}
+                    onChange={(e) => setTenderMethod(r.id, e.target.value as PosPaymentMethod)}
+                    aria-label={`Metode pembayaran ${i + 1}`}
+                    className="h-8 w-24 shrink-0 rounded-lg border bg-background px-1.5 text-xs font-bold outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    {POS_PAYMENT_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.chip}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    aria-label={`Jumlah pembayaran ${i + 1}`}
+                    value={tenderAmounts[i] > 0 ? formatCurrency(tenderAmounts[i]) : ''}
+                    onChange={(e) => setTenderAmount(i, e.target.value.replace(/\D/g, ''))}
+                    placeholder="Rp 0"
+                    className="h-8 min-w-0 flex-1 rounded-lg border bg-background px-2.5 text-right text-sm font-bold tabular-nums outline-none focus:border-transparent focus:ring-2 focus:ring-blue-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeTender(r.id)}
+                    disabled={mixedPay.rows.length <= 2}
+                    aria-label={`Hapus pembayaran ${i + 1}`}
+                    className="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted disabled:opacity-30"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+              <div className="mt-1 flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={addTender}
+                  disabled={mixedPay.rows.length >= MAX_TENDERS}
+                  className="text-[11px] font-bold text-blue-600 disabled:opacity-40"
+                >
+                  + Tambah
+                </button>
+                {/* Checkout stays off until this reads Pas: the server refuses
+                    tenders that don't add up to the bill. */}
+                <span
+                  className={`text-xs font-bold tabular-nums ${
+                    Math.abs(tenderLeft) < 1
+                      ? 'text-emerald-600'
+                      : 'text-rose-500'
+                  }`}
+                >
+                  {Math.abs(tenderLeft) < 1
+                    ? 'Pas'
+                    : `${tenderLeft > 0 ? 'Sisa' : 'Lebih'} ${formatCurrency(Math.abs(tenderLeft))}`}
+                </span>
+              </div>
+            </div>
+          ) : (
+          <>
           <div className="mb-2 grid grid-cols-5 gap-1">
             {POS_PAYMENT_OPTIONS.map((opt) => {
               const locked = lazyMode && opt.value !== 'cash';
@@ -3808,11 +4081,26 @@ export const CashierClient = ({
           </div>
 
           {/* Says why four of the five just went grey. Without it the lock
-              reads as the app being broken. */}
-          {lazyMode && (
+              reads as the app being broken. Otherwise, the way into a split:
+              quiet, because most sales are one method. */}
+          {lazyMode ? (
             <p className="mb-2 -mt-1 text-[11px] text-muted-foreground">
               Lazy Mode aktif — pembayaran terkunci ke Tunai.
             </p>
+          ) : (
+            <div className="mb-2 -mt-1 flex justify-end">
+              <button
+                type="button"
+                onClick={startMixedPay}
+                disabled={cart.length === 0}
+                title="Satu bill dibayar dengan beberapa metode, misal tunai + QRIS"
+                className="text-[11px] font-bold text-blue-600 disabled:opacity-40"
+              >
+                Bayar campuran / bagi bill
+              </button>
+            </div>
+          )}
+          </>
           )}
 
           {/* What is owed. One bordered card so the arithmetic reads as a
@@ -3928,13 +4216,15 @@ export const CashierClient = ({
 
           {/* Cash tendered. Only for a cash sale — there is nothing to tender
               on a QRIS or card payment, and a "Kembali Rp 0" under one reads
-              like a receipt for a transaction that didn't happen that way. */}
-          {paymentMethod === 'cash' && (
+              like a receipt for a transaction that didn't happen that way.
+              On a mixed payment it is there when a row is cash, and counts
+              against those rows only: the QRIS share is already paid. */}
+          {takesCash && (
             <div className="mb-2 rounded-xl border bg-muted/30 px-3 py-2">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-semibold text-muted-foreground">
-                    Bayar
+                    {mixedPay ? 'Uang tunai' : 'Bayar'}
                   </span>
                   {/* Lazy mode used to own a full-width card with a two-line
                       explanation, for a device preference that is set once and
@@ -3946,6 +4236,10 @@ export const CashierClient = ({
                       hid this whole block when lazy mode was active, so the
                       only way back was the separate card. Without that card it
                       has to stay reachable from here. */}
+                  {/* Not on a mixed payment: uang pas for the whole bill is
+                      exactly what a split bill isn't, and flipping it on here
+                      would silently throw the split away. */}
+                  {!mixedPay && (
                   <button
                     type="button"
                     role="switch"
@@ -3960,6 +4254,7 @@ export const CashierClient = ({
                   >
                     Lazy Mode
                   </button>
+                  )}
                 </div>
                 {lazyMode ? (
                   <span className="text-sm font-bold tabular-nums">
@@ -3992,7 +4287,7 @@ export const CashierClient = ({
                     className={`text-sm font-bold tabular-nums ${isInsufficient ? 'text-rose-500' : 'text-emerald-600'}`}
                   >
                     {formatCurrency(
-                      isInsufficient ? grandTotal - amountPaid : changeDue,
+                      isInsufficient ? cashDue - amountPaid : changeDue,
                     )}
                   </span>
                 </div>

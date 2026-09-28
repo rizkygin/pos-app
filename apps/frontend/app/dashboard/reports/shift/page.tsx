@@ -30,6 +30,9 @@ type Row = {
   nonCashCollected: number;
   orderCount: number;
   cancelledCount: number;
+  /** Arrived after the close; already in every figure in the row, as on the slip. */
+  lateCount: number;
+  lateAmount: number;
   cashIn: number;
   cashOut: number;
   expectedCash: number;
@@ -273,6 +276,11 @@ export default function Page() {
                         }`}
                       >
                         {r.variance === null ? '—' : fmtSigned(r.variance)}
+                        {r.lateCount > 0 && (
+                          <span className="block text-[10px] font-semibold text-muted-foreground">
+                            termasuk {r.lateCount} trx setelah tutup · {fmtIDR(r.lateAmount)}
+                          </span>
+                        )}
                       </td>
                       <td className="py-2 text-right">
                         {opening === r.id ? (

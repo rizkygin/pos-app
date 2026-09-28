@@ -39,6 +39,8 @@ type OfflineNote = {
   customerName?: string | null;
   discountAmount?: number;
   paymentMethod?: string;
+  /** Bayar Campuran only: what each method covered. */
+  payments?: { method: string; amount: number }[];
   amountPaid?: number;
   changeDue?: number;
 };
@@ -260,7 +262,15 @@ const Page = async ({ params }: { params: Promise<{ order_id: string }> }) => {
                   </span>
                   <span className="font-bold">{posPaymentLabel(offlineNote.paymentMethod ?? 'cash')}</span>
                 </div>
-                {(offlineNote.paymentMethod ?? 'cash') === 'cash' && (
+                {/* Bayar Campuran: what each method covered. */}
+                {offlineNote.payments?.map((p, i) => (
+                  <div key={i} className="flex justify-between text-sm pl-5">
+                    <span className="text-muted-foreground">{posPaymentLabel(p.method)}</span>
+                    <span className="font-bold">{fmtIDR(p.amount)}</span>
+                  </div>
+                ))}
+                {((offlineNote.paymentMethod ?? 'cash') === 'cash' ||
+                  !!offlineNote.payments?.some((p) => p.method === 'cash')) && (
                   <>
                     <div className="flex justify-between text-sm">
                       <span className="text-muted-foreground font-semibold">Uang Diterima</span>

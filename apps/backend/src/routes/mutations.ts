@@ -21,10 +21,16 @@ import { hasFeature, requireOutletAccess } from "../lib/outlet-access";
 import { applyOrderStockReturn, applySaleStockOut, applySaleStockReturn } from "../lib/stock";
 import { lineUnitCostSql } from "../lib/cogs";
 import { CATEGORY_POS_SALE, CATEGORY_POS_CANCELLATION } from "../lib/cashflow-categories";
-import { parsePosPaymentMethod, posCashflowTypeFor } from "../lib/pos-payment";
+import {
+  MIXED_PAYMENT,
+  parsePosPaymentMethod,
+  parsePosTenders,
+  posCashflowTypeFor,
+  type PosTender,
+} from "../lib/pos-payment";
 import { counterServiceType } from "../lib/service-type";
 import { money, orderDiscount } from "../lib/money-sql";
-import { getOpenShiftId } from "../lib/shift";
+import { getOpenShiftId, getShiftForSale } from "../lib/shift";
 import { computeTax, taxConfigFrom } from "../lib/tax";
 import { resolveAddons } from "../lib/addons";
 import { normalizeIndonesianPhone } from "../lib/utils/phone";
@@ -71,6 +77,9 @@ async function addPosToCashflowin(
   orderId?: string,
   method: string = "cash",
   shiftId: number | null = null,
+  // When the money changed hands, for a sale an offline till sends later (see
+  // parseSoldAt). Absent, the row is stamped now, as it always was.
+  at: Date | null = null,
 ) {
   // Zero is skipped rather than booked, mirroring cancelPosOrder: a sale paid
   // entirely with points puts nothing in the drawer, and a 0-rupiah cash-in
@@ -97,6 +106,7 @@ async function addPosToCashflowin(
       category_id: category.id,
       money_amount: String(total),
       type: posCashflowTypeFor(method),
+      ...(at ? { created_at: at } : {}),
     })
     .returning();
 
@@ -156,6 +166,46 @@ async function describeCommittedOrder(orderId: string) {
     cancelled: row.deletedAt !== null,
     createdAt: row.createdAt,
   };
+}
+
+// How far a till's clock may run ahead, and how old a sale it sends may be.
+const SOLD_AT_FUTURE_SLACK_MS = 5 * 60_000;
+const SOLD_AT_MAX_AGE_MS = 30 * 24 * 60 * 60_000;
+
+/**
+ * The shift an offline till says it rang the sale up under: a positive
+ * integer, or nothing. Checked against the outlet and the sale time before it
+ * is believed — see getShiftForSale.
+ */
+function parseClaimedShiftId(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+/**
+ * When a counter sale actually happened, as the till recorded it.
+ *
+ * An offline till (the Android app's order queue) sends a sale minutes, hours
+ * or a day after it was rung up. Stamping it with the time it ARRIVED would
+ * move it into the wrong hour of the sales report, or the wrong day entirely,
+ * and the receipt the customer holds would disagree with the books.
+ *
+ * Believed only within bounds: a clock a few minutes fast is ordinary, but a
+ * sale from the future or from more than a month ago is a broken clock, and
+ * the server's own time is the better guess. Optional, so the web and desktop
+ * tills, which send it the moment they ring it up, are unaffected.
+ *
+ * Which SHIFT the sale belongs to is decided on arrival. The Android app
+ * refuses to close a shift while it holds unsent sales, but the web till knows
+ * nothing of another device's queue and can close it anyway — so the app sends
+ * the shift it rang the sale up under, and a sale from before the open shift
+ * began is kept off it (see getShiftForSale).
+ */
+function parseSoldAt(value: unknown, now = Date.now()): Date | null {
+  if (typeof value !== "string") return null;
+  const at = Date.parse(value);
+  if (!Number.isFinite(at)) return null;
+  if (at > now + SOLD_AT_FUTURE_SLACK_MS || at < now - SOLD_AT_MAX_AGE_MS) return null;
+  return new Date(at);
 }
 
 export async function mutationRoutes(app: FastifyInstance) {
@@ -259,7 +309,22 @@ export async function mutationRoutes(app: FastifyInstance) {
       // unrecognised string would otherwise become its own permanent bucket in
       // the payment report, invisible until someone wonders why the columns
       // don't add up.
-      const paymentMethod = parsePosPaymentMethod(body.paymentMethod);
+      let paymentMethod = parsePosPaymentMethod(body.paymentMethod);
+      // Bayar Campuran: the bill paid several ways. One tender is just a
+      // single-method sale and is written as one, so a note only ever carries
+      // `payments` when there really were two or more.
+      const parsedTenders = parsePosTenders(body.payments);
+      if (parsedTenders === "invalid") {
+        return reply.status(400).send({ error: { message: "Data pembayaran campuran tidak valid" } });
+      }
+      let tenders: PosTender[] | null = parsedTenders;
+      if (tenders && tenders.length === 1) {
+        paymentMethod = tenders[0].method;
+        tenders = null;
+      }
+      if (tenders) paymentMethod = MIXED_PAYMENT;
+      const soldAt = parseSoldAt(body.soldAt);
+      const claimedShiftId = parseClaimedShiftId(body.shiftId);
 
       // Dine In / Take Away. A table's bill was eaten at the table, whatever
       // the client says; a counter sale is what the cashier picked, and a
@@ -330,6 +395,34 @@ export async function mutationRoutes(app: FastifyInstance) {
           orderNet = netTotal;
           taxForResponse = tax;
 
+          // The tenders were split against the total the till worked out; the
+          // bill is what the server just priced. They agree unless something
+          // moved in between — a promo that expired mid-sale, points another
+          // till spent first — and then the money on the counter no longer
+          // covers the bill in the proportions the cashier took it. Refused
+          // before anything is written: the cashier re-splits against the real
+          // total, rather than a QRIS charge being booked at a figure the
+          // terminal never showed.
+          //
+          // Within a rupiah is rounding, and the last tender absorbs it so the
+          // tenders — and the cash-in rows booked from them — sum to the bill
+          // exactly.
+          if (tenders) {
+            const tendered = tenders.reduce((n, t) => n + t.amount, 0);
+            if (Math.abs(tendered - tax.total) >= 1) {
+              throw new HttpError(
+                409,
+                `Total berubah jadi Rp ${tax.total.toLocaleString("id-ID")}. Atur ulang pembayaran campuran.`,
+                "PAYMENT_MISMATCH",
+              );
+            }
+            const last = tenders[tenders.length - 1];
+            last.amount = Math.round((tax.total - (tendered - last.amount)) * 100) / 100;
+            if (!(last.amount > 0)) {
+              throw new HttpError(409, "Pembayaran campuran tidak valid.", "PAYMENT_MISMATCH");
+            }
+          }
+
           // Which stint at the drawer this sale belongs to, read inside the
           // transaction so a shift closing at this exact moment can't leave the
           // sale attributed to a shift whose totals are already frozen.
@@ -337,8 +430,12 @@ export async function mutationRoutes(app: FastifyInstance) {
           // null is a normal answer: selling with no shift open is allowed (a
           // forgotten "Buka Shift" must never cost a sale). Those orders appear
           // on no closing report, which is the honest outcome — there is no
-          // drawer to reconcile them against.
-          const shiftId = await getOpenShiftId(tx, body.outletId);
+          // drawer to reconcile them against. So is a late sale rung up before
+          // the open shift began: that drawer never held its money. A late
+          // sale whose till named the shift it was rung up in goes to that
+          // shift, closed or not, marked if it arrived after the count.
+          const saleShift = await getShiftForSale(tx, body.outletId, soldAt, claimedShiftId);
+          const shiftId = saleShift?.id ?? null;
 
           // Always true now (the empty cart was rejected up top); kept as the
           // structural guard for the block that mints the order id.
@@ -354,8 +451,11 @@ export async function mutationRoutes(app: FastifyInstance) {
               // happened to land on.
               source: "pos",
               status: "delivered",
+              // The till's own time for a sale sent late; otherwise now.
+              ...(soldAt ? { createdAt: soldAt } : {}),
               outlet_id: body.outletId,
               shift_id: shiftId,
+              after_shift_close: saleShift?.afterClose ?? false,
               service_type: serviceType,
               // Laporan per Meja reads this; clearing the table forgets it.
               table_label: tableLabel,
@@ -388,6 +488,10 @@ export async function mutationRoutes(app: FastifyInstance) {
                 memberTier: quote?.member?.tier ?? null,
                 promoCode: quote?.promo?.code ?? null,
                 paymentMethod,
+                // Only on a mixed sale: what each method covered. Readers that
+                // need money per method (the shift slip) expand this; everything
+                // else sees paymentMethod 'mixed'. See lib/pos-payment.ts.
+                ...(tenders ? { payments: tenders } : {}),
                 amountPaid: body.amountPaid ?? 0,
                 changeDue: body.changeDue ?? 0,
               },
@@ -519,14 +623,22 @@ export async function mutationRoutes(app: FastifyInstance) {
           // hands over the tax as well, and that money is physically in the
           // drawer. Booking the pre-tax figure would leave every shift close
           // short by exactly the tax collected.
-          await addPosToCashflowin(
-            tx,
-            body.outletId,
-            tax.total,
-            new_order_id,
-            paymentMethod,
-            shiftId,
-          );
+          //
+          // A mixed sale books one row per tender, each on its own side of the
+          // ledger: the cash part is what the drawer holds, the QRIS part never
+          // entered it. Everything that counts the drawer sums rows by type, so
+          // splitting here is all it takes for the shift close to come out right.
+          for (const t of tenders ?? [{ method: paymentMethod, amount: tax.total }]) {
+            await addPosToCashflowin(
+              tx,
+              body.outletId,
+              t.amount,
+              new_order_id,
+              t.method,
+              shiftId,
+              soldAt,
+            );
+          }
         });
       } catch (err: any) {
         // Race: two near-simultaneous retries both slipped past the pre-check
@@ -654,23 +766,53 @@ export async function mutationRoutes(app: FastifyInstance) {
           return { status: 200 as const, alreadyCancelled: true };
         }
 
-        // What this sale actually put in the drawer. Orders rung up after the
-        // 0057 migration carry the link and give an exact figure.
-        const [linked] = await tx
+        // What this sale actually put in the books, per side of the ledger.
+        // Orders rung up after the 0057 migration carry the link and give an
+        // exact figure; a mixed sale (Bayar Campuran) has one row per tender,
+        // so its cash part and its QRIS part come back separately.
+        const linked = await tx
           .select({
+            type: cashInDetailTable.type,
             amount: sql<string>`coalesce(sum(cast(${cashInDetailTable.money_amount} as numeric)), 0)`,
           })
           .from(cashFlows)
           .innerJoin(cashInDetailTable, eq(cashFlows.cash_in_detail_id, cashInDetailTable.id))
-          .where(eq(cashFlows.order_id, orderId));
+          .where(eq(cashFlows.order_id, orderId))
+          .groupBy(cashInDetailTable.type);
 
-        let amount = Number(linked?.amount ?? 0);
+        // Reverse it the same way it came in. The booking is only 'cash' if
+        // the customer actually paid cash; reversing a QRIS sale as a cash-out
+        // would drain a drawer that never received the money, and the next
+        // shift close would come up short by exactly that amount.
+        //
+        // A single-method sale takes its side from the note, as it always has:
+        // POS cash-in used to be hardcoded 'cash', so an old QRIS sale's row
+        // says 'cash' while its note says how the money really moved. A mixed
+        // sale only exists since each tender was booked on its own side, so
+        // its rows are the truth and each comes back as it went in.
+        const noteMethod = (order.note as any)?.paymentMethod;
+        const linkedTotal = linked.reduce((n, r) => n + Number(r.amount ?? 0), 0);
+        const refunds: { type: "cash" | "transfer"; amount: number }[] =
+          noteMethod === MIXED_PAYMENT
+            ? linked.map((r) => ({
+                type: r.type === "cash" ? "cash" : "transfer",
+                amount: Number(r.amount ?? 0),
+              }))
+            : [
+                {
+                  type: posCashflowTypeFor(parsePosPaymentMethod(noteMethod)),
+                  amount: linkedTotal,
+                },
+              ];
+        let amount = linkedTotal;
 
         // Orders that predate the link have no cash-in to point at, so the
         // total is rebuilt from the lines less the discount the cashier gave —
         // the same arithmetic the checkout screen did when it sent `total`.
         // This can disagree with what was really booked if the order was ever
         // edited, which is why it is the fallback and not the primary path.
+        // Those orders are all single-method (mixed sales came long after the
+        // link), so the one refund row above just takes the rebuilt amount.
         if (amount === 0) {
           const [sum] = await tx
             .select({
@@ -686,6 +828,7 @@ export async function mutationRoutes(app: FastifyInstance) {
           const taxBack =
             order.taxInclusive === false ? Number(order.taxAmount ?? 0) : 0;
           amount = Math.max(0, Number(sum?.total ?? 0) - discount + taxBack);
+          if (refunds.length === 1) refunds[0].amount = amount;
         }
 
         // Which drawer pays the refund back out: the one that is open NOW, not
@@ -695,18 +838,11 @@ export async function mutationRoutes(app: FastifyInstance) {
         // frozen closing count exists to prevent.
         const reversalShiftId = await getOpenShiftId(tx, access.outlet.id);
 
-        // Reverse it the same way it came in. The original booking is only
-        // 'cash' if the customer actually paid cash; reversing a QRIS sale as a
-        // cash-out would drain a drawer that never received the money, and the
-        // next shift close would come up short by exactly that amount.
-        const reversalType = posCashflowTypeFor(
-          parsePosPaymentMethod((order.note as any)?.paymentMethod),
-        );
-
-        // Reverse the money. Zero is skipped rather than booked: a 0-rupiah
-        // cash-out row is noise in the cashflow report, and a free order is a
-        // real case (fully discounted).
-        if (amount > 0) {
+        // Reverse the money, one cash-out per side. Zero is skipped rather
+        // than booked: a 0-rupiah cash-out row is noise in the cashflow
+        // report, and a free order is a real case (fully discounted).
+        const nonZeroRefunds = refunds.filter((r) => r.amount > 0);
+        if (nonZeroRefunds.length > 0) {
           let [category] = await tx
             .select({ id: cashOutCategoryTable.id })
             .from(cashOutCategoryTable)
@@ -719,21 +855,23 @@ export async function mutationRoutes(app: FastifyInstance) {
               .returning({ id: cashOutCategoryTable.id });
           }
 
-          const [detail] = await tx
-            .insert(cashOutDetailTable)
-            .values({
-              category_id: category.id,
-              money_amount: String(amount),
-              type: reversalType,
-            })
-            .returning({ id: cashOutDetailTable.id });
+          for (const refund of nonZeroRefunds) {
+            const [detail] = await tx
+              .insert(cashOutDetailTable)
+              .values({
+                category_id: category.id,
+                money_amount: String(refund.amount),
+                type: refund.type,
+              })
+              .returning({ id: cashOutDetailTable.id });
 
-          await tx.insert(cashFlows).values({
-            outlet_id: access.outlet.id,
-            cash_out_detail_id: detail.id,
-            order_id: orderId,
-            shift_id: reversalShiftId,
-          });
+            await tx.insert(cashFlows).values({
+              outlet_id: access.outlet.id,
+              cash_out_detail_id: detail.id,
+              order_id: orderId,
+              shift_id: reversalShiftId,
+            });
+          }
         }
 
         // Hand the stock back. Preferred path replays the order's own ledger,
