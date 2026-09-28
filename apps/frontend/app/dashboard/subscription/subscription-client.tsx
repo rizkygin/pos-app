@@ -22,6 +22,7 @@ import {
   ChefHat,
   History,
   Smartphone,
+  QrCode,
   Receipt,
   ShoppingBag,
   Boxes,
@@ -58,6 +59,7 @@ type Plan = {
     tax?: boolean;
     tableManagement?: boolean;
     kitchenDisplay?: boolean;
+    selfOrder?: boolean;
     membership?: boolean;
   };
 };
@@ -704,6 +706,9 @@ export function SubscriptionClient() {
                     </FeatureRow>
                     <FeatureRow ok={!!f.tax} icon={Percent}>
                       Pajak kasir (PB1 / PPN)
+                    </FeatureRow>
+                    <FeatureRow ok={!!f.selfOrder} icon={QrCode}>
+                      Pesan Mandiri — pelanggan pesan dari HP (QR)
                     </FeatureRow>
                     <FeatureRow ok={!!f.tableManagement} icon={Armchair}>
                       Manajemen meja &amp; bill meja

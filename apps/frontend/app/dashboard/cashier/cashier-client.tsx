@@ -73,6 +73,7 @@ import { TIER_BADGE, TIER_LABEL, type MembershipQuote } from '@/lib/membership';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { OrderPlacedFlash, PLACED_HOLD_MS } from './order-placed-flash';
 import { OrderFailedPopup } from './order-failed-popup';
+import { SelfOrderInbox, type StaffSelfOrder } from './self-order-inbox';
 
 export type Product = {
   id: string;
@@ -329,6 +330,12 @@ type HeldTab = {
   pointsToRedeem: number;
   /** Set when this tab is a table's bill (Manajemen Meja). */
   table?: TableLink;
+  /**
+   * Set when this tab was opened from a Pesan Mandiri order (the customer's
+   * phone), so accepting the same order again switches to it instead of
+   * opening a second copy that could be rung up twice.
+   */
+  selfOrderId?: string;
 };
 
 const newHeldTab = (label: string): HeldTab => ({
@@ -414,6 +421,11 @@ type CashierClientProps = {
    */
   canUseKitchen: boolean;
   /**
+   * Pesan Mandiri (Max Lite and up): the inbox of orders customers sent from
+   * their own phones, which rings until one is accepted into a tab.
+   */
+  canUseSelfOrder: boolean;
+  /**
    * The owner's "Dine In / Take Away" setting. Off hides the switch and the
    * sale records nothing (the server enforces that too).
    */
@@ -468,6 +480,7 @@ export const CashierClient = ({
   canUseMembership,
   canUseTables,
   canUseKitchen,
+  canUseSelfOrder,
   askServiceType,
   taxConfig,
   printSettings,
@@ -1381,6 +1394,78 @@ export const CashierClient = ({
       }
     },
     [applyTab, persistTabs],
+  );
+
+  // ── Pesan Mandiri: an order from the customer's phone, just accepted ──────
+  //
+  // A table order the server put on the table's bill opens as that bill.
+  // Anything else arrives as cart lines — already priced from the live
+  // catalogue when the customer sent them — and becomes a tab like any other:
+  // Dapur, discounts, payment and Checkout are the counter as it always was.
+  const selfOrderTabIds = useMemo(
+    () => new Set(tabs.map((t) => t.selfOrderId).filter((id): id is string => !!id)),
+    [tabs],
+  );
+  const openSelfOrder = useCallback(
+    (order: StaffSelfOrder) => {
+      if (order.sessionId) {
+        void openTableBill(order.sessionId, 1, {
+          notice: `Pesanan HP #${order.queueNo} masuk ke bill Meja ${order.tableLabel ?? ''}.`,
+        });
+        setCartOpen(true);
+        return;
+      }
+      const existing = tabsRef.current.find((t) => t.selfOrderId === order.id);
+      if (existing) {
+        switchTab(existing.id);
+        setCartOpen(true);
+        return;
+      }
+      const tabLabel = order.tableLabel
+        ? `Meja ${order.tableLabel} · HP #${order.queueNo}`
+        : `HP #${order.queueNo} · ${order.customerName}`;
+      // The kitchen ticket prints the order note, so the queue number the
+      // customer will be called by — and their table — ride along on it.
+      const orderNote = [
+        `Pesan Mandiri #${order.queueNo}`,
+        order.tableLabel ? `Meja ${order.tableLabel}` : null,
+        order.note,
+      ]
+        .filter(Boolean)
+        .join(' · ');
+      const target: HeldTab = {
+        ...newHeldTab(tabLabel),
+        cart: order.cart.map((l) => ({
+          lineId: l.lineId,
+          product: l.product,
+          quantity: l.quantity,
+          note: l.note || undefined,
+          addons: l.addons ?? [],
+        })),
+        customerName: order.customerName,
+        orderNote,
+        serviceType: isServiceType(order.serviceType)
+          ? order.serviceType
+          : order.tableLabel
+            ? 'dine_in'
+            : DEFAULT_SERVICE_TYPE,
+        selfOrderId: order.id,
+      };
+      // An untouched empty tab is replaced rather than left behind.
+      const active = tabsRef.current.find((t) => t.id === activeIdRef.current);
+      const blank =
+        active && !active.table && active.cart.length === 0 && !active.customerName.trim();
+      const next = blank
+        ? tabsRef.current.map((t) => (t.id === active.id ? target : t))
+        : [...tabsRef.current, target];
+      tabsRef.current = next;
+      setTabs(next);
+      setActiveTabId(target.id);
+      applyTab(target);
+      persistTabs(next, target.id);
+      setCartOpen(true);
+    },
+    [openTableBill, switchTab, applyTab, persistTabs],
   );
 
   /**
@@ -2968,6 +3053,12 @@ export const CashierClient = ({
                 </p>
               )}
             </div>
+            {/* Pesan Mandiri: orders from customers' phones. Rings until taken. */}
+            <SelfOrderInbox
+              enabled={canUseSelfOrder}
+              onAccepted={openSelfOrder}
+              openTabIds={selfOrderTabIds}
+            />
             {/* Open table bills, from any device. Held tabs are per device,
                 so this is how a till that didn't take the order finds it. */}
             {canUseTables && (

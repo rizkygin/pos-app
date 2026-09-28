@@ -328,6 +328,12 @@ export const outletsTable = pgTable('outlets', {
   // either way. See counterServiceType in lib/service-type.ts (0079).
   service_type_enabled: boolean('service_type_enabled').default(true).notNull(),
 
+  // Pesan Mandiri: customers order from their own phone on /menu/[id] and pay
+  // at the cashier. Off until the owner turns it on; the radius is how far
+  // from the outlet's pin a phone may be and still send an order (0086).
+  self_order_enabled: boolean('self_order_enabled').default(false).notNull(),
+  self_order_radius_m: integer('self_order_radius_m').default(150).notNull(),
+
   ...timestamps,
 });
 
@@ -2884,4 +2890,82 @@ export const outletPrinterSettingsTable = pgTable(
     updated_at: timestamp('updated_at', { withTimezone: true }),
   },
   (t) => [uniqueIndex('outlet_printer_settings_outlet_idx').on(t.outlet_id)],
+);
+
+// ============================================================================
+// Pesan Mandiri (self-order)
+// ============================================================================
+
+/**
+ * An order a customer sent from their own phone (/menu/[outlet_id]), waiting
+ * for the cashier. It is NOT an order: nothing here is money until the cashier
+ * accepts it into a till tab (or onto the table's bill) and checks it out
+ * through the normal /api/add-order-detail, which is where the sale, stock,
+ * shift and cashflow are written — exactly like an order the cashier typed in.
+ * Kept apart from `orders` for the same reason an open table bill is: every
+ * revenue reader assumes an order row is a finished sale. And apart from the
+ * courier app's orders (source 'app'), which are paid and dispatched online.
+ *
+ * `lines` are cart lines in the cashier's own shape (lineId, product snapshot,
+ * quantity, add-ons, note), priced by the SERVER from the live catalogue when
+ * the customer sent them — the phone's prices are never trusted.
+ *
+ * The id is minted by the phone and doubles as its receipt: whoever holds it
+ * may read the order's status and cancel it while it is pending. A retry of
+ * the same send lands on the same row.
+ *
+ * lat/lon/accuracy/distance record the location check the order passed, so an
+ * owner looking at a strange order can see where it was sent from.
+ */
+export const selfOrdersTable = pgTable(
+  'self_orders',
+  {
+    id: text('id').primaryKey(),
+    outlet_id: integer('outlet_id')
+      .notNull()
+      .references(() => outletsTable.id),
+    // "#12", numbered per local day — what the customer says at the till.
+    queue_no: integer('queue_no').notNull(),
+    status: varchar('status', { length: 12 }).default('pending').notNull(),
+    customer_name: varchar('customer_name', { length: 60 }).notNull(),
+    note: varchar('note', { length: 200 }),
+    // Null when the outlet does not ask (service_type_enabled off) or the
+    // order came from a table, which is dine_in by definition.
+    service_type: varchar('service_type', { length: 10 }),
+    // The table whose QR the customer scanned. The label is a snapshot: a
+    // table renamed later must not rename what this customer was told.
+    table_id: integer('table_id').references(() => diningTablesTable.id),
+    table_label: varchar('table_label', { length: 20 }),
+    lines: jsonb('lines').default([]).notNull(),
+    // Pre-tax, pre-discount: the sum of the lines. Display only — the till
+    // prices the sale itself at checkout.
+    subtotal: numeric('subtotal', { precision: 14, scale: 2 }).notNull(),
+    lat: numeric('lat', { precision: 10, scale: 7 }),
+    lon: numeric('lon', { precision: 10, scale: 7 }),
+    accuracy_m: integer('accuracy_m'),
+    distance_m: integer('distance_m'),
+    accepted_at: timestamp('accepted_at', { withTimezone: true }),
+    accepted_by: text('accepted_by').references(() => usersTable.id),
+    // The seating a table order was put on when it was accepted.
+    session_id: text('session_id').references(() => tableSessionsTable.id),
+    rejected_at: timestamp('rejected_at', { withTimezone: true }),
+    reject_reason: varchar('reject_reason', { length: 120 }),
+    cancelled_at: timestamp('cancelled_at', { withTimezone: true }),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }),
+  },
+  (t) => [
+    check(
+      'self_orders_status_ck',
+      sql`${t.status} in ('pending', 'accepted', 'rejected', 'cancelled')`,
+    ),
+    check(
+      'self_orders_service_type_ck',
+      sql`${t.service_type} is null or ${t.service_type} in ('dine_in', 'take_away')`,
+    ),
+    index('self_orders_outlet_created_idx').on(t.outlet_id, t.created_at),
+    index('self_orders_pending_idx')
+      .on(t.outlet_id)
+      .where(sql`status = 'pending'`),
+  ],
 );

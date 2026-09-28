@@ -179,7 +179,7 @@ async function handle(reply: FastifyReply, fn: () => Promise<unknown>) {
 // ── seating primitives ───────────────────────────────────────────────────────
 
 /** Lock a seating of this outlet that is still on the floor, or fail. */
-async function lockLiveSession(tx: Tx, outletId: number, sessionId: string) {
+export async function lockLiveSession(tx: Tx, outletId: number, sessionId: string) {
   const [s] = await tx
     .select()
     .from(tableSessionsTable)
@@ -192,7 +192,7 @@ async function lockLiveSession(tx: Tx, outletId: number, sessionId: string) {
 }
 
 /** Lock one table of this outlet, or fail. */
-async function lockTable(tx: Tx, outletId: number, tableId: number) {
+export async function lockTable(tx: Tx, outletId: number, tableId: number) {
   const [t] = await tx
     .select()
     .from(diningTablesTable)
@@ -251,7 +251,7 @@ async function claimTable(tx: Tx, outletId: number, tableId: number, sessionId: 
 }
 
 /** A new seating on a free table. Returns its id. */
-async function seatTable(
+export async function seatTable(
   tx: Tx,
   args: { outletId: number; tableId: number; guestName: string | null; pax: number; userId: string },
 ) {
@@ -269,7 +269,7 @@ async function seatTable(
 }
 
 /** Bump a seating's version: its bill changed shape under any open tab. */
-async function bumpVersion(tx: Tx, sessionId: string, extra: Record<string, unknown> = {}) {
+export async function bumpVersion(tx: Tx, sessionId: string, extra: Record<string, unknown> = {}) {
   await tx
     .update(tableSessionsTable)
     .set({ version: sql`${tableSessionsTable.version} + 1`, updatedAt: new Date(), ...extra })
@@ -281,7 +281,7 @@ async function bumpVersion(tx: Tx, sessionId: string, extra: Record<string, unkn
  * off and something new arrived, or mark it paid if the last unpaid item left
  * and something was paid before. Returns the status it should now have.
  */
-async function reconcileStatus(tx: Tx, sessionId: string, current: string) {
+export async function reconcileStatus(tx: Tx, sessionId: string, current: string) {
   const [counts] = await tx
     .select({
       unpaid: sql<number>`count(*) filter (where ${tableSessionLinesTable.order_id} is null)::int`,

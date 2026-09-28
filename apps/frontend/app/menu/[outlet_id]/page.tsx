@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { serverFetch } from "@/lib/server-fetch";
 import { resolveOutletImage } from "@/lib/image-src";
 import { MenuClient } from "./menu-client";
+import type { Product } from "./menu-types";
 
 type Params = { outlet_id: string };
 
@@ -43,13 +44,23 @@ export async function generateMetadata({
 
 export default async function MenuPage({
     params,
+    searchParams,
 }: {
     params: Promise<Params>;
+    searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
     const { outlet_id } = await params;
+    // A table's QR sticker opens /menu/<outlet>?meja=<table id>: an order sent
+    // from here goes onto that table's bill (Pesan Mandiri).
+    const { meja } = await searchParams;
+    const table = typeof meja === "string" && /^\d{1,9}$/.test(meja) ? meja : null;
 
-    const res = await serverFetch(`/api/get-menu?outlet_id=${outlet_id}`);
-    const { outlet, products } = res.ok ? await res.json() : { outlet: null, products: [] };
+    const res = await serverFetch(
+        `/api/get-menu?outlet_id=${encodeURIComponent(outlet_id)}${table ? `&meja=${table}` : ""}`,
+    );
+    const { outlet, products, selfOrder, ads } = res.ok
+        ? await res.json()
+        : { outlet: null, products: [], selfOrder: null, ads: [] };
 
     if (!outlet) {
         return <NotFound />;
@@ -61,10 +72,13 @@ export default async function MenuPage({
                 ...outlet,
                 ratings: outlet.ratings ? String(outlet.ratings) : "5.00",
             }}
-            products={products.map((p: any) => ({
+            products={products.map((p: Product) => ({
                 ...p,
                 ratings: p.ratings ? String(p.ratings) : "5.00",
+                addon_groups: p.addon_groups ?? [],
             }))}
+            selfOrder={selfOrder ?? null}
+            ads={ads ?? []}
         />
     );
 }

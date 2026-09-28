@@ -65,6 +65,7 @@ export default async function CashierPage() {
                 canUseMembership={features.membership === true}
                 canUseTables={features.tableManagement === true}
                 canUseKitchen={features.kitchenDisplay === true}
+                canUseSelfOrder={features.selfOrder === true}
                 askServiceType={outlet.service_type_enabled !== false}
                 // Resolved against the gate here, so the counter can't show a
                 // tax line the plan doesn't include. The server applies the

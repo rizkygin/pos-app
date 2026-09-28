@@ -25,6 +25,11 @@ import {
     type ReceiptShowKey,
 } from "@/lib/receipt-settings";
 import { ReceiptPaper, type PaperWidth, type ReceiptData } from "./receipt-modal";
+import {
+    SelfOrderSettings,
+    type SelfOrderSettingsMeta,
+    type SelfOrderSettingsValue,
+} from "./self-order-settings";
 import { cn } from "@/lib/utils";
 
 const FEATURE_META = ORDER_FEATURES.filter((f) => f.isAvailable);
@@ -75,7 +80,7 @@ type TaxState = {
     label: string;
 };
 
-type SectionId = "profil" | "tag" | "lokasi" | "notifikasi" | "pajak" | "layanan" | "struk";
+type SectionId = "profil" | "tag" | "lokasi" | "notifikasi" | "pajak" | "layanan" | "pesan-mandiri" | "struk";
 
 const EMPTY_FORM: OutletForm = {
     isOpen: true,
@@ -230,6 +235,10 @@ export function OwnerSetting() {
     // Struk: same deal — its own endpoint, saved by the one button.
     const [receipt, setReceipt] = useState<ReceiptPrintSettings | null>(null);
     const [savedReceipt, setSavedReceipt] = useState<ReceiptPrintSettings | null>(null);
+    // Pesan Mandiri: same again. `meta` is read-only context (plan, tables).
+    const [selfOrder, setSelfOrder] = useState<SelfOrderSettingsValue | null>(null);
+    const [savedSelfOrder, setSavedSelfOrder] = useState<SelfOrderSettingsValue | null>(null);
+    const [selfOrderMeta, setSelfOrderMeta] = useState<SelfOrderSettingsMeta | null>(null);
 
     const push = usePushSubscription();
     const [testing, setTesting] = useState(false);
@@ -303,6 +312,25 @@ export function OwnerSetting() {
                 setSavedReceipt(loaded);
             })
             .catch(() => {});
+
+        fetch(`${API_URL}/api/self-orders/settings`, { credentials: "include" })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((j) => {
+                if (!j?.success) return;
+                const loaded: SelfOrderSettingsValue = { enabled: !!j.enabled, radiusM: Number(j.radiusM) };
+                setSelfOrder(loaded);
+                setSavedSelfOrder(loaded);
+                setSelfOrderMeta({
+                    outletId: j.outletId,
+                    radiusMin: j.radiusMin,
+                    radiusMax: j.radiusMax,
+                    hasLocation: !!j.hasLocation,
+                    planAllowed: !!j.planAllowed,
+                    canUseTables: !!j.canUseTables,
+                    tables: j.tables ?? [],
+                });
+            })
+            .catch(() => {});
     }, []);
 
     // Courier coverage circle. Fetched as a shape, not a verdict, so the warning
@@ -340,7 +368,8 @@ export function OwnerSetting() {
     const taxDirty = canUseTax && !same(tax, savedTax);
     const serviceTypeDirty = serviceType !== savedServiceType;
     const receiptDirty = !same(receipt, savedReceipt);
-    const dirty = outletDirty || taxDirty || serviceTypeDirty || receiptDirty;
+    const selfOrderDirty = !same(selfOrder, savedSelfOrder);
+    const dirty = outletDirty || taxDirty || serviceTypeDirty || receiptDirty || selfOrderDirty;
 
     // Flipping Dine In / Take Away used to save on the spot; now it waits for
     // Simpan like everything else, so leaving with it unsaved has to be loud.
@@ -376,11 +405,18 @@ export function OwnerSetting() {
         if (serviceType !== null) {
             items.push({ id: "layanan", label: "Dine In / Take Away", tag: serviceType ? "aktif" : "mati" });
         }
+        if (selfOrder && selfOrderMeta) {
+            items.push({
+                id: "pesan-mandiri",
+                label: "Pesan Mandiri",
+                tag: !selfOrderMeta.planAllowed ? "Max Lite" : selfOrder.enabled ? "aktif" : "mati",
+            });
+        }
         if (receipt) {
             items.push({ id: "struk", label: "Struk", tag: receipt.qrUrl && receipt.show.qr ? "QR" : "" });
         }
         return items;
-    }, [form.tags.length, coverage?.outside, push.state, tax, canUseTax, serviceType, receipt]);
+    }, [form.tags.length, coverage?.outside, push.state, tax, canUseTax, serviceType, selfOrder, selfOrderMeta, receipt]);
 
     const [active, setActive] = useState<SectionId>("profil");
     const headerRef = useRef<HTMLDivElement>(null);
@@ -533,6 +569,7 @@ export function OwnerSetting() {
         const sentTax = tax;
         const sentServiceType = serviceType;
         const sentReceipt = receipt;
+        const sentSelfOrder = selfOrder;
         const results = await Promise.all([
             outletDirty
                 ? patchJson("/api/outlet/me", {
@@ -578,6 +615,16 @@ export function OwnerSetting() {
                 })
                 : null,
         ]);
+        // After the rest, not beside it: switching Pesan Mandiri on is refused
+        // until the outlet has a location, and that may be in this same save.
+        if (selfOrderDirty && sentSelfOrder) {
+            const r = await patchJson("/api/self-orders/settings", sentSelfOrder);
+            if (r.ok) {
+                setSavedSelfOrder(sentSelfOrder);
+                if (sentSelfOrder.enabled) setSelfOrderMeta((m) => (m ? { ...m, hasLocation: true } : m));
+            }
+            results.push(r);
+        }
         setSaving(false);
         const failed = results.find((r) => r && !r.ok);
         setMessage(
@@ -1276,6 +1323,41 @@ export function OwnerSetting() {
                                     </Link>
                                 </li>
                             </ul>
+                        </Section>
+                    )}
+
+                    {/* ── Pesan Mandiri ──────────────────────────────────────
+                        Customers order from their own phone on the menu page
+                        and pay at the cashier; the till rings until it takes
+                        the order. Location-checked, so only phones inside. */}
+                    {selfOrder && selfOrderMeta && (
+                        <Section
+                            id="pesan-mandiri"
+                            title="Pesan Mandiri (QR)"
+                            desc={
+                                selfOrder.enabled
+                                    ? "Pelanggan memesan dari HP lewat menu outlet, lalu membayar di kasir."
+                                    : "Mati. Menu outlet hanya bisa dilihat, belum bisa dipakai memesan."
+                            }
+                            action={
+                                <Switch
+                                    checked={selfOrder.enabled}
+                                    // Only turning it ON is gated — a downgraded owner can always switch it off.
+                                    disabled={
+                                        !selfOrder.enabled &&
+                                        (!selfOrderMeta.planAllowed || !isValidCoord(form.lat, form.lon))
+                                    }
+                                    onChange={() => setSelfOrder({ ...selfOrder, enabled: !selfOrder.enabled })}
+                                    label="Nyalakan Pesan Mandiri"
+                                />
+                            }
+                        >
+                            <SelfOrderSettings
+                                value={selfOrder}
+                                onChange={setSelfOrder}
+                                meta={selfOrderMeta}
+                                outletName={form.name}
+                            />
                         </Section>
                     )}
 

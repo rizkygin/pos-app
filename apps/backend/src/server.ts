@@ -33,6 +33,7 @@ import { membershipRoutes } from "./routes/membership";
 import { tableRoutes } from "./routes/tables";
 import { kitchenRoutes } from "./routes/kitchen";
 import { stockOpnameRoutes } from "./routes/stock-opname";
+import { selfOrderRoutes } from "./routes/self-order";
 import { startDispatchScheduler } from "./lib/dispatch-scheduler";
 import { FRONTEND_ORIGINS } from "./lib/app-env";
 
@@ -133,6 +134,7 @@ async function main() {
   await app.register(tableRoutes);
   await app.register(kitchenRoutes);
   await app.register(stockOpnameRoutes);
+  await app.register(selfOrderRoutes);
 
   app.get("/health", async () => ({ ok: true }));
 

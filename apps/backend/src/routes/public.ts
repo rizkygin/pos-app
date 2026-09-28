@@ -15,6 +15,8 @@ import { getServiceArea } from "../lib/service-area";
 // copy that used to live here is what let "bahan bangunan" go missing and drop
 // out of browse while its outlets still advertised the feature.
 import { CATEGORY_FEATURE, FEATURE_CATEGORY, notInternalCategory } from "../lib/outlet-features";
+import { addonGroupsForProducts } from "../lib/addons";
+import { menuSelfOrderInfo } from "./self-order";
 
 // Must not exceed the delivery cap in deliveryFeeFromDistance (orders.ts) —
 // listing an outlet nobody can actually order from is worse than omitting it.
@@ -107,11 +109,48 @@ function mapProductRow(row: JoinRow) {
   };
 }
 
+/**
+ * This outlet's own ads that are on air right now — the banner at the top of
+ * its menu page. Same "showing now" rule as the customer dashboard's promo
+ * banner: approved, switched on, inside the campaign window AND booked for the
+ * current day/hour slot (see lib/utils/ad-schedule.ts).
+ */
+async function outletActiveAds(outletId: number) {
+  const { now, day, hour } = getCurrentAdSlot();
+  const rows = await db
+    .selectDistinct({
+      id: productAdsTable.id,
+      title: productAdsTable.title,
+      description: productAdsTable.description,
+      bannerImage: productAdsTable.banner_image,
+      productId: productAdsTable.product_id,
+    })
+    .from(productAdsTable)
+    .innerJoin(productAdsSchedule, eq(productAdsSchedule.productAdsSchedule_id, productAdsTable.id))
+    .innerJoin(
+      scheduleProductAdsTable,
+      eq(scheduleProductAdsTable.id, productAdsSchedule.scheduleProductAdsTable_id),
+    )
+    .where(
+      and(
+        eq(productAdsTable.outlet_id, outletId),
+        eq(productAdsTable.status, "approved"),
+        eq(productAdsTable.is_active, true),
+        lte(productAdsTable.starts_at, now),
+        or(isNull(productAdsTable.ends_at), gte(productAdsTable.ends_at, now)),
+        sql`${scheduleProductAdsTable.time}->>'day' = ${day}`,
+        sql`${scheduleProductAdsTable.time}->>'hour' = ${hour}`,
+      ),
+    )
+    .limit(8);
+  return rows.map((r) => ({ ...r, description: r.description ?? "" }));
+}
+
 export async function publicRoutes(app: FastifyInstance) {
   // Public menu for an outlet: the outlet's public info + its available products.
   // { outlet: null } => the page renders Not Found.
   app.get("/api/get-menu", async (request) => {
-    const { outlet_id } = request.query as { outlet_id?: string };
+    const { outlet_id, meja } = request.query as { outlet_id?: string; meja?: string };
     const id = Number(outlet_id);
     if (!outlet_id || Number.isNaN(id)) return { outlet: null, products: [] };
 
@@ -158,20 +197,44 @@ export async function publicRoutes(app: FastifyInstance) {
         // offer several features, so the product's OWN feature decides which
         // /dashboard/order/[feature] page to open (same rule as "Order Lagi").
         features: productsTable.features,
+        // Variants (0071) are product rows; the page groups them under their
+        // base the way the cashier does, and the picker asks for one.
+        variant_of: productsTable.variant_of,
+        variant_name: productsTable.variant_name,
+        variant_label: productsTable.variant_label,
+        variant_sort: productsTable.variant_sort,
       })
       .from(productsTable)
       .leftJoin(menuGroupsTable, eq(productsTable.menu_group_id, menuGroupsTable.id))
       .where(
         and(
           eq(productsTable.outlet_id, id),
-          eq(productsTable.isAvailable, true),
+          // Sold-out rows come along too: a base marked habis whose Large is
+          // still available must stay orderable through its variant. The page
+          // hides whatever has nothing left to sell.
           eq(productsTable.is_for_sale, true),
           notInternalCategory(),
           isNull(productsTable.deletedAt),
         ),
       );
 
-    return { outlet, products };
+    // Add-on questions hang off the base; a variant inherits its base's.
+    const baseIds = products.filter((p) => !p.variant_of).map((p) => p.id);
+    const [groupsByBase, selfOrder, ads] = await Promise.all([
+      addonGroupsForProducts(id, baseIds),
+      menuSelfOrderInfo(id, meja),
+      outletActiveAds(id),
+    ]);
+
+    return {
+      outlet,
+      products: products.map((p) => ({
+        ...p,
+        addon_groups: p.variant_of ? [] : (groupsByBase.get(p.id) ?? []),
+      })),
+      selfOrder,
+      ads,
+    };
   });
 
   // Lightweight, UNLIMITED outlet id+updatedAt list for the frontend sitemap

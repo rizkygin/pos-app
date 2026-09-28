@@ -142,6 +142,7 @@ const TRIAL_FEATURES: Record<string, unknown> = {
   membership: true,
   tableManagement: true,
   kitchenDisplay: true,
+  selfOrder: true,
 };
 const NO_FEATURES: Record<string, unknown> = {};
 
