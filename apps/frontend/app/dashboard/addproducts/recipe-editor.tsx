@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Boxes, Loader2, Plus, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Boxes, Loader2, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { API_URL } from '@/lib/api-url';
+import { ProductSearchAdd, type PickerOption } from './product-search-add';
 
 type IngredientOption = {
   id: string;
@@ -14,12 +15,26 @@ type IngredientOption = {
   // a valid ingredient (that is what a sub-composition IS), but showing it a
   // stock number would be a lie, so the label drops it.
   track_stock: boolean;
+  category?: string;
 };
 
 type RecipeRow = {
   ingredient_id: string;
   qty: string;
 };
+
+// The second line under an ingredient: how much is left, or that it has no
+// stock of its own to show.
+const metaOf = (p: IngredientOption) =>
+  p.track_stock ? `Stok ${Number(p.stock)} ${p.unit}` : 'Komposisi, tanpa stok sendiri';
+
+// What a save would send, so "Belum disimpan" ignores a half-typed empty row.
+const signature = (rows: RecipeRow[]) =>
+  JSON.stringify(
+    rows
+      .filter((r) => r.ingredient_id && Number(r.qty) > 0)
+      .map((r) => [r.ingredient_id, Number(r.qty)]),
+  );
 
 // Optional bill-of-materials editor shown on track_stock=false products.
 //
@@ -57,6 +72,13 @@ export function RecipeEditor({
   // per-one-unit, so this never changes what a sale deducts.
   const [yieldQty, setYieldQty] = useState('1');
   const [error, setError] = useState('');
+  // The row just added from the search, whose qty takes the focus.
+  const [justAdded, setJustAdded] = useState<string | null>(null);
+  // What is saved on the server, to say so when the list on screen differs.
+  // This editor saves on its own button, apart from the product form's Simpan,
+  // so a list that silently isn't saved is the easy mistake to make.
+  const [savedSig, setSavedSig] = useState<string | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -68,12 +90,12 @@ export function RecipeEditor({
         const json = await res.json();
         if (!cancelled && json.success) {
           if (json.yield_qty != null) setYieldQty(String(Number(json.yield_qty)));
-          setRows(
-            (json.items as { ingredient_id: string; qty: string }[]).map((it) => ({
-              ingredient_id: it.ingredient_id,
-              qty: String(Number(it.qty)), // "0.250" -> "0.25" for the input
-            })),
-          );
+          const loaded = (json.items as { ingredient_id: string; qty: string }[]).map((it) => ({
+            ingredient_id: it.ingredient_id,
+            qty: String(Number(it.qty)), // "0.250" -> "0.25" for the input
+          }));
+          setRows(loaded);
+          setSavedSig(signature(loaded));
         }
       } catch {
         /* leave empty — owner can still add rows */
@@ -89,7 +111,28 @@ export function RecipeEditor({
   const setRow = (i: number, patch: Partial<RecipeRow>) =>
     setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
 
-  const unitOf = (id: string) => ingredients.find((p) => p.id === id)?.unit ?? '';
+  const byId = useMemo(() => new Map(ingredients.map((p) => [p.id, p])), [ingredients]);
+  const unitOf = (id: string) => byId.get(id)?.unit ?? '';
+
+  // Bahan first: what a composition is usually made of. Anything else in the
+  // outlet can still be found by name — a bundle draws on a sellable product.
+  const pickerOptions = useMemo<PickerOption[]>(
+    () =>
+      ingredients.map((p) => ({
+        id: p.id,
+        name: p.product_name,
+        meta: metaOf(p),
+        group: p.category === 'bahan' ? 'Bahan' : 'Produk lain',
+      })),
+    [ingredients],
+  );
+  const taken = useMemo(() => new Set(rows.map((r) => r.ingredient_id)), [rows]);
+  const isDirty = savedSig !== null && signature(rows) !== savedSig;
+
+  const addIngredient = (id: string) => {
+    setRows((prev) => [...prev, { ingredient_id: id, qty: '' }]);
+    setJustAdded(id);
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -109,6 +152,7 @@ export function RecipeEditor({
       });
       const json = await res.json();
       if (!json.success) throw new Error(json.message || 'Gagal menyimpan komposisi');
+      setSavedSig(signature(rows));
       setSavedAt(Date.now());
       setTimeout(() => setSavedAt(null), 2500);
     } catch (e) {
@@ -161,49 +205,76 @@ export function RecipeEditor({
         </div>
       ) : (
         <>
-          {rows.map((row, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <select
-                value={row.ingredient_id}
-                onChange={(e) => setRow(i, { ingredient_id: e.target.value })}
-                className="h-10 min-w-0 flex-1 rounded-xl border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <option value="">Pilih produk…</option>
-                {ingredients.map((p) => (
-                  <option
-                    key={p.id}
-                    value={p.id}
-                    disabled={rows.some((r, idx) => idx !== i && r.ingredient_id === p.id)}
+          {rows.length === 0 ? (
+            <p className="rounded-xl bg-muted/40 px-3 py-2.5 text-xs text-muted-foreground">
+              Belum ada bahan. Cari di bawah untuk menambahkan.
+            </p>
+          ) : (
+            <div className="space-y-1.5">
+              {rows.map((row, i) => {
+                const p = byId.get(row.ingredient_id);
+                return (
+                  <div
+                    key={`${row.ingredient_id}-${i}`}
+                    // Wraps on a phone: the name gets its own line instead of
+                    // being cut to "Roti D…" beside the qty and unit.
+                    className="flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-xl border bg-background px-3 py-2 sm:flex-nowrap sm:py-1.5"
                   >
-                    {p.product_name}
-                    {p.track_stock
-                      ? ` (stok ${Number(p.stock)} ${p.unit})`
-                      : ' (komposisi)'}
-                  </option>
-                ))}
-              </select>
-              <input
-                type="number"
-                min="0"
-                step="any"
-                value={row.qty}
-                onChange={(e) => setRow(i, { qty: e.target.value })}
-                placeholder="Qty"
-                className="h-10 w-20 rounded-xl border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              />
-              <span className="w-10 shrink-0 text-xs text-muted-foreground">
-                {unitOf(row.ingredient_id)}
-              </span>
-              <button
-                type="button"
-                onClick={() => setRows((prev) => prev.filter((_, idx) => idx !== i))}
-                className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-red-50 hover:text-red-600"
-                aria-label="Hapus item"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
+                    <span className="min-w-0 basis-full sm:basis-0 sm:flex-1">
+                      <span className="block truncate text-sm font-medium">
+                        {p?.product_name ?? 'Produk tidak ditemukan'}
+                      </span>
+                      {p && (
+                        <span className="block truncate text-[11px] text-muted-foreground">
+                          {metaOf(p)}
+                        </span>
+                      )}
+                    </span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="any"
+                      inputMode="decimal"
+                      autoFocus={row.ingredient_id === justAdded}
+                      value={row.qty}
+                      onChange={(e) => setRow(i, { qty: e.target.value })}
+                      // Enter = on to the next ingredient, never a save of the
+                      // whole product form this editor sits inside.
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          searchRef.current?.focus();
+                        }
+                      }}
+                      placeholder="Jumlah"
+                      aria-label={`Jumlah ${p?.product_name ?? ''}`}
+                      className="h-9 w-24 min-w-0 flex-1 rounded-lg border border-input bg-background px-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:flex-none"
+                    />
+                    <span className="w-10 shrink-0 truncate text-xs text-muted-foreground">
+                      {unitOf(row.ingredient_id)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setRows((prev) => prev.filter((_, idx) => idx !== i))}
+                      className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-red-50 hover:text-red-600"
+                      aria-label={`Hapus ${p?.product_name ?? 'item'}`}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                );
+              })}
             </div>
-          ))}
+          )}
+
+          <ProductSearchAdd
+            ref={searchRef}
+            options={pickerOptions}
+            groups={['Bahan', 'Produk lain']}
+            taken={taken}
+            onPick={addIngredient}
+            placeholder="Cari bahan untuk ditambahkan…"
+          />
 
           {trackStock && (
             <div className="flex items-center gap-2 pt-1">
@@ -224,16 +295,12 @@ export function RecipeEditor({
             </div>
           )}
 
-          <div className="flex items-center justify-between gap-2 pt-1">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="rounded-xl"
-              onClick={() => setRows((prev) => [...prev, { ingredient_id: '', qty: '' }])}
-            >
-              <Plus className="mr-1 h-3.5 w-3.5" /> Tambah Item
-            </Button>
+          <div className="flex items-center justify-end gap-3 pt-1">
+            {isDirty && !saving && (
+              <span className="text-xs font-medium text-amber-600 dark:text-amber-500">
+                Belum disimpan
+              </span>
+            )}
             <Button
               type="button"
               size="sm"

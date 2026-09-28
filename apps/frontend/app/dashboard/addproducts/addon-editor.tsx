@@ -1,10 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Layers, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { API_URL } from '@/lib/api-url';
 import { formatCurrency } from '@/lib/utils/format';
+import { ProductSearchAdd, type PickerOption } from './product-search-add';
 
 type ProductOption = {
   id: string;
@@ -282,18 +283,27 @@ function GroupDialog({
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  // The option just added from the search, whose price takes the focus.
+  const [justAdded, setJustAdded] = useState<string | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
 
-  // Split once for the picker below. Sorted by name inside each half: the list
-  // arrives in the product table's order, which is the order the owner added
-  // things in — no help at all when you are hunting for "Telur Ceplok".
-  const byName = (a: ProductOption, b: ProductOption) =>
-    a.product_name.localeCompare(b.product_name, 'id');
-  const addonProducts = products
-    .filter((p) => p.category === ADDON_CATEGORY)
-    .sort(byName);
-  const otherProducts = products
-    .filter((p) => p.category !== ADDON_CATEGORY)
-    .sort(byName);
+  // Tambahan first: anything filed there was made to be an add-on, so it is
+  // what the owner is hunting for. Every other product stays findable by name.
+  const nameById = useMemo(
+    () => new Map(products.map((p) => [p.id, p.product_name])),
+    [products],
+  );
+  const pickerOptions = useMemo<PickerOption[]>(
+    () =>
+      products.map((p) => ({
+        id: p.id,
+        name: p.product_name,
+        meta: p.category === ADDON_CATEGORY ? undefined : p.category,
+        group: p.category === ADDON_CATEGORY ? 'Tambahan' : 'Produk lain',
+      })),
+    [products],
+  );
+  const taken = useMemo(() => new Set(rows.map((r) => r.product_id)), [rows]);
 
   const save = async () => {
     setSaving(true);
@@ -416,17 +426,11 @@ function GroupDialog({
           </div>
 
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-semibold">Pilihan</label>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => setRows([...rows, { product_id: '', price: '0' }])}
-              >
-                <Plus className="h-3.5 w-3.5 mr-1" />
-                Tambah
-              </Button>
+            <div className="flex items-baseline justify-between gap-2">
+              <p className="text-xs font-semibold">Pilihan</p>
+              {rows.length > 0 && (
+                <p className="text-[10px] text-muted-foreground">harga tambahan ke pelanggan</p>
+              )}
             </div>
             <p className="text-[10px] text-muted-foreground">
               Pilihan diambil dari produk. Buat produk seperti &quot;Telur
@@ -434,53 +438,46 @@ function GroupDialog({
               HPP-nya tetap ikut terhitung, tapi ia tidak muncul sendiri di
               kasir maupun di menu pelanggan.
             </p>
+            {rows.length === 0 && (
+              <p className="rounded-lg bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                Belum ada pilihan. Cari di bawah untuk menambahkan.
+              </p>
+            )}
             {rows.map((row, i) => (
-              <div key={i} className="flex gap-2">
-                <select
-                  value={row.product_id}
-                  aria-label="Produk pilihan"
-                  onChange={(e) => {
-                    const next = [...rows];
-                    next[i] = { ...next[i], product_id: e.target.value };
-                    setRows(next);
-                  }}
-                  className="flex-1 min-w-0 rounded-lg border px-2 py-2 text-sm bg-background"
-                >
-                  <option value="">— pilih produk —</option>
-                  {addonProducts.length > 0 && (
-                    <optgroup label="Tambahan">
-                      {addonProducts.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.product_name}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                  {otherProducts.length > 0 && (
-                    <optgroup label="Produk lain">
-                      {otherProducts.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.product_name}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                </select>
+              <div
+                key={`${row.product_id}-${i}`}
+                className="flex items-center gap-2 rounded-lg border px-2.5 py-1.5"
+              >
+                <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                  {nameById.get(row.product_id) ?? 'Produk tidak ditemukan'}
+                </span>
+                <span className="text-xs text-muted-foreground">+Rp</span>
                 <input
                   type="number"
                   min={0}
-                  aria-label="Harga tambahan"
+                  inputMode="numeric"
+                  aria-label={`Harga tambahan ${nameById.get(row.product_id) ?? ''}`}
+                  autoFocus={row.product_id === justAdded}
                   value={row.price}
                   onChange={(e) => {
                     const next = [...rows];
                     next[i] = { ...next[i], price: e.target.value };
                     setRows(next);
                   }}
-                  className="w-24 shrink-0 rounded-lg border px-2 py-2 text-sm bg-background"
+                  // Enter = on to the next option. This dialog sits inside the
+                  // product form, where an Enter would otherwise save it.
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      searchRef.current?.focus();
+                    }
+                  }}
+                  onFocus={(e) => e.target.select()}
+                  className="w-24 shrink-0 rounded-lg border px-2 py-1.5 text-sm bg-background"
                 />
                 <button
                   type="button"
-                  aria-label="Hapus pilihan"
+                  aria-label={`Hapus ${nameById.get(row.product_id) ?? 'pilihan'}`}
                   onClick={() => setRows(rows.filter((_, j) => j !== i))}
                   className="shrink-0 p-1 text-muted-foreground hover:text-rose-500"
                 >
@@ -488,6 +485,17 @@ function GroupDialog({
                 </button>
               </div>
             ))}
+            <ProductSearchAdd
+              ref={searchRef}
+              options={pickerOptions}
+              groups={['Tambahan', 'Produk lain']}
+              taken={taken}
+              onPick={(id) => {
+                setRows((prev) => [...prev, { product_id: id, price: '0' }]);
+                setJustAdded(id);
+              }}
+              placeholder="Cari produk untuk jadi pilihan…"
+            />
           </div>
 
           {error && <p className="text-xs text-rose-500">{error}</p>}
