@@ -327,6 +327,10 @@ export const outletsTable = pgTable('outlets', {
   // counter sales record NULL ("not recorded"); a table's bill is dine_in
   // either way. See counterServiceType in lib/service-type.ts (0079).
   service_type_enabled: boolean('service_type_enabled').default(true).notNull(),
+  // Whether the cashier has the struk button beside Checkout — the slip
+  // printed before the sale is booked (0087). Off = only Checkout prints a
+  // receipt. Every press while on is written to print_logs.
+  precheckout_receipt_enabled: boolean('precheckout_receipt_enabled').default(true).notNull(),
 
   // Pesan Mandiri: customers order from their own phone on /menu/[id] and pay
   // at the cashier. Off until the owner turns it on; the radius is how far
@@ -2890,6 +2894,64 @@ export const outletPrinterSettingsTable = pgTable(
     updated_at: timestamp('updated_at', { withTimezone: true }),
   },
   (t) => [uniqueIndex('outlet_printer_settings_outlet_idx').on(t.outlet_id)],
+);
+
+// ============================================================================
+// Print logs — slips printed before the money is booked (migration 0087)
+// ============================================================================
+
+/**
+ * One row per press of Cetak on a slip that asks to be paid:
+ *
+ *   receipt     the cashier's pre-checkout struk (the printer button beside
+ *               Checkout), on a counter tab or a table tab. source_key is the
+ *               till tab's id.
+ *   table_bill  "Cetak Bill" in Manajemen Meja. session_id + bill_no say which
+ *               bill (bill_no NULL = the whole table).
+ *
+ * A slip is only paper: without this row, a cashier who prints the struk,
+ * takes the cash and never presses Checkout leaves nothing on the server. So
+ * every such print is written here with what it listed and the total it asked
+ * for, and checkout stamps order_id on the rows it paid (linkPrintLogs,
+ * lib/print-log.ts). A row still without an order_id is a slip that was handed
+ * over and never paid.
+ *
+ * Linked by LINE, not by tab: a till tab outlives its sales (clearing the cart
+ * keeps the tab id), so a tab match alone would let a slip from a cleared cart
+ * ride on the next customer's sale. The print's lines carry the cart's lineIds
+ * — table lines are table_session_lines ids — and only a sale holding one of
+ * them claims it.
+ *
+ * `lines` and `total` are a snapshot of the paper, never read for money.
+ */
+export const printLogsTable = pgTable(
+  'print_logs',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    outlet_id: integer('outlet_id')
+      .notNull()
+      .references(() => outletsTable.id, { onDelete: 'cascade' }),
+    kind: varchar('kind', { length: 12 }).notNull(),
+    source_key: varchar('source_key', { length: 64 }),
+    session_id: text('session_id').references(() => tableSessionsTable.id, { onDelete: 'set null' }),
+    bill_no: integer('bill_no'),
+    // Table labels ("5+6") or the pager number, as printed.
+    label: varchar('label', { length: 40 }),
+    customer: varchar('customer', { length: 100 }),
+    lines: jsonb('lines').default([]).notNull(),
+    total: numeric('total', { precision: 14, scale: 2 }).notNull(),
+    order_id: text('order_id').references(() => ordersTable.id, { onDelete: 'set null' }),
+    created_by: text('created_by').references(() => usersTable.id),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }),
+  },
+  (t) => [
+    check('print_logs_kind_ck', sql`${t.kind} in ('receipt', 'table_bill')`),
+    index('print_logs_outlet_created_idx').on(t.outlet_id, t.created_at),
+    index('print_logs_unpaid_idx')
+      .on(t.outlet_id, t.source_key)
+      .where(sql`order_id is null`),
+  ],
 );
 
 // ============================================================================

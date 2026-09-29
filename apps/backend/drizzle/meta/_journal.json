@@ -610,6 +610,13 @@
       "when": 1790610396727,
       "tag": "0086_self_orders",
       "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1790694466157,
+      "tag": "0087_print_logs",
+      "breakpoints": true
     }
   ]
 }

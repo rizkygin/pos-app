@@ -45,6 +45,7 @@ import {
   type OrderLabel,
 } from '@/lib/labelbridge';
 import { API_URL } from '@/lib/api-url';
+import { logPrint, printedUnitPrice, type PrintLog } from '@/lib/print-log';
 import { viewerTimezone } from '@/app/dashboard/tables/floor-api';
 import {
   MAX_TENDERS,
@@ -431,6 +432,11 @@ type CashierClientProps = {
    */
   askServiceType: boolean;
   /**
+   * The owner's "Struk sebelum checkout" setting. Off hides the struk button
+   * beside Checkout, so the only receipt is the one Checkout prints.
+   */
+  allowPreCheckoutReceipt: boolean;
+  /**
    * The outlet's counter tax, already resolved against the plan gate on the
    * server (disabled below Max Lite). Used for DISPLAY only — the server
    * recomputes the stored figure from its own copy of these settings.
@@ -482,6 +488,7 @@ export const CashierClient = ({
   canUseKitchen,
   canUseSelfOrder,
   askServiceType,
+  allowPreCheckoutReceipt,
   taxConfig,
   printSettings,
   initialProducts,
@@ -624,11 +631,14 @@ export const CashierClient = ({
   // checkout's own, or a reprint of one): only those fly into the placed-orders
   // icon on close. A pre-checkout struk or kitchen ticket is for an order that
   // isn't in the ledger yet, and filing it there would say otherwise.
+  // `log` rides on a pre-checkout struk: each Cetak of it is written to the
+  // print log, so a struk handed over and never checked out still leaves a trace.
   const [receipt, setReceipt] = useState<{
     data: ReceiptData;
     variant: 'customer' | 'kitchen';
     heading: string;
     placed?: boolean;
+    log?: PrintLog;
   } | null>(null);
   // "Order Placed" card shown between the server's confirmation and the slip.
   // One timer for the hand-over, so an unmount mid-hold can't open a modal on
@@ -2418,11 +2428,31 @@ export const CashierClient = ({
   // tab standing — the order isn't finished until the food is handed over and
   // the pager comes back, which is what Checkout marks.
   const printCustomerReceipt = () => {
-    if (checkoutDisabled) return;
+    if (checkoutDisabled || !allowPreCheckoutReceipt) return;
+    const data = buildReceiptData();
     setReceipt({
-      data: buildReceiptData(),
+      data,
       variant: 'customer',
       heading: 'Struk Pelanggan',
+      // Paper handed over before the sale is booked: the print log keeps the
+      // server's copy until Checkout pays it off.
+      log: {
+        kind: 'receipt',
+        tabKey: activeTabId,
+        sessionId: activeTable?.sessionId,
+        billNo: activeTable?.billNo,
+        label: activeTable?.label ?? (data.pagerNumber || undefined),
+        customer: data.customerName || undefined,
+        lines: cart.map((i) => ({
+          lineId: i.lineId,
+          name: i.product.product_name,
+          variant: i.product.variant_name || null,
+          qty: i.quantity,
+          price: printedUnitPrice(i.product),
+          addons: (i.addons ?? []).map((a) => ({ name: a.name, qty: a.quantity, price: a.price })),
+        })),
+        total: data.total,
+      },
     });
   };
 
@@ -4393,17 +4423,21 @@ export const CashierClient = ({
               same reach, a third of the weight, and the row that ends the
               order stays one row. Icon-only, so each needs its own label. */}
           <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={printCustomerReceipt}
-              disabled={checkoutDisabled}
-              className="h-10 w-10 shrink-0 rounded-xl border-2 p-0"
-              title="Cetak struk pelanggan"
-              aria-label="Cetak struk pelanggan"
-            >
-              <Printer className="h-4 w-4" />
-            </Button>
+            {/* The owner can take this one away (Pengaturan Outlet): a struk
+                before Checkout is paper for a sale not yet booked. */}
+            {allowPreCheckoutReceipt && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={printCustomerReceipt}
+                disabled={checkoutDisabled}
+                className="h-10 w-10 shrink-0 rounded-xl border-2 p-0"
+                title="Cetak struk pelanggan"
+                aria-label="Cetak struk pelanggan"
+              >
+                <Printer className="h-4 w-4" />
+              </Button>
+            )}
             {/* make this hidden because im not tested it out in the real device of thermal printer. */}
             <Button
               type="button"
@@ -4461,6 +4495,7 @@ export const CashierClient = ({
           variant={receipt.variant}
           heading={receipt.heading}
           flyToRef={receipt.placed ? placedIconRef : undefined}
+          onPrinted={receipt.log ? () => logPrint(receipt.log!) : undefined}
           onClose={closeReceipt}
         />
       )}

@@ -39,6 +39,7 @@ import {
   Package,
   Armchair,
   UtensilsCrossed,
+  ReceiptText,
 } from 'lucide-react';
 import { API_URL } from '@/lib/api-url';
 
@@ -98,6 +99,9 @@ const SUB_REPORTS = [
   // Max Lite and up; the page itself shows the upgrade card below that, the
   // same way the tax settings do, so the tile is never hidden.
   { href: '/dashboard/reports/shift', label: 'Laporan Shift', desc: 'Buka-tutup laci per kasir', icon: ClipboardCheck, grad: 'from-rose-400 to-pink-500' },
+  // Owner only (it names the cashier); an employee who opens it is told so.
+  // Its own date range, like Laporan Shift. Explained in Panduan.
+  { href: '/dashboard/reports/struk', label: 'Struk Belum Dibayar', desc: 'Dicetak tapi belum di-checkout', icon: ReceiptText, grad: 'from-red-400 to-orange-500' },
 ] as const;
 
 const trendConfig = { revenue: { label: 'Omzet', color: 'hsl(221 83% 53%)' } } satisfies ChartConfig;

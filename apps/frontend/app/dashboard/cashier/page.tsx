@@ -67,6 +67,7 @@ export default async function CashierPage() {
                 canUseKitchen={features.kitchenDisplay === true}
                 canUseSelfOrder={features.selfOrder === true}
                 askServiceType={outlet.service_type_enabled !== false}
+                allowPreCheckoutReceipt={outlet.precheckout_receipt_enabled !== false}
                 // Resolved against the gate here, so the counter can't show a
                 // tax line the plan doesn't include. The server applies the
                 // same gate when it stores the order.

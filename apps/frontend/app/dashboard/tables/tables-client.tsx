@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils';
 import { formatCurrency } from '@/lib/utils/format';
 import { computeTax, taxLineLabel } from '@/lib/tax';
 import { API_URL } from '@/lib/api-url';
+import { logPrint, printedUnitPrice, type PrintLog } from '@/lib/print-log';
 import { useOrderAlarm } from '@/lib/use-order-alarm';
 import { ReceiptModal, type ReceiptData } from '@/components/dashboard/receipt-modal';
 import { FloorCanvas, type TableView } from './floor-canvas';
@@ -158,10 +159,13 @@ export function TablesClient({ cashierName }: { cashierName: string }) {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const [dialog, setDialog] = useState<DialogState | null>(null);
+  // `log` rides on a Cetak Bill: each print of it is written to the print log,
+  // which the bill's payment pays off (see printBill).
   const [receipt, setReceipt] = useState<{
     data: ReceiptData;
     variant: 'customer' | 'kitchen';
     heading: string;
+    log?: PrintLog;
   } | null>(null);
   const [showReservations, setShowReservations] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -520,6 +524,24 @@ export function TablesClient({ cashierName }: { cashierName: string }) {
     setReceipt({
       variant: 'customer',
       heading: billNo ? `Bill ${String.fromCharCode(64 + billNo)} · Meja ${seatingLabel(session)}` : `Bill Meja ${seatingLabel(session)}`,
+      // A bill is paper asking to be paid: the print log keeps what it listed
+      // until the till settles those lines.
+      log: {
+        kind: 'table_bill',
+        sessionId: detail.id,
+        billNo,
+        label: detail.tables.map((t) => t.label).join('+') || undefined,
+        customer: detail.guestName || undefined,
+        lines: lines.map((l) => ({
+          lineId: l.lineId,
+          name: l.product.product_name,
+          variant: l.product.variant_name || null,
+          qty: l.quantity,
+          price: printedUnitPrice(l.product),
+          addons: l.addons.map((a) => ({ name: a.name, qty: a.quantity, price: a.price })),
+        })),
+        total: tax.total,
+      },
       data: {
         ...baseSlip(detail),
         billOnly: true,
@@ -1422,6 +1444,7 @@ export function TablesClient({ cashierName }: { cashierName: string }) {
           data={receipt.data}
           variant={receipt.variant}
           heading={receipt.heading}
+          onPrinted={receipt.log ? () => logPrint(receipt.log!) : undefined}
           onClose={() => setReceipt(null)}
         />
       )}

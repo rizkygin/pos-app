@@ -50,6 +50,7 @@ import {
   settleTableBill,
 } from "../lib/tables";
 import { TAB_KEY, linkKitchenTickets } from "../lib/kitchen";
+import { linkPrintLogs } from "../lib/print-log";
 import { publishFloor } from "../lib/floor-events";
 
 // Transaction client type (drizzle's tx has the same query builder as `db`).
@@ -676,19 +677,34 @@ export async function mutationRoutes(app: FastifyInstance) {
       // After the commit, because it is only a label: a failure here leaves
       // a ticket without its number, never a sale undone.
       if (new_order_id) {
+        const tabKey =
+          typeof body.kitchenTabKey === "string" && TAB_KEY.test(body.kitchenTabKey)
+            ? body.kitchenTabKey
+            : null;
         try {
           const linked = await linkKitchenTickets({
             outletId: body.outletId,
             orderId: new_order_id,
-            tabKey:
-              typeof body.kitchenTabKey === "string" && TAB_KEY.test(body.kitchenTabKey)
-                ? body.kitchenTabKey
-                : null,
+            tabKey,
             tableBill: !!tableLink,
           });
           if (linked > 0) publishFloor(body.outletId, "ticket");
         } catch (err) {
           app.log.warn({ err, orderId: new_order_id }, "Kitchen tickets not linked to order");
+        }
+        // Same for the slips printed before payment: this sale pays them off.
+        try {
+          await linkPrintLogs({
+            outletId: body.outletId,
+            orderId: new_order_id,
+            tabKey,
+            lineIds: (body.cart as ({ lineId?: unknown } | null)[])
+              .map((i) => i?.lineId)
+              .filter((id): id is string => typeof id === "string" && id !== ""),
+            tableBill: !!tableLink,
+          });
+        } catch (err) {
+          app.log.warn({ err, orderId: new_order_id }, "Print logs not linked to order");
         }
       }
 

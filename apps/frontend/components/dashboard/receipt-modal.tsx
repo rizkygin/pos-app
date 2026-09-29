@@ -232,6 +232,12 @@ type Props = {
      * leaves it open, as it always has.
      */
     flyToRef?: RefObject<HTMLElement | null>;
+    /**
+     * Called each time Cetak actually hands the slip to a printer (a blocked
+     * print popup doesn't count). For slips printed before their sale is
+     * booked, which the caller writes to the print log.
+     */
+    onPrinted?: () => void;
 };
 
 /** The ghost's starting rect plus the transform that lands it on the target. */
@@ -847,7 +853,7 @@ function buildKitchenEscposBase64(data: ReceiptData, paper: PaperWidth): string 
  */
 const SHOW_ORDER_LABELS: boolean = false;
 
-export function ReceiptModal({ data, onClose, heading = "Pesanan Berhasil!", variant = "customer", flyToRef }: Props) {
+export function ReceiptModal({ data, onClose, heading = "Pesanan Berhasil!", variant = "customer", flyToRef, onPrinted }: Props) {
     const isKitchen = variant === "kitchen";
     const shortId = data.orderId.split("-")[0].toUpperCase();
 
@@ -1222,6 +1228,7 @@ export function ReceiptModal({ data, onClose, heading = "Pesanan Berhasil!", var
     // always has, ready for a second copy.
     const printAndFile = async () => {
         const handedOff = await handlePrint();
+        if (handedOff) onPrinted?.();
         if (handedOff && flyToRef) flyAway();
     };
 

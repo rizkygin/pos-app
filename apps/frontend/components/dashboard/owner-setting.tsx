@@ -80,7 +80,7 @@ type TaxState = {
     label: string;
 };
 
-type SectionId = "profil" | "tag" | "lokasi" | "notifikasi" | "pajak" | "layanan" | "pesan-mandiri" | "struk";
+type SectionId = "profil" | "tag" | "lokasi" | "notifikasi" | "pajak" | "layanan" | "struk-awal" | "pesan-mandiri" | "struk";
 
 const EMPTY_FORM: OutletForm = {
     isOpen: true,
@@ -232,6 +232,9 @@ export function OwnerSetting() {
     const [canUseTax, setCanUseTax] = useState(false);
     const [serviceType, setServiceType] = useState<boolean | null>(null);
     const [savedServiceType, setSavedServiceType] = useState<boolean | null>(null);
+    // The struk button beside Checkout: same deal, its own endpoint.
+    const [preReceipt, setPreReceipt] = useState<boolean | null>(null);
+    const [savedPreReceipt, setSavedPreReceipt] = useState<boolean | null>(null);
     // Struk: same deal — its own endpoint, saved by the one button.
     const [receipt, setReceipt] = useState<ReceiptPrintSettings | null>(null);
     const [savedReceipt, setSavedReceipt] = useState<ReceiptPrintSettings | null>(null);
@@ -301,6 +304,15 @@ export function OwnerSetting() {
             })
             .catch(() => {});
 
+        fetch(`${API_URL}/api/outlet/precheckout-receipt`, { credentials: "include" })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((j) => {
+                if (!j?.success) return;
+                setPreReceipt(!!j.enabled);
+                setSavedPreReceipt(!!j.enabled);
+            })
+            .catch(() => {});
+
         fetch(`${API_URL}/api/outlet/printer-settings`, { credentials: "include" })
             .then((r) => (r.ok ? r.json() : null))
             .then((j) => {
@@ -367,9 +379,10 @@ export function OwnerSetting() {
     // A locked plan can't save tax, so its (untouchable) fields never count.
     const taxDirty = canUseTax && !same(tax, savedTax);
     const serviceTypeDirty = serviceType !== savedServiceType;
+    const preReceiptDirty = preReceipt !== savedPreReceipt;
     const receiptDirty = !same(receipt, savedReceipt);
     const selfOrderDirty = !same(selfOrder, savedSelfOrder);
-    const dirty = outletDirty || taxDirty || serviceTypeDirty || receiptDirty || selfOrderDirty;
+    const dirty = outletDirty || taxDirty || serviceTypeDirty || preReceiptDirty || receiptDirty || selfOrderDirty;
 
     // Flipping Dine In / Take Away used to save on the spot; now it waits for
     // Simpan like everything else, so leaving with it unsaved has to be loud.
@@ -405,6 +418,9 @@ export function OwnerSetting() {
         if (serviceType !== null) {
             items.push({ id: "layanan", label: "Dine In / Take Away", tag: serviceType ? "aktif" : "mati" });
         }
+        if (preReceipt !== null) {
+            items.push({ id: "struk-awal", label: "Struk Sebelum Checkout", tag: preReceipt ? "aktif" : "mati" });
+        }
         if (selfOrder && selfOrderMeta) {
             items.push({
                 id: "pesan-mandiri",
@@ -416,7 +432,7 @@ export function OwnerSetting() {
             items.push({ id: "struk", label: "Struk", tag: receipt.qrUrl && receipt.show.qr ? "QR" : "" });
         }
         return items;
-    }, [form.tags.length, coverage?.outside, push.state, tax, canUseTax, serviceType, selfOrder, selfOrderMeta, receipt]);
+    }, [form.tags.length, coverage?.outside, push.state, tax, canUseTax, serviceType, preReceipt, selfOrder, selfOrderMeta, receipt]);
 
     const [active, setActive] = useState<SectionId>("profil");
     const headerRef = useRef<HTMLDivElement>(null);
@@ -568,6 +584,7 @@ export function OwnerSetting() {
         const sentForm = form;
         const sentTax = tax;
         const sentServiceType = serviceType;
+        const sentPreReceipt = preReceipt;
         const sentReceipt = receipt;
         const sentSelfOrder = selfOrder;
         const results = await Promise.all([
@@ -597,6 +614,12 @@ export function OwnerSetting() {
             serviceTypeDirty && sentServiceType !== null
                 ? patchJson("/api/outlet/service-type", { enabled: sentServiceType }).then((r) => {
                     if (r.ok) setSavedServiceType(sentServiceType);
+                    return r;
+                })
+                : null,
+            preReceiptDirty && sentPreReceipt !== null
+                ? patchJson("/api/outlet/precheckout-receipt", { enabled: sentPreReceipt }).then((r) => {
+                    if (r.ok) setSavedPreReceipt(sentPreReceipt);
                     return r;
                 })
                 : null,
@@ -1322,6 +1345,47 @@ export function OwnerSetting() {
                                         Lihat laporan Dine In / Take Away →
                                     </Link>
                                 </li>
+                            </ul>
+                        </Section>
+                    )}
+
+                    {/* ── Struk sebelum checkout ─────────────────────────────
+                        The struk button beside Checkout. A struk printed there
+                        is paper for a sale not yet booked, so the owner can
+                        take the button away; every press while it stays is
+                        written to the print log either way. */}
+                    {preReceipt !== null && (
+                        <Section
+                            id="struk-awal"
+                            title="Struk Sebelum Checkout"
+                            desc={
+                                preReceipt
+                                    ? "Kasir bisa mencetak struk pelanggan sebelum menekan Checkout."
+                                    : "Struk hanya tercetak setelah Checkout — pesanan sudah tercatat."
+                            }
+                            action={
+                                <Switch
+                                    checked={preReceipt}
+                                    onChange={() => setPreReceipt(!preReceipt)}
+                                    label="Tampilkan tombol struk sebelum checkout di kasir"
+                                />
+                            }
+                        >
+                            <div className="rounded-xl border border-border/60 bg-muted/40 px-4 py-3.5">
+                                <p className="mb-2.5 text-[11.5px] font-bold tracking-wide text-muted-foreground">DI KASIR</p>
+                                <p className="text-[13px] font-semibold text-muted-foreground">
+                                    {preReceipt
+                                        ? "Tombol printer di samping Checkout muncul."
+                                        : "Tombol printer di samping Checkout tidak muncul."}
+                                </p>
+                            </div>
+                            <ul className="flex list-disc flex-col gap-1 pl-4 text-xs leading-relaxed text-muted-foreground">
+                                <li>
+                                    Struk yang dicetak sebelum Checkout belum tercatat sebagai penjualan. Setiap cetakan tetap
+                                    tersimpan, dan baru dianggap lunas setelah pesanannya di-Checkout.
+                                </li>
+                                <li>Cetak Bill di Manajemen Meja tidak terpengaruh, dan tetap tersimpan.</li>
+                                <li>Tiket Dapur tetap bisa dicetak seperti biasa.</li>
                             </ul>
                         </Section>
                     )}

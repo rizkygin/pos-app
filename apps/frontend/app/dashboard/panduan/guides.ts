@@ -1,4 +1,4 @@
-import { Boxes, Calculator, CopyX, type LucideIcon } from "lucide-react";
+import { Boxes, Calculator, CopyX, ReceiptText, type LucideIcon } from "lucide-react";
 
 // The list of guides, read by the index page. Each guide is its own static
 // route under /dashboard/panduan/<slug>, so a new one is a folder with a
@@ -43,6 +43,14 @@ export const guides: Guide[] = [
       "Menemukan penjualan kasir yang tercatat dua kali, membaca tandanya, dan membatalkan nota keduanya.",
     category: "Kasir",
     icon: CopyX,
+  },
+  {
+    slug: "struk-belum-dibayar",
+    title: "Cara cek struk yang belum dibayar",
+    summary:
+      "Menemukan struk yang dicetak sebelum Checkout tetapi tidak pernah tercatat sebagai penjualan, membaca statusnya, dan menyembunyikan tombolnya.",
+    category: "Kasir",
+    icon: ReceiptText,
   },
 ];
 

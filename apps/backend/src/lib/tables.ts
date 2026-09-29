@@ -1,8 +1,9 @@
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { db } from "../db";
 import {
   diningTablesTable,
   kitchenTicketsTable,
+  printLogsTable,
   tableSessionLinesTable,
   tableSessionsTable,
 } from "../db/schema";
@@ -406,6 +407,15 @@ export async function reopenCancelledTableBill(
     .update(kitchenTicketsTable)
     .set({ order_id: null, updated_at: now })
     .where(and(eq(kitchenTicketsTable.order_id, orderId), eq(kitchenTicketsTable.source, "table")));
+
+  // Same for the bills printed for it: the table owes them again, so they read
+  // as unpaid until the re-payment links them — linkPrintLogs fills blanks too.
+  // Any table print, not just this seating's: one printed before a merge still
+  // names the seating it was printed at.
+  await tx
+    .update(printLogsTable)
+    .set({ order_id: null, updated_at: now })
+    .where(and(eq(printLogsTable.order_id, orderId), isNotNull(printLogsTable.session_id)));
 
   return session.id;
 }

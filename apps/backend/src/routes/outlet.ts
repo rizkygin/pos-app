@@ -302,6 +302,38 @@ export async function outletRoutes(app: FastifyInstance) {
   });
 
   /**
+   * Whether the cashier has the struk button beside Checkout — the slip that
+   * can be handed over before the sale is booked (0087). Owner only, like the
+   * switch above: it is the owner's control over their own till. Not
+   * plan-gated. Checkout prints its receipt either way.
+   */
+  app.get("/api/outlet/precheckout-receipt", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, "cashier");
+    if (!access) return;
+    return reply.send({ success: true, enabled: access.outlet.precheckout_receipt_enabled });
+  });
+
+  app.patch("/api/outlet/precheckout-receipt", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, "owner");
+    if (!access) return;
+    const enabled = (request.body as Record<string, unknown> | null)?.enabled;
+    if (typeof enabled !== "boolean") {
+      return reply.status(400).send({ success: false, error: "Pengaturan tidak valid." });
+    }
+    await db
+      .update(outletsTable)
+      .set({ precheckout_receipt_enabled: enabled, updatedAt: new Date() })
+      .where(eq(outletsTable.id, access.outlet.id));
+    return reply.send({
+      success: true,
+      enabled,
+      message: enabled
+        ? "Tombol struk sebelum checkout kembali muncul di kasir."
+        : "Tombol struk sebelum checkout disembunyikan dari kasir.",
+    });
+  });
+
+  /**
    * Customer receipt (struk) settings: the owner's notes, QR link and
    * show/hide switches. Not plan-gated — every outlet's receipt carries its own
    * name out the door, new ones most of all. Readable by the staff who print
