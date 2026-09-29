@@ -30,8 +30,10 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Loader2, PanelLeftClose, PanelLeftOpen, Sparkles } from 'lucide-react';
+import { ArrowLeft, Calculator, Loader2, PanelLeftClose, PanelLeftOpen, Sparkles } from 'lucide-react';
 import { API_URL } from '@/lib/api-url';
+import { Button } from '@/components/ui/button';
+import { ForceHppDialog } from './force-hpp-dialog';
 
 // ---------------------------------------------------------------------------
 // Wire format (mirrors the endpoint)
@@ -91,6 +93,10 @@ type ApiResponse = {
     };
     recipe_cost: number;
     unit_cost: number;
+    // What a sale of one unit books today — no buying_price standing in for a
+    // missing average. null when the recipe is broken (cyclic).
+    booked_hpp: number | null;
+    can_force_hpp: boolean;
     tree: ApiNode[];
     addons: ApiAddon[];
     variants: ApiVariants | null;
@@ -325,6 +331,26 @@ export function RecipeExplorer({ productId, productName }: { productId: string; 
     const data = settled?.data ?? null;
     const error = settled?.error ?? null;
     const loading = !settled;
+    // Bumped to re-read the same product after Paksa Hitung HPP wrote to it.
+    const [reloadKey, setReloadKey] = useState(0);
+    const [forceOpen, setForceOpen] = useState(false);
+    const [applied, setApplied] = useState<{ id: string; changed: number } | null>(null);
+    // A 5-second breather after every apply, so a second press cannot land
+    // before the page has shown what the first one did.
+    const [cooldownUntil, setCooldownUntil] = useState(0);
+    const [now, setNow] = useState(0);
+    useEffect(() => {
+        if (!cooldownUntil) return;
+        const tick = () => {
+            const t = Date.now();
+            setNow(t);
+            if (t >= cooldownUntil) setCooldownUntil(0);
+        };
+        tick();
+        const h = setInterval(tick, 250);
+        return () => clearInterval(h);
+    }, [cooldownUntil]);
+    const cooldownSecs = cooldownUntil ? Math.max(1, Math.ceil((cooldownUntil - now) / 1000)) : 0;
 
     const [ui, setUi] = useState<UIState>({
         addons: [],
@@ -391,7 +417,7 @@ export function RecipeExplorer({ productId, productName }: { productId: string; 
         return () => {
             alive = false;
         };
-    }, [activeId]);
+    }, [activeId, reloadKey]);
 
     // Switching variant is a different product: its add-on option ids, its
     // collapsed branches and its hand-placed nodes all belong to the old one.
@@ -600,6 +626,8 @@ export function RecipeExplorer({ productId, productName }: { productId: string; 
     }
 
     const p = data.product;
+    const booked = data.booked_hpp;
+    const bookedGap = booked !== null && Math.abs(booked - data.recipe_cost) >= 1;
 
     return (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border bg-background">
@@ -707,6 +735,45 @@ export function RecipeExplorer({ productId, productName }: { productId: string; 
                         <StatTile label="Terjual 30h" value={NF.format(data.sold_30d)} />
                         <StatTile label="Laba kotor" value={price > 0 ? rp(price - hpp) : '—'} />
                     </div>
+
+                    {hasRecipe && booked !== null && (
+                        <div
+                            className={`rounded-xl border px-2.5 py-2 ${
+                                bookedGap
+                                    ? 'border-amber-300 bg-amber-50 dark:border-amber-800/60 dark:bg-amber-950/30'
+                                    : 'bg-muted/40'
+                            }`}
+                        >
+                            <div className="flex items-baseline justify-between gap-2">
+                                <span className="text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground">
+                                    Tercatat saat terjual
+                                </span>
+                                <span className="font-mono text-base font-semibold">{rp(booked)}</span>
+                            </div>
+                            {bookedGap && (
+                                <p className="mt-1 text-[11px] leading-relaxed text-amber-800 dark:text-amber-200">
+                                    Belum sama dengan HPP resep {rp(data.recipe_cost)}. Laporan laba memakai angka ini.
+                                </p>
+                            )}
+                            {applied?.id === activeId && (
+                                <p className="mt-1 text-[11px] text-emerald-700 dark:text-emerald-400">
+                                    {applied.changed ? `Tersimpan · ${applied.changed} perubahan.` : 'Tidak ada yang berubah.'}
+                                </p>
+                            )}
+                            {data.can_force_hpp && (
+                                <Button
+                                    size="sm"
+                                    variant={bookedGap ? 'default' : 'outline'}
+                                    className="mt-2 w-full"
+                                    disabled={cooldownSecs > 0}
+                                    onClick={() => setForceOpen(true)}
+                                >
+                                    <Calculator />
+                                    {cooldownSecs > 0 ? `Tunggu ${cooldownSecs} dtk` : 'Paksa Hitung HPP'}
+                                </Button>
+                            )}
+                        </div>
+                    )}
 
                     {data.cyclic.length > 0 && (
                         <div className="rounded-lg border border-dashed border-amber-300 bg-amber-50 p-2.5 text-[11px] leading-relaxed text-amber-800 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-200">
@@ -1083,6 +1150,18 @@ export function RecipeExplorer({ productId, productName }: { productId: string; 
                     </div>
                 )}
             </div>
+
+            {forceOpen && data.can_force_hpp && hasRecipe && (
+                <ForceHppDialog
+                    onClose={() => setForceOpen(false)}
+                    productId={activeId}
+                    onApplied={(r) => {
+                        setApplied({ id: activeId, changed: r.changed });
+                        setCooldownUntil(Date.now() + 5000);
+                        setReloadKey((k) => k + 1);
+                    }}
+                />
+            )}
         </div>
     );
 }

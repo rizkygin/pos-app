@@ -16,6 +16,7 @@ import {
   lastCountedAt,
   linesWithSystem,
   postCount,
+  reasonFits,
   round3,
   stockAt,
   unitCostOf,
@@ -459,7 +460,7 @@ export async function stockOpnameRoutes(app: FastifyInstance) {
           const delta = round3(Number(l.counted) - system);
           if (delta === 0) return false;
           const tone = classify(delta, system, unitCostOf(l.avg_cost, l.buying_price, l.unit_cost));
-          return tone === "major" && !l.reason;
+          return tone === "major" && !reasonFits(l.reason, delta);
         });
         if (unexplained.length > 0) {
           throw new HttpError(
@@ -499,7 +500,7 @@ export async function stockOpnameRoutes(app: FastifyInstance) {
           const delta = round3(Number(l.counted) - system);
           // The reason rides along on the movement, so Riwayat Opname and
           // Alur Stok say WHY the shelf changed, not just that it did.
-          const why = l.reason ? REASON_CODES[l.reason] : null;
+          const why = reasonFits(l.reason, delta) ? REASON_CODES[l.reason] : null;
           const touched = await postCount(tx, {
             outletId: access.outlet.id,
             product: { id: l.product_id, stock: l.stock, avg_cost: l.avg_cost, unit: l.unit },

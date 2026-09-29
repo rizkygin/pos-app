@@ -29,7 +29,7 @@ type SaleLine = {
 
 // How deep a recipe may nest. Recipes are rejected at write time above this
 // (routes/products.ts), so hitting it here means the data is already bad.
-const MAX_RECIPE_DEPTH = 5;
+export const MAX_RECIPE_DEPTH = 5;
 
 // Thrown by findRecipeCycle's caller to roll a recipe save back with a message
 // the product form can show as-is.

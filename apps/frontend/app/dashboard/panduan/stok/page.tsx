@@ -222,7 +222,19 @@ export default function StokGuide() {
               <li>Salah satuan saat input</li>
               <li>Tercatat ganda di faktur</li>
               <li>Hilang / belum diketahui</li>
+              <li>
+                Penambahan stok <span className="text-muted-foreground">— hanya kalau hitungan lebih banyak</span>
+              </li>
+              <li>
+                Stok dari produksi <span className="text-muted-foreground">— hanya kalau hitungan lebih banyak</span>
+              </li>
             </ul>
+            <p className="mt-3 text-sm text-muted-foreground">
+              Jadi stok bisa masuk lewat dua jalan: <b className="font-semibold">Faktur Pembelian</b>{" "}
+              (membentuk HPP dari harga belinya), atau <b className="font-semibold">Stok Opname</b>{" "}
+              dengan alasan Penambahan stok / Stok dari produksi — untuk barang yang masuk tanpa faktur.
+              Lewat opname, barangnya dinilai dengan HPP rata-rata yang sudah ada.
+            </p>
             <p className="mt-3 text-sm text-muted-foreground">
               Alasan ikut tertulis di catatan penyesuaian, jadi enam bulan lagi Alur Stok masih bisa
               menjelaskan kenapa stoknya berubah.

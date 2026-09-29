@@ -37,7 +37,25 @@ export const REASON_CODES: Record<string, string> = {
   salah_satuan: "Salah satuan saat input",
   faktur_ganda: "Tercatat ganda di faktur",
   hilang: "Hilang / belum diketahui",
+  // Stock that came in without a purchase invoice: bought for cash off the
+  // books, or produced outside the Produksi page. The count is how it enters
+  // the system, so an opname is the second way in besides Faktur Pembelian.
+  penambahan: "Penambahan stok",
+  produksi: "Stok dari produksi",
 };
+
+/**
+ * Reasons that explain stock ARRIVING. They only fit a count above the
+ * system; on a shortfall they would write "Stok dari produksi" onto stock
+ * that left, so they are treated as no reason at all.
+ */
+export const SURPLUS_REASONS = new Set(["penambahan", "produksi"]);
+
+/** Whether `reason` explains a difference of `delta`. */
+export function reasonFits(reason: string | null | undefined, delta: number): reason is string {
+  if (!reason || !REASON_CODES[reason]) return false;
+  return delta > 0 || !SURPLUS_REASONS.has(reason);
+}
 
 /**
  * How a counted line reads:

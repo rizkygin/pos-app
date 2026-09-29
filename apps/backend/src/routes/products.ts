@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { and, asc, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import path from "node:path";
@@ -22,10 +22,11 @@ import {
 } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
-import { getOutletAccess, requireOutletAccess, parseActiveOutletId, getSubscriptionGate, hasFeature, type SubscriptionGate } from "../lib/outlet-access";
+import { getOutletAccess, requireOutletAccess, parseActiveOutletId, getSubscriptionGate, hasFeature, usesCostLedger, type SubscriptionGate } from "../lib/outlet-access";
 import { recalcOutletFeatures, INTERNAL_CATEGORIES } from "../lib/outlet-features";
 import { RecipeGraphError, applyProduction, findRecipeCycle, previewProduction } from "../lib/stock";
 import { addonGroupsForProducts } from "../lib/addons";
+import { ForceHppError, applyForceHpp, bookedHpp, previewForceHpp, type ForceHppItem } from "../lib/force-hpp";
 import {
   DEFAULT_BASE_VARIANT_NAME,
   DEFAULT_VARIANT_LABEL,
@@ -1501,6 +1502,12 @@ export async function productRoutes(app: FastifyInstance) {
       // recipe at all has no recipe_cost, only a unit_cost.
       recipe_cost: tree.reduce((s, n) => s + n.cost, 0),
       unit_cost: unitCostOf(productId),
+      // What a sale of one unit books TODAY on this outlet's costing basis —
+      // unlike the figures above, with no buying_price standing in for an
+      // average the ledger never got. When the two disagree, the owner is the
+      // one who can reconcile them (Paksa Hitung HPP, lib/force-hpp.ts).
+      booked_hpp: bookedHpp({ byId, kidsOf }, productId, usesCostLedger(access.gate)),
+      can_force_hpp: access.isOwner,
       tree,
       addons,
       variants,
@@ -1510,6 +1517,99 @@ export async function productRoutes(app: FastifyInstance) {
       // Named so the page can tell the owner which recipe to go and fix.
       cyclic: [...cyclic].map((id) => byId.get(id)?.name ?? id),
     });
+  });
+
+  // ── Paksa Hitung HPP ────────────────────────────────────────────────────
+  // For an outlet that never buys through a Faktur: the owner sets what each
+  // ingredient of a recipe costs, and the dish's HPP follows. The rules — which
+  // field each cost lives in, what the plan's sales book, which averages are
+  // protected — are all in lib/force-hpp.ts. Owner only: this rewrites what
+  // every future sale of these ingredients books.
+  //
+  // Same plan line as the explorer it lives on (Pro and up), including Pro,
+  // which has no cost ledger — there it writes the dish's buying price, which
+  // is what a Pro report reads.
+  const forceHppAccess = async (request: FastifyRequest, reply: FastifyReply) => {
+    const access = await requireOutletAccess(request, reply, "owner");
+    if (!access) return null;
+    if (!hasFeature(access.gate, RECIPE_FEATURE)) {
+      reply.status(403).send({ success: false, error: RECIPE_UPGRADE_MESSAGE, code: "PLAN_FEATURE" });
+      return null;
+    }
+    return access;
+  };
+
+  app.get("/api/products/:id/force-hpp", async (request, reply) => {
+    const access = await forceHppAccess(request, reply);
+    if (!access) return;
+    const productId = (request.params as { id: string }).id;
+    try {
+      // A transaction only to borrow the Tx type the write path uses, as
+      // production-preview does. Nothing is written.
+      const preview = await db.transaction((tx) =>
+        previewForceHpp(tx, { outletId: access.outlet.id, productId, ledger: usesCostLedger(access.gate) }),
+      );
+      return reply.send({ success: true, ...preview });
+    } catch (e) {
+      if (e instanceof ForceHppError) return reply.status(e.status).send({ success: false, error: e.message });
+      throw e;
+    }
+  });
+
+  app.post("/api/products/:id/force-hpp", async (request, reply) => {
+    const access = await forceHppAccess(request, reply);
+    if (!access) return;
+    const productId = (request.params as { id: string }).id;
+    const body = (request.body ?? {}) as { items?: unknown; root?: unknown };
+
+    const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+    const rawItems = Array.isArray(body.items) ? body.items : [];
+    const items: ForceHppItem[] = [];
+    for (const raw of rawItems as Record<string, unknown>[]) {
+      if (
+        !raw ||
+        typeof raw.product_id !== "string" ||
+        !finite(raw.unit_cost) ||
+        !finite(raw.expected) ||
+        raw.unit_cost > 1_000_000_000 ||
+        (raw.overwrite !== undefined && typeof raw.overwrite !== "boolean")
+      ) {
+        return reply.status(400).send({ success: false, error: "Data biaya bahan tidak valid." });
+      }
+      if (items.some((i) => i.product_id === raw.product_id)) {
+        return reply.status(400).send({ success: false, error: "Satu bahan dikirim dua kali." });
+      }
+      items.push({
+        product_id: raw.product_id,
+        unit_cost: raw.unit_cost,
+        expected: raw.expected,
+        overwrite: raw.overwrite as boolean | undefined,
+      });
+    }
+    const rawRoot = body.root as { expected?: unknown; overwrite?: unknown } | null | undefined;
+    if (rawRoot != null && (!finite(rawRoot.expected) || (rawRoot.overwrite !== undefined && typeof rawRoot.overwrite !== "boolean"))) {
+      return reply.status(400).send({ success: false, error: "Data HPP produk tidak valid." });
+    }
+    const root = rawRoot ? { expected: rawRoot.expected as number, overwrite: rawRoot.overwrite as boolean | undefined } : null;
+    if (!items.length && !root) {
+      return reply.status(400).send({ success: false, error: "Tidak ada yang dicentang untuk diubah." });
+    }
+
+    try {
+      const result = await db.transaction((tx) =>
+        applyForceHpp(tx, {
+          outletId: access.outlet.id,
+          productId,
+          ledger: usesCostLedger(access.gate),
+          items,
+          root,
+        }),
+      );
+      return reply.send({ success: true, ...result });
+    } catch (e) {
+      if (e instanceof ForceHppError) return reply.status(e.status).send({ success: false, error: e.message });
+      throw e;
+    }
   });
 
   // ── Production batch ────────────────────────────────────────────────────

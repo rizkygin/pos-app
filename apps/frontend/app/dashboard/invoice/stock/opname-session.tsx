@@ -95,7 +95,13 @@ const REASONS: Record<string, string> = {
   salah_satuan: "Salah satuan saat input",
   faktur_ganda: "Tercatat ganda di faktur",
   hilang: "Hilang / belum diketahui",
+  penambahan: "Penambahan stok",
+  produksi: "Stok dari produksi",
 };
+/** Reasons for stock that ARRIVED — offered only when the count is above the system. */
+const SURPLUS_REASONS = new Set(["penambahan", "produksi"]);
+const reasonFits = (reason: string | null | undefined, delta: number | null) =>
+  !!reason && reason in REASONS && ((delta ?? 0) > 0 || !SURPLUS_REASONS.has(reason));
 
 /**
  * One visual language for status, used by the dot, the chip and the review
@@ -350,7 +356,7 @@ export function OpnameSessionView({
   const skippedCount = byTone("skipped").length;
   const answeredCount = rows.length - pendingCount;
   const totalImpact = states.reduce((sum, s) => sum + (s.impact ?? 0), 0);
-  const unexplained = majorList.filter((s) => !s.line?.reason || s.dirty);
+  const unexplained = majorList.filter((s) => !reasonFits(s.line?.reason, s.delta) || s.dirty);
 
   // Everything waiting to be sent. A count draft is saved at the chosen time;
   // an HPP typed onto an already-saved count keeps that count's own time, so
@@ -597,9 +603,17 @@ export function OpnameSessionView({
   const impactLabel = (v: number | null) =>
     v == null ? "—" : v === 0 ? "Tidak berubah" : `${v > 0 ? "+" : "−"}${fmtIDR(Math.abs(v))}`;
 
+  const reasonOption = ([k, label]: [string, string]) => (
+    <option key={k} value={k}>
+      {label}
+    </option>
+  );
+  // A surplus leads with the two ways stock arrives without a purchase
+  // invoice; a shortfall never sees them. A reason left over from a recount
+  // that flipped direction reads as unanswered, same as the finish gate.
   const reasonSelect = (s: RowState, required: boolean) => (
     <select
-      value={s.line?.reason ?? ""}
+      value={reasonFits(s.line?.reason, s.delta) ? (s.line?.reason ?? "") : ""}
       disabled={busy !== null}
       onChange={(e) =>
         saveRow(s.row.id, {
@@ -611,15 +625,22 @@ export function OpnameSessionView({
       }
       aria-label={`Alasan selisih ${s.row.product_name}`}
       className={`h-9 w-full rounded-lg border bg-background px-2 text-[13px] ${
-        required && !s.line?.reason ? "border-destructive/60" : "border-border"
+        required && !reasonFits(s.line?.reason, s.delta) ? "border-destructive/60" : "border-border"
       }`}
     >
       <option value="">{required ? "Pilih alasan… wajib" : "Pilih alasan… opsional"}</option>
-      {Object.entries(REASONS).map(([k, label]) => (
-        <option key={k} value={k}>
-          {label}
-        </option>
-      ))}
+      {(s.delta ?? 0) > 0 ? (
+        <>
+          <optgroup label="Stok bertambah">
+            {Object.entries(REASONS).filter(([k]) => SURPLUS_REASONS.has(k)).map(reasonOption)}
+          </optgroup>
+          <optgroup label="Lainnya">
+            {Object.entries(REASONS).filter(([k]) => !SURPLUS_REASONS.has(k)).map(reasonOption)}
+          </optgroup>
+        </>
+      ) : (
+        Object.entries(REASONS).filter(([k]) => !SURPLUS_REASONS.has(k)).map(reasonOption)
+      )}
     </select>
   );
 
