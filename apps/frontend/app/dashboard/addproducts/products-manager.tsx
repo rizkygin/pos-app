@@ -571,11 +571,16 @@ export const ProductsManager = ({
   // 'has' = a base with at least one variant; 'is' = a row that is somebody's
   // variant. Both are "the variant-shaped rows", asked from either end.
   const [variantFilter, setVariantFilter] = useState<'all' | 'has' | 'is'>('all');
+  // A menu group's id, or 'none' for the products in no group — the ones that
+  // fall back to their category on the public menu.
+  const [groupFilter, setGroupFilter] = useState<'all' | 'none' | number>('all');
   const [filterOpen, setFilterOpen] = useState(false);
   // How many filters are narrowing the list — shown on the Filter button so a
   // half-empty table always explains itself even with the popup closed.
   const activeFilterCount =
-    (categoryFilter !== 'all' ? 1 : 0) + (variantFilter !== 'all' ? 1 : 0);
+    (categoryFilter !== 'all' ? 1 : 0) +
+    (variantFilter !== 'all' ? 1 : 0) +
+    (groupFilter !== 'all' ? 1 : 0);
   const [tab, setTab] = useState<TableKind>('produk');
 
   // ── Purchasable toggle ────────────────────────────────────────────────────
@@ -687,6 +692,8 @@ export const ProductsManager = ({
     if (!window.confirm('Hapus grup ini? Produk di dalamnya tidak ikut terhapus, hanya jadi tanpa grup.')) return;
     await fetch(`${API_URL}/api/menu-groups/${id}`, { method: 'DELETE', credentials: 'include' });
     if (selectedMenuGroupId === id) setSelectedMenuGroupId(null);
+    // Its products are ungrouped now, so a filter on it would show nothing.
+    setGroupFilter((f) => (f === id ? 'all' : f));
     await loadMenuGroups();
     router.refresh();
   };
@@ -829,7 +836,11 @@ export const ProductsManager = ({
         tab !== 'produk' ||
         variantFilter === 'all' ||
         (variantFilter === 'has' ? variantCountByBase.has(p.id) : !!p.variant_of);
-      return matchesSearch && matchesCategory && matchesVariant;
+      const matchesGroup =
+        tab !== 'produk' ||
+        groupFilter === 'all' ||
+        (groupFilter === 'none' ? p.menu_group_id == null : p.menu_group_id === groupFilter);
+      return matchesSearch && matchesCategory && matchesVariant && matchesGroup;
     });
 
     const dir = sortDir === 'asc' ? 1 : -1;
@@ -859,6 +870,7 @@ export const ProductsManager = ({
     search,
     categoryFilter,
     variantFilter,
+    groupFilter,
     variantCountByBase,
     sortBy,
     sortDir,
@@ -2799,6 +2811,7 @@ export const ProductsManager = ({
                             onClick={() => {
                               setCategoryFilter('all');
                               setVariantFilter('all');
+                              setGroupFilter('all');
                             }}
                             className="text-xs font-medium text-blue-600 hover:underline"
                           >
@@ -2862,6 +2875,41 @@ export const ProductsManager = ({
                           })}
                         </div>
                       </div>
+
+                      {/* Only once the outlet has groups: before that every
+                          product is "Tanpa grup" and the row says nothing. */}
+                      {menuGroups.length > 0 && (
+                        <div className="space-y-1.5">
+                          <p className="text-xs font-medium text-muted-foreground">
+                            Grup menu
+                          </p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {(
+                              [
+                                ['all', 'Semua grup'],
+                                ...menuGroups.map((g) => [g.id, g.name] as const),
+                                ['none', 'Tanpa grup'],
+                              ] as const
+                            ).map(([value, label]) => {
+                              const active = groupFilter === value;
+                              return (
+                                <button
+                                  key={value}
+                                  type="button"
+                                  onClick={() => setGroupFilter(value)}
+                                  className={`rounded-full border px-3 py-1 text-xs transition-colors ${
+                                    active
+                                      ? 'border-blue-600 bg-blue-600 text-white'
+                                      : 'border-input bg-background hover:bg-muted'
+                                  }`}
+                                >
+                                  {label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
                     </PopoverContent>
                   </Popover>
                 )}
