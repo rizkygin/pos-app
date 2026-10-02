@@ -26,7 +26,16 @@ import { getOutletAccess, requireOutletAccess, parseActiveOutletId, getSubscript
 import { recalcOutletFeatures, INTERNAL_CATEGORIES } from "../lib/outlet-features";
 import { RecipeGraphError, applyProduction, findRecipeCycle, previewProduction } from "../lib/stock";
 import { addonGroupsForProducts } from "../lib/addons";
-import { ForceHppError, applyForceHpp, bookedHpp, previewForceHpp, type ForceHppItem } from "../lib/force-hpp";
+import {
+  ForceHppError,
+  applyForceHpp,
+  applyUnitCost,
+  bookedHpp,
+  moneyNum,
+  previewForceHpp,
+  previewUnitCost,
+  type ForceHppItem,
+} from "../lib/force-hpp";
 import {
   DEFAULT_BASE_VARIANT_NAME,
   DEFAULT_VARIANT_LABEL,
@@ -137,6 +146,7 @@ function rangePricedFields(data: Partial<AddProductInput>, courierDeliverable: b
 // rangePricedFields is: the form hides the input, and the stored row must agree
 // with what the form is telling the owner.
 const INGREDIENT_CATEGORY = "bahan";
+const ADDON_CATEGORY = "tambahan";
 
 function ingredientPricedFields(category: string | undefined) {
   if ((category ?? "").trim().toLowerCase() !== INGREDIENT_CATEGORY) return null;
@@ -213,6 +223,49 @@ async function productIsReferenced(productId: string): Promise<boolean> {
   return hits.some((rows) => rows.length > 0);
 }
 
+type RecipeEdges = Map<string, { ingredient_id: string; qty: number }[]>;
+
+// What one unit of a product currently carries, the way both explorers draw it
+// (Jelajah Resep looks down a recipe, Jelajah Barang Jadi looks up), so the
+// two can never print different HPPs for the same product.
+//
+// Cycles are refused at write time (findRecipeCycle), so reaching one here
+// means the rows predate that check or were seeded around it. The walk
+// stops rather than spinning, and the product falls back to its
+// buying_price: expanding a recipe that eats itself yields a number that is
+// not just wrong but arbitrarily wrong, and Rp 0 reads as "free" rather
+// than "unknown". Which products those were is reported so the page can say
+// the recipe needs fixing instead of quietly under-costing the dish.
+function explorerCosting(
+  byId: Map<string, { buying_price: string; avg_cost: string | null; track_stock: boolean }>,
+  kidsOf: RecipeEdges,
+) {
+  const num = (v: unknown) => Number(v) || 0;
+  const costCache = new Map<string, number>();
+  const cyclic = new Set<string>();
+  const unitCostOf = (id: string, path: string[] = []): number => {
+    const hit = costCache.get(id);
+    if (hit !== undefined) return hit;
+    const p = byId.get(id);
+    if (!p) return 0;
+    if (path.includes(id)) {
+      cyclic.add(id);
+      return num(p.buying_price);
+    }
+    const kids = kidsOf.get(id) ?? [];
+    let v = p.track_stock
+      ? num(p.avg_cost) || num(p.buying_price)
+      : kids.length
+        ? kids.reduce((s, k) => s + k.qty * unitCostOf(k.ingredient_id, [...path, id]), 0)
+        : num(p.buying_price);
+    // Its own expansion came back through it — the sum above is meaningless.
+    if (cyclic.has(id)) v = num(p.avg_cost) || num(p.buying_price);
+    costCache.set(id, v);
+    return v;
+  };
+  return { unitCostOf, cyclic };
+}
+
 async function requireUser(request: any, reply: any) {
   const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
   if (!session?.user) {
@@ -261,6 +314,20 @@ export async function productRoutes(app: FastifyInstance) {
       ).map((r) => r.product_id),
     );
 
+    // And the other direction: which products sit inside a live product's
+    // recipe. The etalase offers Jelajah Barang Jadi on these — every bahan,
+    // plus any sellable product another one draws on (a Paket Hemat). A recipe
+    // left behind by an archived product does not count: the page skips it.
+    const usedAsIngredient = new Set(
+      (
+        await db
+          .selectDistinct({ ingredient_id: recipeItemsTable.ingredient_id })
+          .from(recipeItemsTable)
+          .innerJoin(productsTable, eq(productsTable.id, recipeItemsTable.product_id))
+          .where(and(eq(recipeItemsTable.outlet_id, outlet.id), isNull(productsTable.deletedAt)))
+      ).map((r) => r.ingredient_id),
+    );
+
     // Flattened back to bare product rows: faktur and stok also read this
     // endpoint and index straight into product fields, so the join must not
     // change the shape. The section name rides along as two extra keys, which
@@ -279,6 +346,7 @@ export async function productRoutes(app: FastifyInstance) {
       menu_group: r.menu_groups?.name ?? null,
       menu_group_order: r.menu_groups?.sort_order ?? null,
       has_recipe: withRecipe.has(r.products.id),
+      is_ingredient: usedAsIngredient.has(r.products.id),
       addon_groups: addonsByProduct.get(r.products.id) ?? [],
     }));
 
@@ -1145,12 +1213,29 @@ export async function productRoutes(app: FastifyInstance) {
         return reply.status(400).send({ success: false, message: "Produk tidak bisa jadi bahan dirinya sendiri" });
       }
       const [ing] = await db
-        .select({ track_stock: productsTable.track_stock, outlet_id: productsTable.outlet_id })
+        .select({
+          name: productsTable.product_name,
+          category: productsTable.category,
+          track_stock: productsTable.track_stock,
+          outlet_id: productsTable.outlet_id,
+        })
         .from(productsTable)
         .where(eq(productsTable.id, it.ingredient_id))
         .limit(1);
       if (!ing || ing.outlet_id !== product.outlet_id) {
         return reply.status(400).send({ success: false, message: "Bahan tidak ditemukan di outlet ini" });
+      }
+      // An add-on only ever reaches an order hanging off a dish, as a child
+      // line the customer chose — never as part of what a dish IS. Inside a
+      // recipe it would be deducted on every sale whether or not anyone asked
+      // for it, and the explorers would draw a topping as an ingredient. A
+      // bahan or another product (a Paket Hemat drawing on a sellable item)
+      // is fine; a tambahan never is.
+      if ((ing.category ?? "").trim().toLowerCase() === ADDON_CATEGORY) {
+        return reply.status(400).send({
+          success: false,
+          message: `"${ing.name}" adalah add-on — add-on tidak bisa jadi bahan resep. Pakai bahan aslinya.`,
+        });
       }
       // No track_stock requirement: an ingredient that does not track stock is
       // a pass-through composite, which is exactly how sub-recipes are built.
@@ -1281,37 +1366,7 @@ export async function productRoutes(app: FastifyInstance) {
 
     const num = (v: unknown) => Number(v) || 0;
 
-    // What one unit of a product currently carries.
-    //
-    // Cycles are refused at write time (findRecipeCycle), so reaching one here
-    // means the rows predate that check or were seeded around it. The walk
-    // stops rather than spinning, and the product falls back to its
-    // buying_price: expanding a recipe that eats itself yields a number that is
-    // not just wrong but arbitrarily wrong, and Rp 0 reads as "free" rather
-    // than "unknown". Which products those were is reported so the page can say
-    // the recipe needs fixing instead of quietly under-costing the dish.
-    const costCache = new Map<string, number>();
-    const cyclic = new Set<string>();
-    const unitCostOf = (id: string, path: string[] = []): number => {
-      const hit = costCache.get(id);
-      if (hit !== undefined) return hit;
-      const p = byId.get(id);
-      if (!p) return 0;
-      if (path.includes(id)) {
-        cyclic.add(id);
-        return num(p.buying_price);
-      }
-      const kids = kidsOf.get(id) ?? [];
-      let v = p.track_stock
-        ? num(p.avg_cost) || num(p.buying_price)
-        : kids.length
-          ? kids.reduce((s, k) => s + k.qty * unitCostOf(k.ingredient_id, [...path, id]), 0)
-          : num(p.buying_price);
-      // Its own expansion came back through it — the sum above is meaningless.
-      if (cyclic.has(id)) v = num(p.avg_cost) || num(p.buying_price);
-      costCache.set(id, v);
-      return v;
-    };
+    const { unitCostOf, cyclic } = explorerCosting(byId, kidsOf);
 
     // Days of stock cover, from the ledger rather than a stored rate: nothing
     // in this schema records a usage rate, but every outflow is a row here.
@@ -1519,6 +1574,221 @@ export async function productRoutes(app: FastifyInstance) {
     });
   });
 
+  // ── Jelajah Barang Jadi ─────────────────────────────────────────────────
+  // Jelajah Resep turned around: not "what is this dish made of" but "what
+  // does this bahan become". Biji kopi -> Espresso -> Americano, Latte, … —
+  // and because one product can be reached along several lines (espresso goes
+  // into a Latte directly AND through a Kopi Susu base), the answer is a GRAPH,
+  // not a tree: one node per product, one edge per recipe row, and each product
+  // sits one stage after the LONGEST line that reaches it, so every edge points
+  // forward.
+  //
+  // Per node, two quantities of the root:
+  //   root_qty   how much of it physically ends up in ONE unit of the node,
+  //              summed over every line (an Americano holds 18 g of beans)
+  //   live_qty   how much of that the node's HPP reads at today's price. A
+  //              stock-tracked product on the way (a batch) is costed at its
+  //              own average, fixed when the batch was made, so beans that went
+  //              through it are there physically but not live. live_qty is what
+  //              moves when the root's cost changes.
+  // Both multiply up the edges exactly as Jelajah Resep's quantities multiply
+  // down them: recipe_items.qty is per ONE unit of its product.
+  app.get("/api/products/:id/finished-goods", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, "products");
+    if (!access) return;
+    if (!hasFeature(access.gate, RECIPE_FEATURE)) {
+      return reply
+        .status(403)
+        .send({ success: false, error: RECIPE_UPGRADE_MESSAGE, code: "PLAN_FEATURE" });
+    }
+    const outletId = access.outlet.id;
+    const productId = (request.params as { id: string }).id;
+
+    const [catalogue, edges] = await Promise.all([
+      db
+        .select({
+          id: productsTable.id,
+          name: productsTable.product_name,
+          unit: productsTable.unit,
+          category: productsTable.category,
+          price: productsTable.price,
+          price_mark_down: productsTable.price_mark_down,
+          buying_price: productsTable.buying_price,
+          avg_cost: productsTable.avg_cost,
+          stock: productsTable.stock,
+          track_stock: productsTable.track_stock,
+          is_for_sale: productsTable.is_for_sale,
+          isAvailable: productsTable.isAvailable,
+          barcode: productsTable.barcode,
+          deletedAt: productsTable.deletedAt,
+        })
+        .from(productsTable)
+        .where(eq(productsTable.outlet_id, outletId)),
+      db
+        .select({
+          product_id: recipeItemsTable.product_id,
+          ingredient_id: recipeItemsTable.ingredient_id,
+          qty: recipeItemsTable.qty,
+        })
+        .from(recipeItemsTable)
+        .where(eq(recipeItemsTable.outlet_id, outletId)),
+    ]);
+
+    const byId = new Map(catalogue.map((p) => [p.id, p]));
+    const root = byId.get(productId);
+    if (!root || root.deletedAt) {
+      return reply.status(404).send({ success: false, message: "Product not found" });
+    }
+
+    const kidsOf: RecipeEdges = new Map();
+    const parentsOf = new Map<string, string[]>();
+    for (const e of edges) {
+      const row = { ingredient_id: e.ingredient_id, qty: Number(e.qty) || 0 };
+      const kids = kidsOf.get(e.product_id);
+      if (kids) kids.push(row);
+      else kidsOf.set(e.product_id, [row]);
+      const parents = parentsOf.get(e.ingredient_id);
+      if (parents) parents.push(e.product_id);
+      else parentsOf.set(e.ingredient_id, [e.product_id]);
+    }
+
+    const num = (v: unknown) => Number(v) || 0;
+    const { unitCostOf, cyclic } = explorerCosting(byId, kidsOf);
+
+    // Everything that ends up containing the root, walked upward. Archived
+    // products are left out: a dish nobody can sell any more consumes nothing.
+    const inGraph = new Set<string>();
+    const queue = [productId];
+    while (queue.length) {
+      for (const parentId of parentsOf.get(queue.shift()!) ?? []) {
+        const p = byId.get(parentId);
+        if (!p || p.deletedAt || parentId === productId || inGraph.has(parentId)) continue;
+        inGraph.add(parentId);
+        queue.push(parentId);
+      }
+    }
+
+    // The ingredients of a node that lie on a line from the root — the root
+    // itself or another node. The milk in a latte is not part of this story.
+    const feeds = (id: string) =>
+      (kidsOf.get(id) ?? []).filter((k) => k.qty > 0 && (k.ingredient_id === productId || inGraph.has(k.ingredient_id)));
+
+    type Line = { stage: number; root_qty: number; live_qty: number };
+    const lines = new Map<string, Line>();
+    const broken = new Set<string>();
+    const lineOf = (id: string, path: string[]): Line => {
+      if (id === productId) return { stage: 0, root_qty: 1, live_qty: 1 };
+      const hit = lines.get(id);
+      if (hit) return hit;
+      // Same stance as explorerCosting: a recipe that eats itself predates the
+      // write-time check, and is named rather than walked forever.
+      if (path.includes(id)) {
+        broken.add(id);
+        return { stage: 0, root_qty: 0, live_qty: 0 };
+      }
+      let stage = 0;
+      let rootQty = 0;
+      let liveQty = 0;
+      for (const k of feeds(id)) {
+        const l = lineOf(k.ingredient_id, [...path, id]);
+        stage = Math.max(stage, l.stage + 1);
+        rootQty += k.qty * l.root_qty;
+        liveQty += k.qty * l.live_qty;
+      }
+      const line = { stage, root_qty: rootQty, live_qty: byId.get(id)!.track_stock ? 0 : liveQty };
+      lines.set(id, line);
+      return line;
+    };
+
+    const ids = [...inGraph];
+    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const [soldRows, [usage]] = await Promise.all([
+      ids.length
+        ? db
+            .select({
+              product_id: orderDetailsTable.product_id,
+              qty: sql<number>`coalesce(sum(${orderDetailsTable.quantity}), 0)`.mapWith(Number),
+            })
+            .from(orderDetailsTable)
+            .innerJoin(ordersTable, eq(ordersTable.id, orderDetailsTable.order_id))
+            .where(
+              and(
+                inArray(orderDetailsTable.product_id, ids),
+                isNull(ordersTable.deletedAt),
+                sql`${ordersTable.status} <> 'cancelled'`,
+                gt(orderDetailsTable.created_at, since),
+              ),
+            )
+            .groupBy(orderDetailsTable.product_id)
+        : Promise.resolve([]),
+      // Days of cover, the same ledger-derived rate Jelajah Resep uses.
+      db
+        .select({
+          out_qty: sql<number>`coalesce(sum(-${stockMovementsTable.qty_change}), 0)`.mapWith(Number),
+        })
+        .from(stockMovementsTable)
+        .where(
+          and(
+            eq(stockMovementsTable.outlet_id, outletId),
+            eq(stockMovementsTable.product_id, productId),
+            inArray(stockMovementsTable.reason, ["sales", "production"]),
+            sql`${stockMovementsTable.qty_change} < 0`,
+            gt(stockMovementsTable.created_at, since),
+          ),
+        ),
+    ]);
+    const soldOf = new Map(soldRows.map((r) => [r.product_id, r.qty]));
+    const dailyUsage = (usage?.out_qty ?? 0) / 30;
+
+    const nodes = ids.map((id) => {
+      const p = byId.get(id)!;
+      const line = lineOf(id, []);
+      return {
+        product_id: id,
+        name: p.name,
+        unit: p.unit,
+        category: p.category,
+        track_stock: p.track_stock,
+        is_for_sale: p.is_for_sale,
+        available: p.isAvailable,
+        price: num(p.price_mark_down) || num(p.price),
+        unit_cost: unitCostOf(id),
+        ...line,
+        sold_30d: soldOf.get(id) ?? 0,
+      };
+    });
+    const graphEdges = ids.flatMap((id) =>
+      feeds(id).map((k) => ({ from: k.ingredient_id, to: id, qty: k.qty })),
+    );
+
+    return reply.send({
+      success: true,
+      product: {
+        id: root.id,
+        name: root.name,
+        unit: root.unit,
+        category: root.category,
+        barcode: root.barcode,
+        track_stock: root.track_stock,
+        stock: num(root.stock),
+        // What the explorers draw (an average, else the typed price) and what a
+        // sale actually books (no fallback). They differ exactly when the
+        // ledger never priced this bahan — the case Paksa Hitung HPP exists for.
+        unit_cost: unitCostOf(productId),
+        booked_cost: root.track_stock ? num(root.avg_cost) : moneyNum(root.buying_price),
+        has_recipe: (kidsOf.get(productId)?.length ?? 0) > 0,
+        daily_usage: dailyUsage,
+        // Floored at 0: an oversold bahan has no days left, not minus ten.
+        days_left: dailyUsage > 0 ? Math.max(0, Number((num(root.stock) / dailyUsage).toFixed(1))) : null,
+      },
+      nodes,
+      edges: graphEdges,
+      can_force_hpp: access.isOwner,
+      low_stock_days: 12,
+      cyclic: [...new Set([...broken, ...cyclic])].map((id) => byId.get(id)?.name ?? id),
+    });
+  });
+
   // ── Paksa Hitung HPP ────────────────────────────────────────────────────
   // For an outlet that never buys through a Faktur: the owner sets what each
   // ingredient of a recipe costs, and the dish's HPP follows. The rules — which
@@ -1603,6 +1873,53 @@ export async function productRoutes(app: FastifyInstance) {
           ledger: usesCostLedger(access.gate),
           items,
           root,
+        }),
+      );
+      return reply.send({ success: true, ...result });
+    } catch (e) {
+      if (e instanceof ForceHppError) return reply.status(e.status).send({ success: false, error: e.message });
+      throw e;
+    }
+  });
+
+  // ── Paksa Hitung HPP for one product with no recipe ────────────────────────────
+  // Jelajah Barang Jadi's half of the same capability: a bahan bought as it
+  // is has no recipe for Paksa Hitung HPP to open, so its cost is set here,
+  // under the same owner + plan gate and the same rules (lib/force-hpp.ts).
+  app.get("/api/products/:id/unit-cost", async (request, reply) => {
+    const access = await forceHppAccess(request, reply);
+    if (!access) return;
+    const productId = (request.params as { id: string }).id;
+    try {
+      const preview = await db.transaction((tx) => previewUnitCost(tx, { outletId: access.outlet.id, productId }));
+      return reply.send({ success: true, ...preview });
+    } catch (e) {
+      if (e instanceof ForceHppError) return reply.status(e.status).send({ success: false, error: e.message });
+      throw e;
+    }
+  });
+
+  app.post("/api/products/:id/unit-cost", async (request, reply) => {
+    const access = await forceHppAccess(request, reply);
+    if (!access) return;
+    const productId = (request.params as { id: string }).id;
+    const body = (request.body ?? {}) as { unit_cost?: unknown; expected?: unknown; overwrite?: unknown };
+    const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+    if (
+      !finite(body.unit_cost) ||
+      !finite(body.expected) ||
+      (body.overwrite !== undefined && typeof body.overwrite !== "boolean")
+    ) {
+      return reply.status(400).send({ success: false, error: "Data HPP tidak valid." });
+    }
+    try {
+      const result = await db.transaction((tx) =>
+        applyUnitCost(tx, {
+          outletId: access.outlet.id,
+          productId,
+          unitCost: body.unit_cost as number,
+          expected: body.expected as number,
+          overwrite: body.overwrite as boolean | undefined,
         }),
       );
       return reply.send({ success: true, ...result });

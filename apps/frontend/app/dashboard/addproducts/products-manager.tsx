@@ -26,6 +26,7 @@ import {
   HelpCircle,
   Ruler,
   Workflow,
+  Sprout,
   SlidersHorizontal,
   Circle,
   CircleCheck,
@@ -94,6 +95,10 @@ type Product = {
   variant_name?: string | null;
   variant_label?: string | null;
   variant_sort?: number;
+  /** From /api/products/mine: does this product have recipe rows of its own. */
+  has_recipe?: boolean;
+  /** …and is it inside another live product's recipe (a Paket Hemat's item). */
+  is_ingredient?: boolean;
 };
 
 const rupiah = (v: number | string) =>
@@ -866,7 +871,10 @@ export const ProductsManager = ({
   // is what makes multi-level work. Self-exclusion matters more than it looks —
   // a "Batako 10 pcs" bundle sits right next to plain "Batako" in this list.
   // Deeper loops (A uses B uses A) are caught by the server on save, since only
-  // it can see the whole graph.
+  // it can see the whole graph. Add-ons stay in this list — the add-on editor
+  // picks its options from it, and the recipe editor needs them to name one
+  // saved into a recipe before that was refused — but the recipe picker
+  // itself never offers one (see isAddon in recipe-editor.tsx).
   const recipeIngredientOptions = useMemo(
     () =>
       initialProducts
@@ -1225,7 +1233,8 @@ export const ProductsManager = ({
   // All three hang off a saved row, so a new product shows them locked with a
   // way through, instead of not at all — before, an owner only found them by
   // saving, hunting the product down in the list and opening it again.
-  const showsRecipeEditor = recipeAllowed && recipeIngredientOptions.length > 0;
+  const showsRecipeEditor =
+    recipeAllowed && recipeIngredientOptions.some((p) => kindOf(p.category) !== 'tambahan');
   // Not for an internal kind (a topping has no sizes — the dish does) nor for
   // a product that is already somebody's variant: one level deep.
   const showsVariantEditor =
@@ -3151,13 +3160,17 @@ export const ProductsManager = ({
                             <td className="px-3 py-2.5" data-tour="row-actions">
                               <div className="flex items-center justify-end gap-1">
                                 {/* Recipe Explorer: this product's real HPP
-                                    tree. Shown on every row on purpose — a
-                                    bahan is a legitimate thing to open (it is
-                                    a leaf, and the page says what its stock
-                                    and cover look like), and a product with no
-                                    recipe gets an empty state pointing at the
-                                    recipe form rather than a dead end. */}
-                                {(gate?.features?.recipeExplorer as boolean) && (
+                                    tree. A product with no recipe still gets
+                                    it — the empty state points at the recipe
+                                    form rather than a dead end — but a bahan
+                                    with no recipe is bought, never made, so
+                                    there is nothing for it to open; its page
+                                    is Jelajah Barang Jadi below. An add-on is
+                                    left out until the explorers learn how one
+                                    hangs off a dish. */}
+                                {(gate?.features?.recipeExplorer as boolean) &&
+                                  kindOf(product.category) !== 'tambahan' &&
+                                  !(kindOf(product.category) === 'bahan' && !product.has_recipe) && (
                                   <button
                                     onClick={() =>
                                       router.push(
@@ -3169,6 +3182,28 @@ export const ProductsManager = ({
                                     title="Jelajah resep"
                                   >
                                     <Workflow className="h-4 w-4" />
+                                  </button>
+                                )}
+                                {/* Jelajah Barang Jadi: the reverse — what
+                                    this becomes, product by product. Every
+                                    bahan (it is also where a bahan's cost is
+                                    set), and a product only when another one
+                                    is made from it (a Paket Hemat). Never an
+                                    add-on: it cannot be an ingredient. */}
+                                {(gate?.features?.recipeExplorer as boolean) &&
+                                  (kindOf(product.category) === 'bahan' ||
+                                    (kindOf(product.category) === 'produk' && product.is_ingredient)) && (
+                                  <button
+                                    onClick={() =>
+                                      router.push(
+                                        `/dashboard/addproducts/finished-goods/${product.id}?name=${encodeURIComponent(product.product_name)}`,
+                                      )
+                                    }
+                                    className="p-1.5 rounded-lg bg-muted/60 text-muted-foreground hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition-colors"
+                                    aria-label="Jelajah barang jadi"
+                                    title="Jelajah barang jadi"
+                                  >
+                                    <Sprout className="h-4 w-4" />
                                   </button>
                                 )}
                                 <button

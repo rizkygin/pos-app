@@ -377,6 +377,30 @@ const EPS = 0.00005;
 const same = (a: number, b: number) => Math.abs(a - b) < EPS;
 const round4 = (n: number) => Number(n.toFixed(4));
 
+// Should this value be written? Applying the same dialog twice is a no-op, not
+// an error: a value already at its target is skipped BEFORE the "changed since
+// you looked" check, so a double press cannot trip over its own first write.
+function judge(
+  name: string,
+  current: number,
+  next: number,
+  expected: number,
+  prot: boolean,
+  overwrite: boolean | undefined,
+) {
+  if (same(current, next)) return false;
+  if (!same(current, expected)) {
+    throw new ForceHppError(409, `Biaya ${name} sudah berubah sejak dialog dibuka. Buka ulang Paksa Hitung HPP.`);
+  }
+  if (prot && overwrite !== true) {
+    throw new ForceHppError(
+      409,
+      `Biaya ${name} berasal dari Faktur atau Produksi. Centang barisnya untuk menimpa.`,
+    );
+  }
+  return true;
+}
+
 export async function applyForceHpp(
   tx: Tx,
   args: {
@@ -406,30 +430,6 @@ export async function applyForceHpp(
   const rowById = new Map(rows.map((r) => [r.product_id, r]));
   const note = `Paksa Hitung HPP · ${root.name}`.slice(0, 255);
   let changed = 0;
-
-  // Applying the same dialog twice is a no-op, not an error: a value already
-  // at its target is skipped BEFORE the "changed since you looked" check, so a
-  // double press cannot trip over its own first write.
-  const judge = (
-    name: string,
-    current: number,
-    next: number,
-    expected: number,
-    prot: boolean,
-    overwrite: boolean | undefined,
-  ) => {
-    if (same(current, next)) return false;
-    if (!same(current, expected)) {
-      throw new ForceHppError(409, `Biaya ${name} sudah berubah sejak dialog dibuka. Buka ulang Paksa Hitung HPP.`);
-    }
-    if (prot && overwrite !== true) {
-      throw new ForceHppError(
-        409,
-        `Biaya ${name} berasal dari Faktur atau Produksi. Centang barisnya untuk menimpa.`,
-      );
-    }
-    return true;
-  };
 
   for (const item of items) {
     const row = rowById.get(item.product_id);
@@ -479,4 +479,100 @@ export async function applyForceHpp(
   }
 
   return { changed, booked_hpp: bookedHpp(g, productId, ledger) ?? 0, recipe_hpp: recipeHpp(g, leaves) };
+}
+
+// ── One product, no recipe ──────────────────────────────────────────────────
+// Jelajah Barang Jadi's override, for a product nothing is made FROM — a bahan
+// bought as it is. It is an ingredient row with the recipe taken away, so it
+// follows the ingredient row's rules exactly: tracked -> avg_cost by
+// revaluation, otherwise buying_price in whole rupiah, and an average fed by a
+// Faktur or a Produksi is protected.
+//
+// A product WITH a recipe is refused. Its cost is its recipe's, and the place
+// to set it is Paksa Hitung HPP on that recipe, which writes the ingredients
+// and the dish together — two doors to one number would let them disagree.
+
+async function singleTarget(tx: Tx, outletId: number, productId: string) {
+  const [p] = await tx
+    .select({
+      id: productsTable.id,
+      name: productsTable.product_name,
+      unit: productsTable.unit,
+      track_stock: productsTable.track_stock,
+      avg_cost: productsTable.avg_cost,
+      buying_price: productsTable.buying_price,
+      deletedAt: productsTable.deletedAt,
+    })
+    .from(productsTable)
+    .where(and(eq(productsTable.id, productId), eq(productsTable.outlet_id, outletId)))
+    .limit(1);
+  if (!p || p.deletedAt) throw new ForceHppError(404, "Produk tidak ditemukan.");
+
+  const [hasRecipe] = await tx
+    .select({ id: recipeItemsTable.id })
+    .from(recipeItemsTable)
+    .where(and(eq(recipeItemsTable.product_id, productId), eq(recipeItemsTable.outlet_id, outletId)))
+    .limit(1);
+  if (hasRecipe) {
+    throw new ForceHppError(409, "Produk ini punya resep — atur HPP-nya lewat Paksa Hitung HPP di Jelajah Resep.");
+  }
+
+  const target = p.track_stock ? ("avg" as const) : ("buying" as const);
+  const current = bookedUnitCost(p);
+  const source = sourceOf(target, current, (await avgSources(tx, outletId, [p.id])).get(p.id));
+  let suggested = current > 0 ? current : moneyNum(p.buying_price);
+  if (target === "buying") suggested = Math.round(suggested);
+  return {
+    product: { id: p.id, name: p.name, unit: p.unit, track_stock: p.track_stock },
+    target,
+    current,
+    suggested,
+    source,
+    protected: isProtected(source),
+  };
+}
+
+export const previewUnitCost = (tx: Tx, args: { outletId: number; productId: string }) =>
+  singleTarget(tx, args.outletId, args.productId);
+
+export async function applyUnitCost(
+  tx: Tx,
+  args: { outletId: number; productId: string; unitCost: number; expected: number; overwrite?: boolean },
+) {
+  const { outletId, productId } = args;
+  // Locked before it is judged, for the same reason applyForceHpp locks: the
+  // "changed since you looked" answer must be about the value we overwrite.
+  await tx
+    .select({ id: productsTable.id })
+    .from(productsTable)
+    .where(and(eq(productsTable.id, productId), eq(productsTable.outlet_id, outletId)))
+    .for("update");
+
+  const info = await singleTarget(tx, outletId, productId);
+  const next = info.target === "buying" ? Math.round(args.unitCost) : round4(args.unitCost);
+  if (!(next > 0)) {
+    throw new ForceHppError(
+      400,
+      info.target === "buying"
+        ? `Biaya ${info.product.name} minimal Rp 1 — produk tanpa Lacak Stok disimpan dalam rupiah bulat.`
+        : `Biaya ${info.product.name} harus lebih dari 0.`,
+    );
+  }
+  if (!judge(info.product.name, info.current, next, args.expected, info.protected, args.overwrite)) {
+    return { changed: 0, unit_cost: info.current };
+  }
+
+  if (info.target === "avg") {
+    await postMovement(tx, {
+      outletId,
+      productId,
+      qtyChange: 0,
+      unitCost: next,
+      reason: "adjustment",
+      note: "Paksa Hitung HPP · Jelajah Barang Jadi",
+    });
+  } else {
+    await tx.update(productsTable).set({ buying_price: String(next) }).where(eq(productsTable.id, productId));
+  }
+  return { changed: 1, unit_cost: next };
 }

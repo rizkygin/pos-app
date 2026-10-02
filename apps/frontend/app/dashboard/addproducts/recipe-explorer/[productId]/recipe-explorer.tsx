@@ -109,19 +109,19 @@ type ApiResponse = {
 const RADII = [0, 262, 476, 668];
 const NODE_W = [224, 190, 172, 156];
 
-const NF = new Intl.NumberFormat('id-ID', { maximumFractionDigits: 0 });
-const NF1 = new Intl.NumberFormat('id-ID', { maximumFractionDigits: 1 });
+export const NF = new Intl.NumberFormat('id-ID', { maximumFractionDigits: 0 });
+export const NF1 = new Intl.NumberFormat('id-ID', { maximumFractionDigits: 1 });
 const NF2 = new Intl.NumberFormat('id-ID', { maximumFractionDigits: 2 });
-const rp = (n: number) => 'Rp ' + NF.format(Math.round(n));
+export const rp = (n: number) => 'Rp ' + NF.format(Math.round(n));
 // Sub-rupiah unit costs are routine at recipe scale (0,9 per ml of water), so
 // the per-unit figures keep two decimals where the totals keep none.
-const rp1 = (n: number) => 'Rp ' + (n < 100 ? NF2.format(n) : NF.format(Math.round(n)));
+export const rp1 = (n: number) => 'Rp ' + (n < 100 ? NF2.format(n) : NF.format(Math.round(n)));
 // Quantities on this page span two scales: stock counted in hundreds of grams
 // and recipe amounts of 0,018 kg. Any fixed decimal count prints one of them as
 // "0", so precision follows magnitude — and a leftover 0,4 kg never reads as
 // empty stock.
 const NFSig = new Intl.NumberFormat('id-ID', { maximumSignificantDigits: 2 });
-const qtyFmt = (n: number) => {
+export const qtyFmt = (n: number) => {
     const a = Math.abs(n);
     if (a === 0) return '0';
     if (a >= 100) return NF.format(n);
@@ -1145,7 +1145,7 @@ export function RecipeExplorer({ productId, productName }: { productId: string; 
                         <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
                             Daftar ini berhenti di bahan yang stoknya dihitung sendiri — persis yang berkurang saat satu {unitWord} terjual.
                             Bahan penyusun sebuah olahan yang sudah punya stok batch tidak diurai lagi di sini, karena biayanya sudah
-                            terkunci saat batch itu dibuat. &quot;Perkiraan habis&quot; memakai rata-rata pemakaian 30 hari terakhir dari seluruh produk.
+                            terkunci saat batch itu dibuat. “Perkiraan habis” memakai rata-rata pemakaian 30 hari terakhir dari seluruh produk.
                         </p>
                     </div>
                 )}
@@ -1187,7 +1187,7 @@ function EmptyRecipe({ productName, unitCost, unit }: { productName: string; uni
     );
 }
 
-function StatTile({ label, value, valueClassName }: { label: string; value: string; valueClassName?: string }) {
+export function StatTile({ label, value, valueClassName }: { label: string; value: string; valueClassName?: string }) {
     return (
         <div className="rounded-xl border bg-muted/40 px-2.5 py-2">
             <div className="text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
@@ -1228,7 +1228,7 @@ function OptionGroup({
     );
 }
 
-function LegendDot({ className, label }: { className: string; label: string }) {
+export function LegendDot({ className, label }: { className: string; label: string }) {
     return (
         <span className="flex items-center gap-1.5">
             <span className={`h-[9px] w-[9px] rounded-[3px] ${className}`} />
@@ -1237,7 +1237,7 @@ function LegendDot({ className, label }: { className: string; label: string }) {
     );
 }
 
-function ToolbarButton({ children, onClick, className }: { children: React.ReactNode; onClick: () => void; className?: string }) {
+export function ToolbarButton({ children, onClick, className }: { children: React.ReactNode; onClick: () => void; className?: string }) {
     return (
         <button
             type="button"
@@ -1249,7 +1249,7 @@ function ToolbarButton({ children, onClick, className }: { children: React.React
     );
 }
 
-function BreakdownRow({ name, cost, pct, qty, onClick }: { name: string; cost: string; pct: string; qty: string; onClick: () => void }) {
+export function BreakdownRow({ name, cost, pct, qty, onClick }: { name: string; cost: string; pct: string; qty: string; onClick: () => void }) {
     return (
         <button onClick={onClick} className="flex flex-col gap-1 rounded-[10px] border bg-background px-2.5 py-2 text-left transition-colors hover:bg-muted/60">
             <div className="flex items-baseline gap-2">
@@ -1266,7 +1266,7 @@ function BreakdownRow({ name, cost, pct, qty, onClick }: { name: string; cost: s
     );
 }
 
-function StatGrid({ stats }: { stats: { label: string; value: string; note: string; colorClass?: string }[] }) {
+export function StatGrid({ stats }: { stats: { label: string; value: string; note: string; colorClass?: string }[] }) {
     return (
         <div className="grid grid-cols-2 gap-2">
             {stats.map((s) => (

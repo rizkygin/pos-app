@@ -23,6 +23,13 @@ type RecipeRow = {
   qty: string;
 };
 
+// An add-on is never an ingredient: it reaches an order only as a line the
+// customer chose to hang off a dish, so inside a recipe it would be deducted on
+// every sale whether anyone asked for it or not. The picker leaves add-ons out
+// and the server refuses them; one already saved in a recipe (from before the
+// rule) is still listed, flagged, so the owner can see it and take it out.
+const isAddon = (p?: IngredientOption) => (p?.category ?? '').trim().toLowerCase() === 'tambahan';
+
 // The second line under an ingredient: how much is left, or that it has no
 // stock of its own to show.
 const metaOf = (p: IngredientOption) =>
@@ -114,11 +121,11 @@ export function RecipeEditor({
   const byId = useMemo(() => new Map(ingredients.map((p) => [p.id, p])), [ingredients]);
   const unitOf = (id: string) => byId.get(id)?.unit ?? '';
 
-  // Bahan first: what a composition is usually made of. Anything else in the
-  // outlet can still be found by name — a bundle draws on a sellable product.
+  // Bahan first: what a composition is usually made of. Any other product can
+  // still be found by name — a bundle (Paket Hemat) draws on a sellable one.
   const pickerOptions = useMemo<PickerOption[]>(
     () =>
-      ingredients.map((p) => ({
+      ingredients.filter((p) => !isAddon(p)).map((p) => ({
         id: p.id,
         name: p.product_name,
         meta: metaOf(p),
@@ -127,6 +134,7 @@ export function RecipeEditor({
     [ingredients],
   );
   const taken = useMemo(() => new Set(rows.map((r) => r.ingredient_id)), [rows]);
+  const addonRows = rows.filter((r) => isAddon(byId.get(r.ingredient_id))).length;
   const isDirty = savedSig !== null && signature(rows) !== savedSig;
 
   const addIngredient = (id: string) => {
@@ -213,21 +221,32 @@ export function RecipeEditor({
             <div className="space-y-1.5">
               {rows.map((row, i) => {
                 const p = byId.get(row.ingredient_id);
+                const addon = isAddon(p);
                 return (
                   <div
                     key={`${row.ingredient_id}-${i}`}
                     // Wraps on a phone: the name gets its own line instead of
                     // being cut to "Roti D…" beside the qty and unit.
-                    className="flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-xl border bg-background px-3 py-2 sm:flex-nowrap sm:py-1.5"
+                    className={`flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-xl border px-3 py-2 sm:flex-nowrap sm:py-1.5 ${
+                      addon
+                        ? 'border-rose-300 bg-rose-50 dark:border-rose-800/60 dark:bg-rose-950/30'
+                        : 'bg-background'
+                    }`}
                   >
                     <span className="min-w-0 basis-full sm:basis-0 sm:flex-1">
                       <span className="block truncate text-sm font-medium">
                         {p?.product_name ?? 'Produk tidak ditemukan'}
                       </span>
-                      {p && (
-                        <span className="block truncate text-[11px] text-muted-foreground">
-                          {metaOf(p)}
+                      {addon ? (
+                        <span className="block text-[11px] font-medium text-rose-700 dark:text-rose-300">
+                          Add-on tidak bisa jadi bahan — hapus baris ini, pakai bahan aslinya.
                         </span>
+                      ) : (
+                        p && (
+                          <span className="block truncate text-[11px] text-muted-foreground">
+                            {metaOf(p)}
+                          </span>
+                        )
                       )}
                     </span>
                     <input
@@ -296,7 +315,11 @@ export function RecipeEditor({
           )}
 
           <div className="flex items-center justify-end gap-3 pt-1">
-            {isDirty && !saving && (
+            {addonRows > 0 ? (
+              <span className="text-xs font-medium text-rose-600 dark:text-rose-400">
+                Hapus {addonRows} add-on dulu
+              </span>
+            ) : isDirty && !saving && (
               <span className="text-xs font-medium text-amber-600 dark:text-amber-500">
                 Belum disimpan
               </span>
@@ -306,7 +329,7 @@ export function RecipeEditor({
               size="sm"
               className="rounded-xl"
               onClick={handleSave}
-              disabled={saving}
+              disabled={saving || addonRows > 0}
             >
               {saving ? (
                 <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />

@@ -27,7 +27,7 @@ import {
     DialogTitle,
 } from '@/components/ui/dialog';
 
-type Source = 'none' | 'invoice' | 'production' | 'manual';
+export type Source = 'none' | 'invoice' | 'production' | 'manual';
 
 type Row = {
     product_id: string;
@@ -60,7 +60,7 @@ const NF = new Intl.NumberFormat('id-ID', { maximumFractionDigits: 0 });
 const NF4 = new Intl.NumberFormat('id-ID', { maximumFractionDigits: 4 });
 const rp = (n: number) => 'Rp ' + NF.format(Math.round(n));
 // Per-unit costs at recipe scale are routinely under a rupiah (0,9 per ml).
-const rpUnit = (n: number) => 'Rp ' + (n < 100 ? NF4.format(n) : NF.format(Math.round(n)));
+export const rpUnit = (n: number) => 'Rp ' + (n < 100 ? NF4.format(n) : NF.format(Math.round(n)));
 const qtyFmt = (n: number) => NF4.format(n);
 
 const EPS = 0.00005;
@@ -71,7 +71,7 @@ const round4 = (n: number) => Number(n.toFixed(4));
 // "0,9" is nine tenths. A lone dot is taken as a decimal point only where it
 // cannot be a thousands separator ("0.9", "12.5") — and the row always prints
 // back the number it understood, so a misread is visible before it is saved.
-function parseCost(raw: string): number {
+export function parseCost(raw: string): number {
     const t = raw.replace(/\s|rp/gi, '');
     if (!t) return NaN;
     let norm: string;
@@ -90,9 +90,9 @@ function parseCost(raw: string): number {
 // Units a recipe is written in at gram/ml scale. A cost of thousands of rupiah
 // per one of these is almost always a PACK price (per galon, per sak) typed
 // against a per-ml unit — the mistake behind a 38.000/ml Galon Air.
-const SMALL_UNITS = new Set(['g', 'gr', 'gram', 'mg', 'ml', 'cc']);
+export const SMALL_UNITS = new Set(['g', 'gr', 'gram', 'mg', 'ml', 'cc']);
 
-const SOURCE_LABEL: Record<Source, string> = {
+export const SOURCE_LABEL: Record<Source, string> = {
     none: 'Belum ada biaya',
     invoice: 'Dari Faktur',
     production: 'Dari Produksi',
