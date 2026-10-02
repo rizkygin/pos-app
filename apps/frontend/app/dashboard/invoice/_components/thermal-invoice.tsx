@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Receipt, Ruler, Usb, Loader2 } from "lucide-react";
 import { resolveOutletImage } from "@/lib/image-src";
+import { isAndroid as isAndroidDevice } from "@/lib/escpos";
 import {
   forgetUsbPrinter,
   getPairedPrinter,
@@ -688,7 +689,7 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
     }
   };
 
-  const isAndroid = typeof navigator !== "undefined" && /android/i.test(navigator.userAgent);
+  const isAndroid = isAndroidDevice();
   // Resolved after mount: `isSecureContext`/`navigator.usb` don't exist during
   // SSR, and rendering the button on the server would hydrate-mismatch.
   const [usbAvailable, setUsbAvailable] = useState(false);

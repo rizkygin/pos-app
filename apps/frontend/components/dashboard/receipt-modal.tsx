@@ -7,6 +7,7 @@ import { MIXED_PAYMENT, posPaymentLabel } from "@/lib/pos-payment";
 import { SERVICE_TYPE_LABEL, type ServiceType } from "@/lib/service-type";
 import { buildOrderLabelBatch, openOrderLabelApp, type OrderLabel } from "@/lib/labelbridge";
 import { resolveReceiptSettings, type ReceiptPrintSettings } from "@/lib/receipt-settings";
+import { isAndroid } from "@/lib/escpos";
 import QRCode from "react-qr-code";
 import qrcode from "qrcode-generator";
 
@@ -1198,7 +1199,7 @@ export function ReceiptModal({ data, onClose, heading = "Pesanan Berhasil!", var
     // handler, so use the browser print dialog. Resolves to whether the job was
     // handed off — a blocked popup is the one way it isn't.
     const handlePrint = async (): Promise<boolean> => {
-        if (/android/i.test(navigator.userAgent)) {
+        if (isAndroid()) {
             // Kitchen ticket carries no logo, so it skips the raster step entirely.
             if (isKitchen) {
                 const b64 = buildKitchenEscposBase64(data, paperWidth);

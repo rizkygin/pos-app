@@ -148,8 +148,29 @@ export function openAndroidPrintApp(base64: string) {
   window.location.href = thermalBridgeUrl;
 }
 
-export const isAndroid = () =>
-  typeof navigator !== 'undefined' && /android/i.test(navigator.userAgent);
+/**
+ * Whether this device should print through ThermalBridge/RawBT rather than the
+ * browser print dialog.
+ *
+ * "Android" in the user agent isn't enough: in desktop-site mode — Chrome's
+ * default on Android tablets, and on by default on some phones (an Infinix
+ * cashier hit this) — the browser sends a desktop Linux user agent ("X11;
+ * Linux x86_64"), and the cashier got the system print dialog instead of
+ * ThermalBridge. That mode still reports a touchscreen and a Linux platform,
+ * which a desktop browser almost never does together, so treat that pair as
+ * Android too. A touchscreen Chromebook also reports a Linux platform, so
+ * "CrOS" in the user agent keeps it on the dialog.
+ */
+export const isAndroid = () => {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent;
+  if (/android/i.test(ua)) return true;
+  const uaData = (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData;
+  if (uaData?.platform === 'Android') return true;
+  if (/CrOS/.test(ua)) return false;
+  const linux = /linux/i.test(ua) || /linux/i.test(navigator.platform ?? '');
+  return linux && navigator.maxTouchPoints > 0;
+};
 
 /**
  * Open a print window for the desktop/iOS fallback, auto-printing then closing.
