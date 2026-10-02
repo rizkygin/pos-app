@@ -1,9 +1,12 @@
 import crypto from "node:crypto";
 import { getCourierFcmTokens, pruneFcmTokens } from "./courier-device";
+import { getSelfOrderFcmTokens, pruneStaffFcmTokens } from "./staff-device";
 import type { OfferDetails } from "./offer-details";
 
 /**
- * Firebase Cloud Messaging (HTTP v1) for the courier app.
+ * Firebase Cloud Messaging (HTTP v1) for the courier app, and for the till app
+ * (UlunPesanAndroid), which Pesan Mandiri rings — both apps live in the same
+ * Firebase project, so one service account reaches either.
  *
  * Web push (lib/push.ts) stays where it is — it serves owners in a browser.
  * This is the other channel: a courier's phone, where an offer has to ring
@@ -301,4 +304,84 @@ export async function sendOfferPush(courierId: number, offer: OfferPush): Promis
   );
 
   if (dead.length > 0) await pruneFcmTokens(dead);
+}
+
+export type SelfOrderPush = {
+  orderId: string;
+  outletId: number;
+  queueNo: number;
+  customerName: string;
+  tableLabel: string | null;
+  itemCount: number;
+  subtotal: number;
+};
+
+/**
+ * Ring every till phone of an outlet about an order a customer just sent from
+ * their own phone (Pesan Mandiri), so a till whose app is closed rings too.
+ *
+ * A DATA message, high priority: the app wakes, starts its foreground service
+ * (which reads /api/self-orders and rings until someone takes the order), and
+ * only falls back to drawing a notification from these fields when Android
+ * will not let it start. The figures are a preview; the inbox is the truth.
+ *
+ * No push for accepted/rejected/cancelled: the service that this one starts
+ * hears those over /api/self-orders/stream like an open till does.
+ */
+export async function sendSelfOrderPush(order: SelfOrderPush): Promise<void> {
+  if (!serviceAccount) return;
+
+  const tokens = await getSelfOrderFcmTokens(order.outletId);
+  if (tokens.length === 0) return;
+
+  const accessToken = await getAccessToken(serviceAccount);
+  const url = `https://fcm.googleapis.com/v1/projects/${serviceAccount.project_id}/messages:send`;
+  const dead: string[] = [];
+
+  await Promise.all(
+    tokens.map(async (token) => {
+      const message = {
+        message: {
+          token,
+          data: {
+            type: "self_order",
+            orderId: order.orderId,
+            outletId: String(order.outletId),
+            queueNo: String(order.queueNo),
+            customerName: order.customerName,
+            tableLabel: order.tableLabel ?? "",
+            itemCount: String(order.itemCount),
+            subtotal: String(order.subtotal),
+          },
+          android: {
+            // A customer is standing there with their phone.
+            priority: "HIGH" as const,
+            // A pending order goes stale after 12 hours on the till; an hour
+            // late is still worth a ring, a day late is not.
+            ttl: "3600s",
+          },
+        },
+      };
+
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(message),
+      });
+
+      if (res.ok) return;
+
+      const body = await res.text();
+      if (res.status === 404 || body.includes("UNREGISTERED") || body.includes("INVALID_ARGUMENT")) {
+        dead.push(token);
+        return;
+      }
+      console.error(`[fcm] self-order send failed (${res.status}): ${body}`);
+    }),
+  );
+
+  if (dead.length > 0) await pruneStaffFcmTokens(dead);
 }

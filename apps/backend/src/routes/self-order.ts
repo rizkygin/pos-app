@@ -31,6 +31,10 @@ import { taxConfigFrom } from "../lib/tax";
 import { publishSelfOrder, subscribeSelfOrder } from "../lib/self-order-events";
 import { publishFloor } from "../lib/floor-events";
 import { openEventStream } from "../lib/sse";
+import { sendSelfOrderPush } from "../lib/fcm";
+import { registerStaffDevice, revokeStaffDevice } from "../lib/staff-device";
+import { auth } from "../auth";
+import { toWebHeaders } from "../lib/web-headers";
 import { bumpVersion, lockLiveSession, lockTable, reconcileStatus, seatTable } from "./tables";
 
 /**
@@ -644,7 +648,21 @@ export async function selfOrderRoutes(app: FastifyInstance) {
       // Two identical sends racing: the other one won; answer with its row.
       const saved =
         row ?? (await db.select().from(selfOrdersTable).where(eq(selfOrdersTable.id, id)).limit(1))[0];
-      if (row) publishSelfOrder(outletId, "new", id);
+      if (row) {
+        publishSelfOrder(outletId, "new", id);
+        // Tills with the app closed ring too. Not awaited: the customer is not
+        // kept waiting on Google, and a failed push leaves the order on the
+        // inbox exactly as before.
+        sendSelfOrderPush({
+          orderId: row.id,
+          outletId,
+          queueNo: row.queue_no,
+          customerName: row.customer_name,
+          tableLabel: row.table_label,
+          itemCount: lines.reduce((sum, l) => sum + l.quantity, 0),
+          subtotal,
+        }).catch((err) => console.error("[self-order] push failed", err));
+      }
       return { success: true, order: publicView(saved, outlet.name) };
     });
   });
@@ -873,6 +891,47 @@ export async function selfOrderRoutes(app: FastifyInstance) {
       publishSelfOrder(access.outlet.id, "rejected", id);
       return { success: true, order: staffView(row) };
     });
+  });
+
+  // ── the till app's phones ─────────────────────────────────────────────────
+
+  /**
+   * This phone rings for the caller's outlet when a customer sends an order,
+   * even with the app closed (an FCM push; see staffDevicesTable). The app
+   * calls it while signed in on an outlet with Pesan Mandiri, on every new FCM
+   * token and after switching outlets. Not plan-gated beyond the write gate:
+   * a push only ever follows an order, which the plan already gates.
+   */
+  app.post("/api/self-orders/devices", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, STAFF);
+    if (!access) return;
+    const body = (request.body as Record<string, unknown>) ?? {};
+    const fcmToken = typeof body.fcmToken === "string" ? body.fcmToken.trim() : "";
+    if (fcmToken.length < 20 || fcmToken.length > 4096) {
+      return reply.status(400).send({ success: false, error: "fcmToken tidak valid" });
+    }
+    await registerStaffDevice({
+      userId: access.userId,
+      outletId: access.outlet.id,
+      fcmToken,
+      platform: typeof body.platform === "string" ? body.platform : undefined,
+      appVersion: typeof body.appVersion === "string" ? body.appVersion : undefined,
+    });
+    return { success: true, outletId: access.outlet.id };
+  });
+
+  /**
+   * This phone stops ringing: signing out, or an outlet without Pesan Mandiri.
+   * Only a session is asked for, not outlet access, so someone whose access
+   * just ended can still quiet their own phone.
+   */
+  app.post("/api/self-orders/devices/revoke", async (request, reply) => {
+    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
+    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
+    const body = (request.body as Record<string, unknown>) ?? {};
+    const fcmToken = typeof body.fcmToken === "string" ? body.fcmToken.trim() : "";
+    if (fcmToken) await revokeStaffDevice(session.user.id, fcmToken);
+    return { success: true };
   });
 
   // ── owner settings ────────────────────────────────────────────────────────

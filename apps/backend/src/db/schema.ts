@@ -3031,3 +3031,45 @@ export const selfOrdersTable = pgTable(
       .where(sql`status = 'pending'`),
   ],
 );
+
+/**
+ * A phone running the till app (UlunPesanAndroid) that Pesan Mandiri rings
+ * when a customer sends an order, even with the app closed: the server sends
+ * it a high-priority FCM data message, and the app starts listening and
+ * ringing from there. Registered by whoever is signed in on it, for the outlet
+ * they are working in; switching outlets re-registers and moves the row.
+ *
+ * Like courier_devices, the row follows the PHONE (unique fcm_token): a till
+ * handed to another cashier re-registers and moves, rather than leaving the
+ * previous one subscribed. Who it rings is checked again at send time — the
+ * outlet's owner, or an active employee with the cashier or tables permission —
+ * so a dismissed employee's phone goes quiet without anyone revoking it.
+ */
+export const staffDevicesTable = pgTable(
+  'staff_devices',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    user_id: text('user_id')
+      .notNull()
+      .references(() => usersTable.id, { onDelete: 'cascade' }),
+    outlet_id: integer('outlet_id')
+      .notNull()
+      .references(() => outletsTable.id, { onDelete: 'cascade' }),
+    // Rotated by FCM whenever it likes; the app re-registers on onNewToken.
+    fcm_token: text('fcm_token').notNull(),
+    platform: varchar('platform', { length: 20 }).notNull().default('android'),
+    app_version: varchar('app_version', { length: 30 }),
+    last_seen_at: timestamp('last_seen_at', { withTimezone: true }),
+    // Set on sign-out, when the outlet no longer has Pesan Mandiri, or when
+    // FCM says the token is dead. Kept, so "this till stopped ringing at 14:02"
+    // is answerable.
+    revoked_at: timestamp('revoked_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex('staff_devices_fcm_token_uq').on(t.fcm_token),
+    index('staff_devices_outlet_idx')
+      .on(t.outlet_id)
+      .where(sql`revoked_at is null`),
+  ],
+);

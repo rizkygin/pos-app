@@ -617,6 +617,13 @@
       "when": 1790694466157,
       "tag": "0087_print_logs",
       "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1790825932786,
+      "tag": "0088_staff_devices",
+      "breakpoints": true
     }
   ]
 }
