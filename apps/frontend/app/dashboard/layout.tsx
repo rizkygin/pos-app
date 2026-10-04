@@ -19,6 +19,7 @@ import { EmailVerificationGate } from "@/components/dashboard/email-verification
 import { PhoneVerificationGate } from "@/components/dashboard/phone-verification-gate"
 import { formatIndonesianPhone } from "@/lib/utils/phone"
 import { CustomerBottomNav } from "@/components/customer-bottom-nav"
+import { KeepAliveHost } from "@/components/dashboard/keep-alive"
 import { cn } from "@/lib/utils"
 
 // Private, authenticated area — never index. robots.ts also disallows
@@ -134,7 +135,9 @@ const dashboardLayout = async ({ children }: { children: React.ReactNode }) => {
                             phoneDisplay={role.phone ? formatIndonesianPhone(role.phone) : null}
                         />
                     ) : (
-                        children
+                        // Holds pages that opt into staying mounted across
+                        // menus (the cashier); every other page passes through.
+                        <KeepAliveHost>{children}</KeepAliveHost>
                     )}
 
                     {isSettledCustomer && <CustomerBottomNav />}

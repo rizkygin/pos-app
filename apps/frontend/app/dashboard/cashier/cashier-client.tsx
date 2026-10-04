@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import { useState, useMemo, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import {
   ReceiptModal,
   type ReceiptData,
@@ -35,6 +35,7 @@ import {
   User,
   Armchair,
   RefreshCw,
+  Split,
 } from 'lucide-react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
@@ -63,6 +64,7 @@ import {
   type ServiceType,
 } from '@/lib/service-type';
 import { ShiftBar } from './shift-bar';
+import { CashierIconGuide } from './icon-guide';
 import { isSameDay } from '@/lib/date-calender';
 import { LabelPreviewModal } from './label-preview-modal';
 import { OptionPickerModal, priceOf } from './option-picker-modal';
@@ -499,6 +501,8 @@ export const CashierClient = ({
   // scanner (or a cashier typing a code) means "find this EXACT item", not
   // "filter the grid". Enter/scan looks it up and adds it straight to cart.
   const [barcodeQuery, setBarcodeQuery] = useState('');
+  // Folded to an icon until the cashier opens it; see the toolbar.
+  const [barcodeOpen, setBarcodeOpen] = useState(false);
   const [barcodeFeedback, setBarcodeFeedback] = useState<{
     ok: boolean;
     text: string;
@@ -626,6 +630,20 @@ export const CashierClient = ({
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [refreshCatalogue]);
+
+  // The counter is kept alive across menus (KeepAlive in page.tsx): leaving it
+  // hides this component rather than unmounting it, and effects run again each
+  // time it is shown. Coming back is a look at the tab like any other — often
+  // straight from editing the menu — so it refreshes too. Not on the first
+  // mount, which already holds the server's fresh snapshot.
+  const shownBeforeRef = useRef(false);
+  useEffect(() => {
+    if (!shownBeforeRef.current) {
+      shownBeforeRef.current = true;
+      return;
+    }
+    void refreshCatalogue();
+  }, [refreshCatalogue]);
   // One modal serves both slips; `variant` picks the customer receipt or the
   // money-free kitchen ticket. `placed` marks a slip for a recorded sale (the
   // checkout's own, or a reprint of one): only those fly into the placed-orders
@@ -645,7 +663,18 @@ export const CashierClient = ({
   // a screen that's gone.
   const [placedFlash, setPlacedFlash] = useState<{ orderId: string } | null>(null);
   const placedTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useEffect(() => () => clearTimeout(placedTimerRef.current), []);
+  // The pending hand-over itself, so it can be finished early. Leaving for
+  // another menu mid-hold hides the counter rather than unmounting it: the
+  // card's timer is cleared with the other effects, and coming back would find
+  // the card stuck on screen and the slip never shown. So the slip comes now.
+  const placedHandOverRef = useRef<(() => void) | null>(null);
+  useEffect(
+    () => () => {
+      clearTimeout(placedTimerRef.current);
+      placedHandOverRef.current?.();
+    },
+    [],
+  );
   // A checkout that didn't book the cart on screen. Stays until dismissed;
   // `canRetry` is false where another tap would only repeat the same answer.
   const [checkoutFailure, setCheckoutFailure] = useState<{
@@ -957,7 +986,13 @@ export const CashierClient = ({
   }, []);
 
   // Hydrate from localStorage once, client-side (avoids SSR hydration mismatch).
+  // Once per instance, not per effect run: the counter is kept alive across
+  // menus and this runs again each time it is shown, when the live state is
+  // already the newer copy of what storage holds.
+  const tabsLoadedRef = useRef(false);
   useEffect(() => {
+    if (tabsLoadedRef.current) return;
+    tabsLoadedRef.current = true;
     let loaded: HeldTab[] = [];
     let activeId = '';
     try {
@@ -1542,13 +1577,17 @@ export const CashierClient = ({
     [setTabTable],
   );
 
-  // Arriving from the floor plan. Read once, after the held tabs are loaded
-  // (a table bill may already have a tab), then dropped from the address bar
-  // so a reload doesn't pull the bill in over edits made since.
-  const tableParamsReadRef = useRef(false);
+  // Arriving from the floor plan. Read after the held tabs are loaded (a table
+  // bill may already have a tab), then dropped from the address bar so a
+  // reload doesn't pull the bill in over edits made since.
+  //
+  // The address bar is the read-once guard, not a ref: the counter is kept
+  // alive across menus, so the second trip from the floor plan arrives at an
+  // instance that has read params before. Each time it is shown this effect
+  // runs again and finds whatever the new link carried; params already
+  // consumed were stripped, so nothing is opened twice.
   useEffect(() => {
-    if (!hydrated || tableParamsReadRef.current) return;
-    tableParamsReadRef.current = true;
+    if (!hydrated) return;
     const params = new URLSearchParams(window.location.search);
     const sessionId = params.get('table');
     const takeaway = params.get('takeaway');
@@ -1556,8 +1595,8 @@ export const CashierClient = ({
     window.history.replaceState(null, '', window.location.pathname);
     const billNo = Math.max(1, Math.min(20, Number(params.get('bill')) || 1));
     // Deferred a tick rather than run during the effect; deliberately not
-    // cancelled on cleanup, because the ref above means a dev-mode re-run
-    // would never schedule it again.
+    // cancelled on cleanup, because the params are already stripped and a
+    // dev-mode re-run would never schedule it again.
     setTimeout(() => {
       if (sessionId) {
         void openTableBill(sessionId, billNo);
@@ -2902,7 +2941,8 @@ export const CashierClient = ({
       // it just waits PLACED_HOLD_MS behind a card that says the sale is booked.
       setPlacedFlash({ orderId: placedId });
       clearTimeout(placedTimerRef.current);
-      placedTimerRef.current = setTimeout(() => {
+      const handOver = () => {
+        placedHandOverRef.current = null;
         setPlacedFlash(null);
         setReceipt({
           variant: 'customer',
@@ -2910,7 +2950,9 @@ export const CashierClient = ({
           placed: true,
           data: receiptData,
         });
-      }, PLACED_HOLD_MS);
+      };
+      placedHandOverRef.current = handOver;
+      placedTimerRef.current = setTimeout(handOver, PLACED_HOLD_MS);
     } catch (error: any) {
       // Nothing confirmed it, so as far as this screen knows the sale isn't in
       // the ledger. Listed as "Belum" under the key a retry will reuse.
@@ -2970,6 +3012,26 @@ export const CashierClient = ({
     saveTableBill,
   ]);
 
+  // Leaving for another menu hides the counter (it is kept alive) instead of
+  // unmounting it, so everything on it is still there on the way back. That
+  // is the point for carts, tabs and half-typed notes; it is wrong for menus
+  // and pickers, which were a moment rather than a place, and coming back to
+  // one already open reads as the app acting on its own. Layout-effect
+  // cleanup, so they are shut before the counter is hidden, not after.
+  useLayoutEffect(
+    () => () => {
+      setTabsMenuOpen(false);
+      setMemberOpen(false);
+      setBillsMenuOpen(false);
+      setPlacedListOpen(false);
+      setPickerTarget(null);
+      setLabelPreview(null);
+      setClearView(false);
+      setBarcodeOpen(false);
+    },
+    [],
+  );
+
   // Adds a keyboard shortcut (CMD/Ctrl + Enter) for Checkout
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -2988,7 +3050,11 @@ export const CashierClient = ({
       {/* Main Content: Products Grid */}
       <div className="flex-1 flex flex-col min-w-0 bg-background/50 backdrop-blur-sm border-r">
         {/* Header & Search */}
-        <div className="p-3 pb-0">
+        {/* A size container: the toolbar labels and the shift strip size to
+            THIS column, not the viewport. With the sidebar and the cart panel
+            both open the column can be a third of the screen, and viewport
+            breakpoints were showing full labels there and crushing search. */}
+        <div className="@container p-3 pb-0">
           {/* One toolbar row: member, search, barcode. The mobile and desktop
               headers used to be two separate copies of the same two inputs
               stacked under the member row and the shift strip — five rows
@@ -3011,7 +3077,7 @@ export const CashierClient = ({
                     <UserRound className="h-4 w-4 shrink-0" />
                     {attachedMember ? (
                       <>
-                        <span className="hidden max-w-[8rem] truncate sm:inline">
+                        <span className="hidden max-w-[8rem] truncate @lg:inline">
                           {attachedMember.name}
                         </span>
                         <span
@@ -3019,12 +3085,12 @@ export const CashierClient = ({
                         >
                           {TIER_LABEL[attachedMember.tier]}
                         </span>
-                        <span className="hidden text-xs font-bold tabular-nums text-amber-600 md:inline dark:text-amber-400">
+                        <span className="hidden text-xs font-bold tabular-nums text-amber-600 @2xl:inline dark:text-amber-400">
                           {attachedMember.points_balance.toLocaleString('id-ID')} poin
                         </span>
                       </>
                     ) : (
-                      <span className="hidden sm:inline">Member</span>
+                      <span className="hidden @lg:inline">Member</span>
                     )}
                   </button>
                 </PopoverTrigger>
@@ -3055,22 +3121,53 @@ export const CashierClient = ({
                 className="h-9 w-full rounded-xl border bg-background/80 pl-9 pr-3 text-sm shadow-sm outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-blue-500"
               />
             </div>
-            <div className="relative min-w-0 flex-1 md:w-52 md:flex-none">
-              <Barcode className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <input
-                ref={barcodeInputRef}
-                type="text"
-                placeholder="Scan barcode..."
-                value={barcodeQuery}
-                onChange={(e) => setBarcodeQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    handleBarcodeScan(barcodeInputRef);
-                  }
-                }}
-                className="h-9 w-full rounded-xl border bg-background/80 pl-9 pr-3 font-mono text-sm shadow-sm outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-blue-500"
-              />
+            {/* Barcode is a button until it's wanted. As a standing field it
+                took as much of the row as the search did — more, at md+ —
+                for something most counters never use, while search is how
+                every cashier finds a product. A scanner needs the field
+                focused anyway, so opening it costs the same one click that
+                focusing it did. It stays open while it holds a code or keeps
+                focus (each scan refocuses it), and folds away on blur. */}
+            <div
+              className={`relative ${barcodeOpen ? 'min-w-0 flex-1 md:w-52 md:flex-none' : 'shrink-0'}`}
+            >
+              {barcodeOpen ? (
+                <>
+                  <Barcode className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <input
+                    ref={barcodeInputRef}
+                    type="text"
+                    autoFocus
+                    placeholder="Scan barcode..."
+                    aria-label="Scan barcode"
+                    value={barcodeQuery}
+                    onChange={(e) => setBarcodeQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleBarcodeScan(barcodeInputRef);
+                      } else if (e.key === 'Escape') {
+                        setBarcodeQuery('');
+                        setBarcodeOpen(false);
+                      }
+                    }}
+                    onBlur={() => {
+                      if (!barcodeQuery.trim()) setBarcodeOpen(false);
+                    }}
+                    className="h-9 w-full rounded-xl border bg-background/80 pl-9 pr-3 font-mono text-sm shadow-sm outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-blue-500"
+                  />
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setBarcodeOpen(true)}
+                  title="Scan barcode"
+                  aria-label="Scan barcode"
+                  className="flex h-9 w-9 items-center justify-center rounded-xl border bg-background/80 text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  <Barcode className="h-4 w-4" />
+                </button>
+              )}
               {/* Transient (2.5s), so it floats over the row rather than
                   reserving a line that sits empty the rest of the time. */}
               {barcodeFeedback && (
@@ -3107,7 +3204,7 @@ export const CashierClient = ({
                     className="relative flex h-9 shrink-0 items-center gap-1.5 rounded-xl border bg-background/90 px-2.5 text-sm font-bold text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground"
                   >
                     <Armchair className="h-4 w-4" />
-                    <span className="hidden lg:inline">Meja</span>
+                    <span className="hidden @xl:inline">Meja</span>
                     {(() => {
                       // Tables with something on the bill: what is waiting
                       // to be rung up.
@@ -3295,6 +3392,15 @@ export const CashierClient = ({
                 </p>
               </PopoverContent>
             </Popover>
+            {/* What the icon-only buttons mean. Opens by itself once per
+                device; the "?" brings it back. */}
+            <CashierIconGuide
+              canUseMembership={canUseMembership}
+              canUseSelfOrder={canUseSelfOrder}
+              canUseTables={canUseTables}
+              canPrintKitchen={canUsePager || canUseTables}
+              allowPreCheckoutReceipt={allowPreCheckoutReceipt}
+            />
           </div>
 
           <ShiftBar
@@ -3611,128 +3717,132 @@ export const CashierClient = ({
         </div>
 
         {/* Cart Header */}
-        <div className="sticky top-0 z-20 border-b bg-background/80 px-4 py-3 backdrop-blur-md">
-          <div className="flex items-start justify-between gap-2">
-            <div className="flex min-w-0 flex-1 items-center gap-2">
-              {/* The pager box takes the slot the decorative cart icon used to
-                  occupy, so the number is always on screen without costing a
-                  row in an already-tight sidebar. Below Max Lite it isn't
-                  rendered at all — a disabled box that explains itself would
-                  cost more room than the feature does. */}
-              {canUsePager && (
-                <label
-                  className={`flex shrink-0 flex-col items-center rounded-xl border-2 px-1.5 py-1 transition-colors ${
-                    pagerClash
-                      ? 'border-rose-400 bg-rose-50'
-                      : pagerNumber.trim()
-                        ? 'border-blue-500 bg-blue-50'
-                        : 'border-transparent bg-muted/50'
-                  }`}
-                  title="Nomor pager"
-                >
-                  <Bell
-                    className={`h-3 w-3 ${pagerClash ? 'text-rose-500' : 'text-blue-600'}`}
-                  />
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    aria-label="Nomor pager"
-                    value={pagerNumber}
-                    onChange={(e) =>
-                      setPagerNumber(
-                        e.target.value.replace(/\D/g, '').slice(0, 3),
-                      )
-                    }
-                    placeholder="--"
-                    className="w-8 bg-transparent text-center text-base font-black tabular-nums outline-none placeholder:font-bold placeholder:text-muted-foreground/50"
-                  />
-                </label>
-              )}
-              <div className="min-w-0 flex-1">
+        <div className="sticky top-0 z-20 border-b bg-background/80 px-4 py-2 backdrop-blur-md">
+          <div className="flex items-center gap-2">
+            {/* The pager box takes the slot the decorative cart icon used to
+                occupy, so the number is always on screen without costing a
+                row in an already-tight sidebar. Below Max Lite it isn't
+                rendered at all — a disabled box that explains itself would
+                cost more room than the feature does. */}
+            {canUsePager && (
+              <label
+                className={`flex shrink-0 flex-col items-center rounded-xl border-2 px-1.5 py-1 transition-colors ${
+                  pagerClash
+                    ? 'border-rose-400 bg-rose-50'
+                    : pagerNumber.trim()
+                      ? 'border-blue-500 bg-blue-50'
+                      : 'border-transparent bg-muted/50'
+                }`}
+                title="Nomor pager"
+              >
+                <Bell
+                  className={`h-3 w-3 ${pagerClash ? 'text-rose-500' : 'text-blue-600'}`}
+                />
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  aria-label="Nomor pager"
+                  value={pagerNumber}
+                  onChange={(e) =>
+                    setPagerNumber(
+                      e.target.value.replace(/\D/g, '').slice(0, 3),
+                    )
+                  }
+                  placeholder="--"
+                  className="w-8 bg-transparent text-center text-base font-black tabular-nums outline-none placeholder:font-bold placeholder:text-muted-foreground/50"
+                />
+              </label>
+            )}
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1">
                 <input
                   type="text"
                   value={customerName}
                   onChange={(e) => setCustomerName(e.target.value)}
                   placeholder="Nama Pelanggan"
-                  className="w-full text-lg font-bold bg-transparent outline-none border-b-2 border-transparent focus:border-blue-500 placeholder:text-foreground placeholder:font-bold transition-colors truncate"
+                  className="min-w-0 flex-1 text-lg font-bold bg-transparent outline-none border-b-2 border-transparent focus:border-blue-500 placeholder:text-foreground placeholder:font-bold transition-colors truncate"
                 />
-                <div className="flex items-center gap-2">
-                  <p className="text-sm text-muted-foreground">
-                    {cart.reduce((acc, item) => acc + item.quantity, 0)} Items
-                  </p>
-                  {/* Dine In / Take Away rides on the item-count line rather
-                      than taking a row of its own. Not on a table's tab: the
-                      Meja card below already says where it is eaten, and the
-                      server settles a table's bill as dine in regardless. */}
-                  {askServiceType && !activeTable && (
-                    <div
-                      role="radiogroup"
-                      aria-label="Layanan"
-                      className="flex shrink-0 rounded-full bg-muted p-0.5 text-[11px] font-bold"
+                {/* Side by side, not stacked. Labelled buttons in a column made
+                    the header two rows tall on a panel where every row costs a
+                    cart item, so note / read-back / clear all ride here as icons.
+                    Read-back only appears once there is something to misread: a
+                    single plain item reads fine in the panel itself.
+                    They sit on the name row only, not beside the whole block:
+                    there they also narrowed the item-count line, and once the
+                    read-back icon appeared "2 Items" broke onto two lines next
+                    to the Dine In / Take Away toggle. */}
+                <div className="flex shrink-0 items-center gap-1">
+                  <button
+                    onClick={openOrderNote}
+                    className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${
+                      orderNote.trim()
+                        ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                        : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                    }`}
+                    title="Catatan pesanan (dapur)"
+                    aria-label="Catatan pesanan"
+                  >
+                    <StickyNote className="h-4 w-4" />
+                  </button>
+                  {(cart.length > 1 ||
+                    cart.some((i) => (i.addons?.length ?? 0) > 0 || i.note)) && (
+                    <button
+                      onClick={() => setClearView(true)}
+                      className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                      title="Lihat lebih jelas"
+                      aria-label="Lihat lebih jelas"
                     >
-                      {SERVICE_TYPES.map((s) => (
-                        <button
-                          key={s}
-                          type="button"
-                          role="radio"
-                          aria-checked={serviceType === s}
-                          onClick={() => setServiceType(s)}
-                          className={`rounded-full px-2 py-0.5 transition-colors ${
-                            serviceType === s
-                              ? s === 'take_away'
-                                ? 'bg-amber-500 text-white'
-                                : 'bg-indigo-600 text-white'
-                              : 'text-muted-foreground hover:text-foreground'
-                          }`}
-                        >
-                          {SERVICE_TYPE_LABEL[s]}
-                        </button>
-                      ))}
-                    </div>
+                      <Eye className="h-4 w-4" />
+                    </button>
+                  )}
+                  {cart.length > 0 && (
+                    <button
+                      onClick={clearCart}
+                      disabled={cartHasSaved}
+                      className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+                      title={cartHasSaved ? VOID_HINT : 'Kosongkan keranjang'}
+                      aria-label="Kosongkan keranjang"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
                   )}
                 </div>
               </div>
-            </div>
-            {/* Side by side, not stacked. Labelled buttons in a column made
-                the header two rows tall on a panel where every row costs a
-                cart item, so note / read-back / clear all ride here as icons.
-                Read-back only appears once there is something to misread: a
-                single plain item reads fine in the panel itself. */}
-            <div className="flex shrink-0 items-center gap-1">
-              <button
-                onClick={openOrderNote}
-                className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${
-                  orderNote.trim()
-                    ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
-                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-                }`}
-                title="Catatan pesanan (dapur)"
-                aria-label="Catatan pesanan"
-              >
-                <StickyNote className="h-4 w-4" />
-              </button>
-              {(cart.length > 1 ||
-                cart.some((i) => (i.addons?.length ?? 0) > 0 || i.note)) && (
-                <button
-                  onClick={() => setClearView(true)}
-                  className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                  title="Lihat lebih jelas"
-                  aria-label="Lihat lebih jelas"
-                >
-                  <Eye className="h-4 w-4" />
-                </button>
-              )}
-              {cart.length > 0 && (
-                <button
-                  onClick={clearCart}
-                  disabled={cartHasSaved}
-                  className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
-                  title={cartHasSaved ? VOID_HINT : 'Kosongkan keranjang'}
-                  aria-label="Kosongkan keranjang"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              )}
+              <div className="flex items-center gap-2">
+                <p className="shrink-0 whitespace-nowrap text-sm text-muted-foreground">
+                  {cart.reduce((acc, item) => acc + item.quantity, 0)} Items
+                </p>
+                {/* Dine In / Take Away rides on the item-count line rather
+                    than taking a row of its own. Not on a table's tab: the
+                    Meja card below already says where it is eaten, and the
+                    server settles a table's bill as dine in regardless. */}
+                {askServiceType && !activeTable && (
+                  <div
+                    role="radiogroup"
+                    aria-label="Layanan"
+                    className="flex shrink-0 rounded-full bg-muted p-0.5 text-[11px] font-bold"
+                  >
+                    {SERVICE_TYPES.map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        role="radio"
+                        aria-checked={serviceType === s}
+                        onClick={() => setServiceType(s)}
+                        className={`rounded-full px-2 py-0.5 transition-colors ${
+                          serviceType === s
+                            ? s === 'take_away'
+                              ? 'bg-amber-500 text-white'
+                              : 'bg-indigo-600 text-white'
+                            : 'text-muted-foreground hover:text-foreground'
+                        }`}
+                      >
+                        {SERVICE_TYPE_LABEL[s]}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
           {pagerClash && (
@@ -3860,7 +3970,7 @@ export const CashierClient = ({
         )}
 
         {/* Cart Items */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div className="flex-1 overflow-y-auto p-3 space-y-2">
           {cart.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center opacity-50 px-6">
               <ShoppingCart className="h-16 w-16 mb-4 text-muted-foreground" />
@@ -4057,8 +4167,10 @@ export const CashierClient = ({
             then the buttons. It used to be five separately-bordered blocks
             stacked down the panel — a summary, a full-width Lazy Mode card, a
             cash card, a wrapping row of payment chips, and two button rows —
-            which is what made it read as clutter rather than as a sequence. */}
-        <div className="border-t bg-background p-3 shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.1)]">
+            which is what made it read as clutter rather than as a sequence.
+            Spacing is kept tight on purpose: every pixel this footer takes is
+            one the cart list above can't use. */}
+        <div className="border-t bg-background px-3 py-2 shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.1)]">
           {/* How the customer paid. First, because it decides whether the cash
               block below exists at all — putting it last meant the panel
               reshuffled under the cashier's finger mid-sale.
@@ -4082,7 +4194,7 @@ export const CashierClient = ({
               Bayar Campuran swaps the chips for one row per method, because
               then there is no single method to pick. */}
           {mixedPay ? (
-            <div className="mb-2 rounded-xl border bg-muted/30 px-3 py-2">
+            <div className="mb-1.5 rounded-xl border bg-muted/30 px-3 py-1.5">
               <div className="mb-1.5 flex items-center justify-between gap-2">
                 <span className="text-sm font-semibold text-muted-foreground">
                   Bayar campuran
@@ -4173,7 +4285,7 @@ export const CashierClient = ({
             </div>
           ) : (
           <>
-          <div className="mb-2 grid grid-cols-5 gap-1">
+          <div className="mb-1.5 grid grid-cols-5 gap-1">
             {POS_PAYMENT_OPTIONS.map((opt) => {
               const locked = lazyMode && opt.value !== 'cash';
               return (
@@ -4187,7 +4299,7 @@ export const CashierClient = ({
                       ? 'Lazy Mode aktif — pembayaran terkunci ke Tunai'
                       : opt.label
                   }
-                  className={`truncate rounded-lg border-2 px-1 py-1.5 text-[11px] font-bold transition-colors ${
+                  className={`truncate rounded-lg border-2 px-1 py-1 text-[11px] font-bold transition-colors ${
                     paymentMethod === opt.value
                       ? 'border-blue-600 bg-blue-600 text-white'
                       : locked
@@ -4202,24 +4314,14 @@ export const CashierClient = ({
           </div>
 
           {/* Says why four of the five just went grey. Without it the lock
-              reads as the app being broken. Otherwise, the way into a split:
-              quiet, because most sales are one method. */}
-          {lazyMode ? (
-            <p className="mb-2 -mt-1 text-[11px] text-muted-foreground">
+              reads as the app being broken. The way into a split used to sit
+              here on a row of its own; it now rides the button row at the
+              bottom, so that row isn't taken from the cart list on every
+              sale. */}
+          {lazyMode && (
+            <p className="mb-1.5 -mt-0.5 text-[11px] text-muted-foreground">
               Lazy Mode aktif — pembayaran terkunci ke Tunai.
             </p>
-          ) : (
-            <div className="mb-2 -mt-1 flex justify-end">
-              <button
-                type="button"
-                onClick={startMixedPay}
-                disabled={cart.length === 0}
-                title="Satu bill dibayar dengan beberapa metode, misal tunai + QRIS"
-                className="text-[11px] font-bold text-blue-600 disabled:opacity-40"
-              >
-                Bayar campuran / bagi bill
-              </button>
-            </div>
           )}
           </>
           )}
@@ -4227,7 +4329,7 @@ export const CashierClient = ({
           {/* What is owed. One bordered card so the arithmetic reads as a
               single block that adds up, instead of loose rows sharing space
               with the controls that change them. */}
-          <div className="mb-2 rounded-xl border bg-muted/30 px-3 py-2">
+          <div className="mb-1.5 rounded-xl border bg-muted/30 px-3 py-1.5">
             <div className="flex justify-between text-sm text-muted-foreground">
               <span>Subtotal</span>
               <span className="tabular-nums">
@@ -4239,7 +4341,7 @@ export const CashierClient = ({
                 cluster. Previously the %/Rp toggle and the number field floated
                 loose between the label and its value, reading as three
                 unrelated controls that happened to share a line. */}
-            <div className="mt-1.5 flex items-center justify-between gap-2 text-sm text-muted-foreground">
+            <div className="mt-1 flex items-center justify-between gap-2 text-sm text-muted-foreground">
               <div className="flex items-center gap-1.5">
                 <span>Diskon</span>
                 <div className="flex items-center overflow-hidden rounded-md border bg-background">
@@ -4289,7 +4391,7 @@ export const CashierClient = ({
                 manual one: the cashier has to be able to say which is which
                 when a customer asks why the total moved. */}
             {promoDiscount > 0 && (
-              <div className="mt-1.5 flex items-center justify-between text-sm text-muted-foreground">
+              <div className="mt-1 flex items-center justify-between text-sm text-muted-foreground">
                 <span className="truncate">Promo {quote?.promo?.code}</span>
                 <span className="shrink-0 font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
                   -{formatCurrency(promoDiscount)}
@@ -4297,7 +4399,7 @@ export const CashierClient = ({
               </div>
             )}
             {pointsDiscount > 0 && (
-              <div className="mt-1.5 flex items-center justify-between text-sm text-muted-foreground">
+              <div className="mt-1 flex items-center justify-between text-sm text-muted-foreground">
                 <span>
                   Poin
                   <span className="ml-1 text-[11px]">
@@ -4311,7 +4413,7 @@ export const CashierClient = ({
             )}
 
             {tax.applies && (
-              <div className="mt-1.5 flex items-center justify-between text-sm text-muted-foreground">
+              <div className="mt-1 flex items-center justify-between text-sm text-muted-foreground">
                 <span>
                   {taxLineLabel(taxConfig)}
                   {/* Inclusive tax doesn't change what's owed, so say so —
@@ -4326,7 +4428,7 @@ export const CashierClient = ({
               </div>
             )}
 
-            <div className="my-2 h-px bg-border" />
+            <div className="my-1.5 h-px bg-border" />
             <div className="flex items-end justify-between">
               <span className="text-base font-bold">Total</span>
               <span className="text-2xl font-black tabular-nums tracking-tight text-blue-600">
@@ -4341,7 +4443,7 @@ export const CashierClient = ({
               On a mixed payment it is there when a row is cash, and counts
               against those rows only: the QRIS share is already paid. */}
           {takesCash && (
-            <div className="mb-2 rounded-xl border bg-muted/30 px-3 py-2">
+            <div className="mb-1.5 rounded-xl border bg-muted/30 px-3 py-1.5">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-semibold text-muted-foreground">
@@ -4395,12 +4497,12 @@ export const CashierClient = ({
                       setAmountPaidInput(e.target.value.replace(/\D/g, ''))
                     }
                     placeholder="Rp 0"
-                    className="h-9 w-36 rounded-lg border bg-background px-3 text-right text-sm font-bold tabular-nums outline-none focus:border-transparent focus:ring-2 focus:ring-blue-500"
+                    className="h-8 w-36 rounded-lg border bg-background px-3 text-right text-sm font-bold tabular-nums outline-none focus:border-transparent focus:ring-2 focus:ring-blue-500"
                   />
                 )}
               </div>
               {!lazyMode && (
-                <div className="mt-1.5 flex items-center justify-between">
+                <div className="mt-1 flex items-center justify-between">
                   <span className="text-sm font-semibold text-muted-foreground">
                     {isInsufficient ? 'Kurang' : 'Kembali'}
                   </span>
@@ -4423,6 +4525,26 @@ export const CashierClient = ({
               same reach, a third of the weight, and the row that ends the
               order stays one row. Icon-only, so each needs its own label. */}
           <div className="flex items-center gap-2">
+            {/* The way into a split. Quiet, because most sales are one method;
+                gone while a split is open (its own panel has the cancel), and
+                locked under Lazy Mode, which is a whole-bill cash sale. */}
+            {!mixedPay && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={startMixedPay}
+                disabled={cart.length === 0 || lazyMode}
+                className="h-10 w-10 shrink-0 rounded-xl border-2 p-0"
+                title={
+                  lazyMode
+                    ? 'Lazy Mode aktif — matikan untuk bayar campuran'
+                    : 'Bayar campuran / bagi bill (misal tunai + QRIS)'
+                }
+                aria-label="Bayar campuran / bagi bill"
+              >
+                <Split className="h-4 w-4" />
+              </Button>
+            )}
             {/* The owner can take this one away (Pengaturan Outlet): a struk
                 before Checkout is paper for a sale not yet booked. */}
             {allowPreCheckoutReceipt && (

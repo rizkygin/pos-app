@@ -263,39 +263,54 @@ export function ShiftBar({
 
   return (
     <>
+      {/* One row in every state, at every width. It sits between the search
+          and the products, so each extra line it wraps to is a line of menu
+          the cashier loses — on a tablet with the cart open it was three.
+          Detail drops out as the column narrows (container queries against
+          the cashier header): the numbers that matter mid-shift and the
+          buttons stay, labels go before the buttons do. */}
       {loading ? null : shift ? (
-        <div className="mb-1 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs dark:border-emerald-900 dark:bg-emerald-950/40">
-          <span className="flex items-center gap-1.5 font-bold text-emerald-700 dark:text-emerald-400">
+        <div className="mb-1 flex items-center gap-x-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs dark:border-emerald-900 dark:bg-emerald-950/40">
+          <span className="hidden shrink-0 items-center gap-1.5 font-bold text-emerald-700 @2xs:flex dark:text-emerald-400">
             <DoorOpen className="h-3.5 w-3.5" />
-            Shift #{shift.shift.id}
+            <span>
+              <span className="hidden @sm:inline">Shift </span>#{shift.shift.id}
+            </span>
           </span>
-          <span className="text-emerald-800/70 dark:text-emerald-300/70">
+          <span className="hidden min-w-0 truncate text-emerald-800/70 @2xl:block dark:text-emerald-300/70">
             {shift.shift.cashierName} &middot; buka {fmtTime(shift.shift.openedAt)}
           </span>
-          <span className="flex items-center gap-1 font-semibold text-emerald-800 dark:text-emerald-300">
-            <Wallet className="h-3.5 w-3.5" />
-            Laci {fmt(expected)}
+          {/* The one number that must survive any width; on the narrowest it
+              gives way before the buttons do, so Tutup Shift stays reachable. */}
+          <span className="flex min-w-0 items-center gap-1 font-semibold text-emerald-800 dark:text-emerald-300">
+            <Wallet className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">
+              <span className="hidden @2xs:inline">Laci </span>
+              {fmt(expected)}
+            </span>
           </span>
           {/* Flagged while the shift is still running, not just at closing:
               a cashier who only learns at 22:00 that a tenth of the till isn't
               theirs has already been reconciling against the wrong number all
               day. */}
           {shift.drawer.taxInDrawer > 0 && (
-            <span className="text-emerald-800/70 dark:text-emerald-300/70">
+            <span className="hidden shrink-0 text-emerald-800/70 @md:inline dark:text-emerald-300/70">
               (pajak {fmt(shift.drawer.taxInDrawer)})
             </span>
           )}
-          <span className="text-emerald-800/70 dark:text-emerald-300/70">
+          <span className="hidden shrink-0 text-emerald-800/70 @xl:inline dark:text-emerald-300/70">
             {shift.revenue.orderCount} transaksi
           </span>
-          <div className="ml-auto flex gap-2">
+          <div className="ml-auto flex shrink-0 gap-2">
             <button
               type="button"
               onClick={() => setReport(shift)}
-              className="rounded-lg border border-emerald-300 px-2.5 py-1 font-bold text-emerald-700 transition-colors hover:bg-emerald-100 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-900/40"
+              title="Ringkasan shift"
+              aria-label="Ringkasan shift"
+              className="flex items-center gap-1 rounded-lg border border-emerald-300 px-2 py-1 font-bold text-emerald-700 transition-colors hover:bg-emerald-100 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-900/40"
             >
-              <ClipboardCheck className="mr-1 inline h-3.5 w-3.5" />
-              Ringkasan
+              <ClipboardCheck className="h-3.5 w-3.5" />
+              <span className="hidden @lg:inline">Ringkasan</span>
             </button>
             <button
               type="button"
@@ -304,40 +319,51 @@ export function ShiftBar({
                 setCountInput('');
                 setDialog('close');
               }}
-              className="rounded-lg bg-emerald-600 px-2.5 py-1 font-bold text-white transition-colors hover:bg-emerald-700"
+              title="Tutup Shift"
+              aria-label="Tutup Shift"
+              className="flex items-center gap-1 rounded-lg bg-emerald-600 px-2 py-1 font-bold text-white transition-colors hover:bg-emerald-700"
             >
-              <LockKeyhole className="mr-1 inline h-3.5 w-3.5" />
-              Tutup Shift
+              <LockKeyhole className="h-3.5 w-3.5" />
+              <span className="hidden @xs:inline">Tutup Shift</span>
             </button>
           </div>
         </div>
       ) : !canUseShift ? (
         // No shift open and the plan doesn't include them: say what the feature
         // is and where to get it, rather than showing a button that 403s.
-        <div className="mb-1 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-border bg-muted/50 px-3 py-1.5 text-xs">
-          <span className="flex items-center gap-1.5 font-bold text-muted-foreground">
-            <Lock className="h-3.5 w-3.5" />
+        <div className="mb-1 flex items-center gap-x-3 rounded-xl border border-border bg-muted/50 px-3 py-1.5 text-xs">
+          <span className="flex min-w-0 shrink-0 items-center gap-1.5 font-bold text-muted-foreground">
+            <Lock className="h-3.5 w-3.5 shrink-0" />
             Buka Shift
           </span>
-          <span className="text-muted-foreground">
+          <span
+            title="Modal awal, hitung laci, dan laporan penutupan shift tersedia mulai paket Max Lite."
+            className="hidden min-w-0 flex-1 truncate text-muted-foreground @lg:block"
+          >
             Modal awal, hitung laci, dan laporan penutupan shift tersedia mulai
             paket Max Lite.
           </span>
           <Link
             href="/dashboard/subscription"
-            className="ml-auto flex items-center gap-1 rounded-lg bg-foreground px-2.5 py-1 font-bold text-background transition-opacity hover:opacity-90"
+            className="ml-auto flex shrink-0 items-center gap-1 rounded-lg bg-foreground px-2.5 py-1 font-bold text-background transition-opacity hover:opacity-90"
           >
             <Sparkles className="h-3.5 w-3.5" />
             Upgrade
           </Link>
         </div>
       ) : (
-        <div className="mb-1 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs dark:border-amber-900 dark:bg-amber-950/40">
-          <span className="flex items-center gap-1.5 font-bold text-amber-700 dark:text-amber-400">
-            <AlertTriangle className="h-3.5 w-3.5" />
-            Shift belum dibuka
+        <div className="mb-1 flex items-center gap-x-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs dark:border-amber-900 dark:bg-amber-950/40">
+          <span className="flex min-w-0 items-center gap-1.5 font-bold text-amber-700 dark:text-amber-400">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">Shift belum dibuka</span>
           </span>
-          <span className="text-amber-800/70 dark:text-amber-300/70">
+          {/* The why, only where it fits on the same line. Narrower, the
+              amber strip and its button already say it; the dialog explains
+              the rest. */}
+          <span
+            title="Penjualan tetap bisa diproses, tapi tidak masuk laporan penutupan."
+            className="hidden min-w-0 flex-1 truncate text-amber-800/70 @lg:block dark:text-amber-300/70"
+          >
             Penjualan tetap bisa diproses, tapi tidak masuk laporan penutupan.
           </span>
           <button
@@ -347,9 +373,9 @@ export function ShiftBar({
               setFloatInput('');
               setDialog('open');
             }}
-            className="ml-auto rounded-lg bg-amber-600 px-2.5 py-1 font-bold text-white transition-colors hover:bg-amber-700"
+            className="ml-auto flex shrink-0 items-center gap-1 rounded-lg bg-amber-600 px-2.5 py-1 font-bold text-white transition-colors hover:bg-amber-700"
           >
-            <DoorOpen className="mr-1 inline h-3.5 w-3.5" />
+            <DoorOpen className="h-3.5 w-3.5" />
             Buka Shift
           </button>
         </div>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   Armchair,
   Bell,
@@ -175,6 +175,9 @@ export function SelfOrderInbox({
   openTabIds: Set<string>;
 }) {
   const [open, setOpen] = useState(false);
+  // The counter is kept alive across menus: leaving hides this rather than
+  // unmounting it, and the list should not be standing open on the way back.
+  useLayoutEffect(() => () => setOpen(false), []);
   // A new order pops the list open — unless the cashier is typing somewhere,
   // where stealing focus would land keystrokes in the wrong field.
   const popOpen = useCallback(() => {
@@ -267,7 +270,7 @@ export function SelfOrderInbox({
             />
           )}
           <Smartphone className="h-4 w-4" />
-          <span className="hidden lg:inline">Pesanan HP</span>
+          <span className="hidden @xl:inline">Pesanan HP</span>
           {waiting > 0 && (
             <span className="absolute -right-1.5 -top-1.5 flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-rose-600 px-1 text-[11px] font-extrabold leading-none text-white">
               {waiting}

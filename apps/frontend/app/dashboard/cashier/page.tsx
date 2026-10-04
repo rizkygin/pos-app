@@ -3,6 +3,12 @@ import { serverFetch } from "@/lib/server-fetch";
 import Forbidden from "@/lib/forbidden";
 import { CashierClient } from "./cashier-client";
 import { taxConfigFrom } from "@/lib/tax";
+import { KeepAlive } from "@/components/dashboard/keep-alive";
+import Loading from "../loading";
+
+// The counter stays mounted while the cashier visits other menus, so coming
+// back is instant instead of a reload (see components/dashboard/keep-alive).
+const CASHIER_PATH = "/dashboard/cashier";
 
 export default async function CashierPage() {
     const session = await getSession();
@@ -41,40 +47,47 @@ export default async function CashierPage() {
     );
 
     if (!outlet) {
+        // Kept too, under its own key, so it replaces a counter kept from
+        // before rather than hiding behind it.
         return (
-            <main className="flex flex-col min-h-screen bg-muted/50 px-4 mx-2 md:mx-6 pb-12 pt-8">
-                <div className="rounded-2xl border border-rose-100 bg-rose-50 p-8 text-center text-rose-600">
-                    <h2 className="text-xl font-bold">No Outlet Found</h2>
-                    <p className="mt-2 text-sm">You need to have an active outlet to access the Cashier.</p>
-                </div>
-            </main>
+            <KeepAlive path={CASHIER_PATH} cacheKey={`${session.user.id}:none`} fallback={<Loading />}>
+                <main className="flex flex-col min-h-screen bg-muted/50 px-4 mx-2 md:mx-6 pb-12 pt-8">
+                    <div className="rounded-2xl border border-rose-100 bg-rose-50 p-8 text-center text-rose-600">
+                        <h2 className="text-xl font-bold">No Outlet Found</h2>
+                        <p className="mt-2 text-sm">You need to have an active outlet to access the Cashier.</p>
+                    </div>
+                </main>
+            </KeepAlive>
         );
     }
 
     return (
-        <main className="flex flex-col h-[calc(100vh-2.5rem)] bg-muted/30">
-            <CashierClient
-                outletId={outlet.id}
-                outletName={outlet.name}
-                outletAddress={outlet.address}
-                outletPhone={outlet.phone}
-                outletLogo={outlet.avatar ?? ""}
-                cashierName={session.user.name ?? "Cashier"}
-                canUseShift={features.cashierShift === true}
-                canUsePager={features.pager === true}
-                canUseMembership={features.membership === true}
-                canUseTables={features.tableManagement === true}
-                canUseKitchen={features.kitchenDisplay === true}
-                canUseSelfOrder={features.selfOrder === true}
-                askServiceType={outlet.service_type_enabled !== false}
-                allowPreCheckoutReceipt={outlet.precheckout_receipt_enabled !== false}
-                // Resolved against the gate here, so the counter can't show a
-                // tax line the plan doesn't include. The server applies the
-                // same gate when it stores the order.
-                taxConfig={taxConfigFrom(outlet, features.tax === true)}
-                printSettings={printSettings}
-                initialProducts={sellableProducts}
-            />
-        </main>
+        // Keyed by user and outlet: either changing starts a fresh counter.
+        <KeepAlive path={CASHIER_PATH} cacheKey={`${session.user.id}:${outlet.id}`} fallback={<Loading />}>
+            <main className="flex flex-col h-[calc(100vh-2.5rem)] bg-muted/30">
+                <CashierClient
+                    outletId={outlet.id}
+                    outletName={outlet.name}
+                    outletAddress={outlet.address}
+                    outletPhone={outlet.phone}
+                    outletLogo={outlet.avatar ?? ""}
+                    cashierName={session.user.name ?? "Cashier"}
+                    canUseShift={features.cashierShift === true}
+                    canUsePager={features.pager === true}
+                    canUseMembership={features.membership === true}
+                    canUseTables={features.tableManagement === true}
+                    canUseKitchen={features.kitchenDisplay === true}
+                    canUseSelfOrder={features.selfOrder === true}
+                    askServiceType={outlet.service_type_enabled !== false}
+                    allowPreCheckoutReceipt={outlet.precheckout_receipt_enabled !== false}
+                    // Resolved against the gate here, so the counter can't show a
+                    // tax line the plan doesn't include. The server applies the
+                    // same gate when it stores the order.
+                    taxConfig={taxConfigFrom(outlet, features.tax === true)}
+                    printSettings={printSettings}
+                    initialProducts={sellableProducts}
+                />
+            </main>
+        </KeepAlive>
     );
 }
