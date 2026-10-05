@@ -1,7 +1,9 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { twoFactor } from "better-auth/plugins";
+import { createAuthMiddleware, isAPIError } from "better-auth/api";
 import { db } from "./db";
-import { usersTable, session, account, verification } from "./db/schema";
+import { usersTable, session, account, verification, twoFactor as twoFactorTable } from "./db/schema";
 import { Resend } from "resend";
 import {
   APP_ENV,
@@ -10,6 +12,7 @@ import {
   FRONTEND_ORIGINS,
   FRONTEND_URL,
 } from "./lib/app-env";
+import { onAdminSecurityEvent, onSessionCreated } from "./lib/admin-devices";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 // Sender for all transactional mail. mail.ulunpesan.com is a dedicated sending
@@ -52,8 +55,51 @@ export const auth = betterAuth({
       session: session,
       account: account,
       verification: verification,
+      twoFactor: twoFactorTable,
     },
   }),
+  plugins: [
+    // Authenticator-app (TOTP) codes. Any user CAN enrol, but only admins are
+    // made to: lib/admin-access.ts refuses admin rights to an account without
+    // it. Once enrolled, sign-in answers { twoFactorRedirect } instead of a
+    // session and the login page asks for the code (or a backup code).
+    //
+    // No email/WhatsApp OTP fallback on purpose: a second factor that arrives
+    // in the same inbox a password reset goes to protects nothing. Losing the
+    // phone AND the backup codes is recovered from the server with
+    // `node dist/scripts/admin-access.js reset-2fa <email>`.
+    twoFactor({ issuer: "Ulun Pesan" }),
+  ],
+  // Admin sign-in bookkeeping (lib/admin-devices.ts): activity log + the
+  // new-browser email. Both hooks return early for anyone who is not an admin.
+  databaseHooks: {
+    user: {
+      update: {
+        after: async (user, ctx) => {
+          if (ctx?.path === "/two-factor/verify-totp" && user.twoFactorEnabled) {
+            await onAdminSecurityEvent(user.id, "two_factor.enabled", ctx);
+          } else if (ctx?.path === "/two-factor/disable") {
+            await onAdminSecurityEvent(user.id, "two_factor.disabled", ctx);
+          }
+        },
+      },
+    },
+  },
+  hooks: {
+    // User after hooks run BEFORE plugin ones, so on a two-factor account's
+    // password step newSession is still set here; onSessionCreated skips it.
+    after: createAuthMiddleware(async (ctx) => {
+      if (isAPIError(ctx.context.returned)) return;
+      // Regenerating backup codes touches no user row, so it is caught here.
+      if (ctx.path === "/two-factor/generate-backup-codes") {
+        const userId = ctx.context.session?.user.id;
+        if (userId) await onAdminSecurityEvent(userId, "two_factor.backup_codes_regenerated", ctx);
+        return;
+      }
+      const created = ctx.context.newSession;
+      if (created) await onSessionCreated(created.session, ctx, !!ctx.context.session);
+    }),
+  },
   emailAndPassword: {
     enabled: true,
     sendResetPassword: async ({ user, url }) => {

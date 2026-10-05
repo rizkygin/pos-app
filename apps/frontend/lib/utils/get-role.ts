@@ -27,6 +27,9 @@ export const getRole = cache(async () => {
         // number typed in, the other needs the link tapped.
         phone: (me.phone ?? null) as string | null,
         phoneVerified: !!me.phoneVerified,
+        // Admin only: false until two-factor is set up, and admin rights are
+        // withheld until it is (proxy.ts sends them to /dashboard/admin/security).
+        twoFactorEnabled: !!me.twoFactorEnabled,
         // Subscription gate (owner/employee only): { alive, status, features }.
         gate: me.gate as { alive: boolean; status: string; features: Record<string, unknown> } | undefined,
     };

@@ -16,7 +16,20 @@ async function hasSession() {
   return !!data?.user;
 }
 
-export default async function LoginPage() {
-  if (await hasSession()) redirect("/dashboard");
-  return <LoginClient />;
+// ?reauth=admin: proxy.ts sends an admin here when their admin rights have
+// lapsed (12 hours after sign-in). They still HAVE a session — just not one
+// that may act as admin — so skip the already-signed-in redirect, which would
+// bounce them straight back.
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
+  const reauth = (await searchParams).reauth === "admin";
+  if (!reauth && (await hasSession())) redirect("/dashboard");
+  return (
+    <LoginClient
+      notice={reauth ? "Sesi admin sudah lewat 12 jam. Masuk ulang untuk lanjut memakai menu admin." : undefined}
+    />
+  );
 }

@@ -5,7 +5,6 @@ import fs from "node:fs/promises";
 import sharp from "sharp";
 import { db } from "../db";
 import {
-  adminsTable,
   productsTable,
   productAdsTable,
   productAdsSchedule,
@@ -13,6 +12,7 @@ import {
 } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
+import { requireAdmin } from "../lib/admin-access";
 import { getOutletByUserId } from "../lib/outlet-id";
 
 const UPLOADS_ROOT = path.join(process.cwd(), "uploads");
@@ -72,15 +72,6 @@ function resolveEndsAt(display_as: DisplayAs, starts_at: Date, duration?: number
       return new Date(starts_at.getTime() + weeks * 7 * 24 * 60 * 60 * 1000);
     }
   }
-}
-
-async function isAdmin(userId: string) {
-  const [admin] = await db
-    .select({ id: adminsTable.id })
-    .from(adminsTable)
-    .where(eq(adminsTable.user_id, userId))
-    .limit(1);
-  return !!admin;
 }
 
 // Best-effort delete of a backend-served banner file (legacy /ads/ live in the
@@ -313,9 +304,8 @@ export async function adRoutes(app: FastifyInstance) {
   // --- Admin moderation endpoints ---
 
   app.post("/api/ads/approve", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, message: "Unauthorized" });
-    if (!(await isAdmin(session.user.id))) return reply.status(403).send({ success: false, message: "Forbidden" });
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
 
     try {
       const { adId } = (request.body as { adId?: number }) ?? {};
@@ -331,9 +321,8 @@ export async function adRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/ads/reject", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, message: "Unauthorized" });
-    if (!(await isAdmin(session.user.id))) return reply.status(403).send({ success: false, message: "Forbidden" });
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
 
     try {
       const { adId, reason } = (request.body as { adId?: number; reason?: string }) ?? {};
@@ -349,9 +338,8 @@ export async function adRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/ads/admin-delete", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, message: "Unauthorized" });
-    if (!(await isAdmin(session.user.id))) return reply.status(403).send({ success: false, message: "Forbidden" });
+    const admin = await requireAdmin(request, reply, { stepUp: true });
+    if (!admin) return;
 
     try {
       const { adId } = (request.body as { adId?: number }) ?? {};

@@ -9,6 +9,8 @@ import { publicRoutes } from "./routes/public";
 import { customerRoutes } from "./routes/customer";
 import { ownerRoutes } from "./routes/owner";
 import { adminRoutes } from "./routes/admin";
+import { adminSecurityRoutes } from "./routes/admin-security";
+import { logAdminResponse } from "./lib/admin-activity";
 import { mutationRoutes } from "./routes/mutations";
 import { courierRoutes } from "./routes/courier";
 import { errandRoutes } from "./routes/errands";
@@ -47,6 +49,11 @@ const ALLOWED_ORIGINS = FRONTEND_ORIGINS;
 
 async function main() {
   const app = Fastify({ logger: true });
+
+  // Admin activity log: requireAdmin marks a request, this writes it out once
+  // the response is sent (lib/admin-activity.ts). Added before any route is
+  // registered so every plugin context inherits it.
+  app.addHook("onResponse", logAdminResponse);
 
   // Fastify's default JSON parser rejects an empty body with a 400 when
   // Content-Type: application/json is set. better-auth's sign-out POST does
@@ -111,6 +118,7 @@ async function main() {
   await app.register(customerRoutes);
   await app.register(ownerRoutes);
   await app.register(adminRoutes);
+  await app.register(adminSecurityRoutes);
   await app.register(mutationRoutes);
   await app.register(courierRoutes);
   await app.register(errandRoutes);

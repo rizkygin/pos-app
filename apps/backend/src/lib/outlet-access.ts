@@ -2,7 +2,6 @@ import { and, eq } from "drizzle-orm";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { db } from "../db";
 import {
-  adminsTable,
   employeesTable,
   outletsTable,
   subscriptionsTable,
@@ -11,6 +10,8 @@ import {
 import { applyScheduledTierIfDue } from "./subscription";
 import { auth } from "../auth";
 import { toWebHeaders } from "./web-headers";
+import { isAdminSession } from "./admin-access";
+import { markAdminRequest } from "./admin-activity";
 
 // ============================================================================
 // Outlet access resolution: replaces the old "this user OWNS an outlet"
@@ -406,17 +407,11 @@ export async function requireOutletOwnerOrAdmin(
     return null;
   }
 
-  // A row in `admins` IS the admin role everywhere in this codebase — /api/me
-  // and routes/admin.ts both test exactly this, with no deleted_at filter.
-  // Diverging here would make an account that passes the proxy's admin gate
-  // fail this one, which is the kind of split nobody can debug from a 403.
-  const [admin] = await db
-    .select({ id: adminsTable.id })
-    .from(adminsTable)
-    .where(eq(adminsTable.user_id, session.user.id))
-    .limit(1);
-
-  if (admin) {
+  // The same test every admin route uses (lib/admin-access.ts): a live admins
+  // row, two-factor enrolled, and a session signed in within the admin limit.
+  // An admin failing any of those falls through to the owner check, so they
+  // still see their own outlet but nobody else's.
+  if (await isAdminSession(session)) {
     const [outlet] = await db
       .select()
       .from(outletsTable)
@@ -428,6 +423,15 @@ export async function requireOutletOwnerOrAdmin(
     }
     // The gate belongs to the outlet's OWNER, never to the admin reading it.
     const gate = await getSubscriptionGate(outlet.user_id);
+    // Reading another merchant's books goes in the admin activity log.
+    if (outlet.user_id !== session.user.id) {
+      markAdminRequest(request, {
+        userId: session.user.id,
+        email: session.user.email,
+        sessionId: session.session.id,
+        logRead: true,
+      });
+    }
     return {
       outlet,
       isOwner: outlet.user_id === session.user.id,

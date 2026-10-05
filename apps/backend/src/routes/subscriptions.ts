@@ -5,7 +5,6 @@ import sharp from "sharp";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "../db";
 import {
-  adminsTable,
   employeesTable,
   outletsTable,
   subscriptionsTable,
@@ -17,6 +16,7 @@ import {
 } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
+import { requireAdmin } from "../lib/admin-access";
 import { getOutletByUserId } from "../lib/outlet-id";
 import {
   BANK_INFO,
@@ -50,21 +50,6 @@ async function getOwnerUser(request: FastifyRequest, reply: FastifyReply) {
   const outlet = await getOutletByUserId(user.id);
   if (!outlet) {
     reply.status(403).send({ success: false, error: "No outlet found" });
-    return null;
-  }
-  return user;
-}
-
-async function getAdminUser(request: FastifyRequest, reply: FastifyReply) {
-  const user = await getSessionUser(request, reply);
-  if (!user) return null;
-  const [admin] = await db
-    .select({ id: adminsTable.id })
-    .from(adminsTable)
-    .where(eq(adminsTable.user_id, user.id))
-    .limit(1);
-  if (!admin) {
-    reply.status(403).send({ success: false, error: "Forbidden" });
     return null;
   }
   return user;
@@ -278,7 +263,7 @@ export async function subscriptionRoutes(app: FastifyInstance) {
 
   // ---------------------------------------------------------------- admin side
   app.get("/api/admin/subscription-payments", async (request, reply) => {
-    const admin = await getAdminUser(request, reply);
+    const admin = await requireAdmin(request, reply);
     if (!admin) return;
     const { status = "pending", page = "1", limit = "20" } = request.query as Record<string, string>;
     const pageNum = Math.max(1, Number(page) || 1);
@@ -356,7 +341,7 @@ export async function subscriptionRoutes(app: FastifyInstance) {
   // are the MERCHANTS' money and never ours), so summing paid rows here is the
   // complete answer, not a slice of one.
   app.get("/api/admin/subscription-revenue", async (request, reply) => {
-    const admin = await getAdminUser(request, reply);
+    const admin = await requireAdmin(request, reply);
     if (!admin) return;
 
     const paidAmount = sql<string>`coalesce(sum(${subscriptionPaymentsTable.amount_due}), 0)`;
@@ -502,7 +487,7 @@ export async function subscriptionRoutes(app: FastifyInstance) {
   // account email. Requires an existing subscription row — pre-creating one
   // here would silently burn the merchant's future trial.
   app.post("/api/admin/subscription-deals", async (request, reply) => {
-    const admin = await getAdminUser(request, reply);
+    const admin = await requireAdmin(request, reply, { stepUp: true });
     if (!admin) return;
     const body = (request.body ?? {}) as {
       email?: string;
@@ -576,7 +561,7 @@ export async function subscriptionRoutes(app: FastifyInstance) {
   // is how routes/employees.ts counts), so a multi-outlet owner gets a row
   // each instead of one misleading total.
   app.get("/api/admin/subscription-employee-cap", async (request, reply) => {
-    const admin = await getAdminUser(request, reply);
+    const admin = await requireAdmin(request, reply);
     if (!admin) return;
     const email = String((request.query as { email?: string }).email ?? "")
       .trim()
@@ -666,7 +651,7 @@ export async function subscriptionRoutes(app: FastifyInstance) {
   // employee is added or reactivated — so the response reports any outlet
   // already above the new number instead of silently locking staff out.
   app.post("/api/admin/subscription-employee-cap", async (request, reply) => {
-    const admin = await getAdminUser(request, reply);
+    const admin = await requireAdmin(request, reply, { stepUp: true });
     if (!admin) return;
     const body = (request.body ?? {}) as {
       email?: string;
@@ -821,7 +806,7 @@ export async function subscriptionRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/admin/subscription-payments/:id/confirm", async (request, reply) => {
-    const admin = await getAdminUser(request, reply);
+    const admin = await requireAdmin(request, reply, { stepUp: true });
     if (!admin) return;
     const id = Number((request.params as { id: string }).id);
     try {
@@ -840,7 +825,7 @@ export async function subscriptionRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/admin/subscription-payments/:id/reject", async (request, reply) => {
-    const admin = await getAdminUser(request, reply);
+    const admin = await requireAdmin(request, reply, { stepUp: true });
     if (!admin) return;
     const id = Number((request.params as { id: string }).id);
     const { note = "" } = (request.body ?? {}) as { note?: string };

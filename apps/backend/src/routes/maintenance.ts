@@ -1,9 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm';
 import { db } from '../db';
-import { adminsTable, maintenanceWindowsTable } from '../db/schema';
-import { auth } from '../auth';
-import { toWebHeaders } from '../lib/web-headers';
+import { maintenanceWindowsTable } from '../db/schema';
+import { requireAdmin } from '../lib/admin-access';
 
 export type MaintenanceStatus = 'off' | 'upcoming' | 'active';
 
@@ -15,17 +14,6 @@ export type MaintenancePayload = {
 };
 
 const OFF: MaintenancePayload = { status: 'off', startsAt: null, endsAt: null, message: null };
-
-async function requireAdminUser(request: any) {
-  const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-  if (!session?.user) return null;
-  const [admin] = await db
-    .select({ id: adminsTable.id })
-    .from(adminsTable)
-    .where(eq(adminsTable.user_id, session.user.id))
-    .limit(1);
-  return admin ? session.user : null;
-}
 
 /**
  * The single window that matters right now: the earliest one that has not
@@ -96,8 +84,8 @@ export async function maintenanceRoutes(app: FastifyInstance) {
 
   // Every window, past and future, for the admin screen.
   app.get('/api/admin/maintenance', async (request, reply) => {
-    const user = await requireAdminUser(request);
-    if (!user) return reply.status(401).send({ error: 'Unauthorized' });
+    const user = await requireAdmin(request, reply);
+    if (!user) return;
 
     const windows = await db
       .select()
@@ -110,8 +98,8 @@ export async function maintenanceRoutes(app: FastifyInstance) {
   });
 
   app.post('/api/admin/maintenance', async (request, reply) => {
-    const user = await requireAdminUser(request);
-    if (!user) return reply.status(401).send({ error: 'Unauthorized' });
+    const user = await requireAdmin(request, reply, { stepUp: true });
+    if (!user) return;
 
     const body = (request.body ?? {}) as {
       startsAt?: string;
@@ -153,8 +141,8 @@ export async function maintenanceRoutes(app: FastifyInstance) {
    * started yet is simply marked cancelled.
    */
   app.post('/api/admin/maintenance/:id/end', async (request, reply) => {
-    const user = await requireAdminUser(request);
-    if (!user) return reply.status(401).send({ error: 'Unauthorized' });
+    const user = await requireAdmin(request, reply);
+    if (!user) return;
 
     const id = Number((request.params as { id: string }).id);
     if (!Number.isFinite(id)) return reply.status(400).send({ error: 'Invalid id' });

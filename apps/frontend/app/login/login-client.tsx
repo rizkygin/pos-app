@@ -7,8 +7,23 @@ import { authClient } from "@/lib/auth-client";
 import { AboutUlunPesan } from "@/components/about-ulun-pesan";
 import { notifyLogin } from "@/lib/native-bridge";
 
-export default function LoginPage() {
+// better-auth two-factor error codes, in the page's own voice. Anything not
+// listed falls back to the server message.
+const TWO_FACTOR_ERRORS: Record<string, string> = {
+  INVALID_CODE: "Kodenya salah. Cek lagi angka di aplikasi authenticator pian.",
+  INVALID_BACKUP_CODE: "Kode cadangan salah, atau sudah pernah dipakai.",
+  TOO_MANY_ATTEMPTS_REQUEST_NEW_CODE: "Terlalu banyak salah. Masuk ulang pakai email dan password.",
+  INVALID_TWO_FACTOR_COOKIE: "Waktu verifikasi habis. Masuk ulang pakai email dan password.",
+  ACCOUNT_TEMPORARILY_LOCKED: "Terlalu banyak kode salah. Akun dikunci 15 menit, coba lagi nanti.",
+};
+
+export default function LoginPage({ notice }: { notice?: string }) {
   const [isLogin, setIsLogin] = useState(true);
+  // Second step, shown when the account has two-factor on: sign-in answered
+  // { twoFactorRedirect } and no session exists until a code is verified.
+  const [twoFactorStep, setTwoFactorStep] = useState(false);
+  const [code, setCode] = useState("");
+  const [useBackupCode, setUseBackupCode] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
@@ -30,6 +45,10 @@ export default function LoginPage() {
         });
 
         if (error) throw new Error(error.message);
+        if (data && "twoFactorRedirect" in data && data.twoFactorRedirect) {
+          setTwoFactorStep(true);
+          return;
+        }
         // Inside the courier app this is the one moment a session cookie is
         // guaranteed fresh — tell the shell to mint its device token now,
         // rather than relying on it to notice on the next page load.
@@ -62,6 +81,35 @@ export default function LoginPage() {
       setLoading(false);
     }
   };
+  const handleVerifyCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setErrorMSG("");
+    try {
+      const { error } = useBackupCode
+        ? await authClient.twoFactor.verifyBackupCode({ code: code.trim() })
+        : await authClient.twoFactor.verifyTotp({ code: code.replace(/\s/g, "") });
+      if (error) {
+        throw new Error((error.code && TWO_FACTOR_ERRORS[error.code]) || error.message || "Verifikasi gagal");
+      }
+      notifyLogin();
+      // The session cookie only exists from this response on, so a full load
+      // (not a client push) is what lets the server render the dashboard.
+      window.location.href = "/dashboard";
+    } catch (err) {
+      setErrorMSG(err instanceof Error ? err.message : "Verifikasi gagal");
+      setLoading(false);
+    }
+  };
+
+  const leaveTwoFactorStep = () => {
+    setTwoFactorStep(false);
+    setCode("");
+    setPassword("");
+    setUseBackupCode(false);
+    setErrorMSG("");
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#0a0a0f] overflow-hidden relative">
       {/* Background Decor */}
@@ -104,14 +152,82 @@ export default function LoginPage() {
               layout
               className="text-3xl font-semibold tracking-tight text-white mb-2"
             >
-              {isLogin ? "Ulun Pesan" : "Buat Akun Hanyar"}
+              {twoFactorStep ? "Verifikasi Dua Langkah" : isLogin ? "Ulun Pesan" : "Buat Akun Hanyar"}
             </motion.h1>
             <motion.p layout className="text-zinc-400 text-sm">
-              {isLogin
-                ? "Masukkan Email Password Pian"
-                : "Masukkan Data Diri Pian biar ulun kenal"}
+              {twoFactorStep
+                ? useBackupCode
+                  ? "Masukkan salah satu kode cadangan pian"
+                  : "Masukkan 6 angka dari aplikasi authenticator pian"
+                : isLogin
+                  ? "Masukkan Email Password Pian"
+                  : "Masukkan Data Diri Pian biar ulun kenal"}
             </motion.p>
           </div>
+          {twoFactorStep ? (
+            <form onSubmit={handleVerifyCode} className="space-y-4">
+              <motion.div layout>
+                <label className="block text-sm font-medium text-zinc-300 mb-1.5 ml-1">
+                  {useBackupCode ? "Kode Cadangan" : "Kode Verifikasi"}
+                </label>
+                <input
+                  key={useBackupCode ? "backup" : "totp"}
+                  type="text"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                  inputMode={useBackupCode ? "text" : "numeric"}
+                  autoComplete="one-time-code"
+                  autoFocus
+                  maxLength={useBackupCode ? 32 : 6}
+                  className="w-full px-4 py-3 rounded-2xl bg-white/5 border border-white/10 text-white placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-rose-500/40 transition-all font-medium tracking-widest text-center text-lg"
+                  placeholder={useBackupCode ? "xxxxx-xxxxx" : "000000"}
+                  required
+                />
+              </motion.div>
+              {errorMSG && (
+                <motion.div
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="text-red-400 text-sm font-medium bg-red-400/10 p-3 rounded-xl border border-red-400/20"
+                >
+                  {errorMSG}
+                </motion.div>
+              )}
+              <motion.button
+                layout
+                type="submit"
+                disabled={loading}
+                className="w-full mt-6 bg-white text-black font-semibold py-3.5 px-4 rounded-2xl hover:bg-zinc-200 focus:outline-none focus:ring-4 focus:ring-white/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {loading ? (
+                  <div className="w-5 h-5 border-2 border-black/30 border-t-black rounded-full animate-spin" />
+                ) : (
+                  "Verifikasi"
+                )}
+              </motion.button>
+              <motion.div layout className="flex items-center justify-between pt-2 text-sm">
+                <button
+                  type="button"
+                  onClick={leaveTwoFactorStep}
+                  className="text-zinc-400 hover:text-white font-medium transition-colors"
+                >
+                  Kembali
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUseBackupCode((v) => !v);
+                    setCode("");
+                    setErrorMSG("");
+                  }}
+                  className="text-zinc-400 hover:text-rose-300 font-medium transition-colors"
+                >
+                  {useBackupCode ? "Pakai kode authenticator" : "Pakai kode cadangan"}
+                </button>
+              </motion.div>
+            </form>
+          ) : (
+          <>
           <form onSubmit={handleSubmit} className="space-y-4">
             <AnimatePresence mode="popLayout">
               {!isLogin && (
@@ -190,6 +306,11 @@ export default function LoginPage() {
                 {errorMSG}
               </motion.div>
             )}
+            {notice && isLogin && (
+              <div className="text-amber-300 text-sm font-medium bg-amber-400/10 p-3 rounded-xl border border-amber-400/20">
+                {notice}
+              </div>
+            )}
             {noticeMSG && (
               <motion.div
                 initial={{ opacity: 0, y: -10 }}
@@ -231,6 +352,8 @@ export default function LoginPage() {
               {isLogin ? "Daftar" : "Login"}
             </button>
           </motion.div>
+          </>
+          )}
 
         </div>
       </motion.div>

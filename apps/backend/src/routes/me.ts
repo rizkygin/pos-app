@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { db } from "../db";
-import { adminsTable, customersTable, couriersTable, outletsTable, employeesTable, usersTable } from "../db/schema";
+import { customersTable, couriersTable, outletsTable, employeesTable, usersTable } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
 import {
@@ -9,6 +9,7 @@ import {
   getSubscriptionGate,
   parseActiveOutletId,
 } from "../lib/outlet-access";
+import { getAdminRow, isAdminSessionExpired } from "../lib/admin-access";
 import { normalizeIndonesianPhone, formatIndonesianPhone } from "../lib/utils/phone";
 
 type Role = "admin" | "customer" | "courier" | "owner";
@@ -60,8 +61,22 @@ export async function meRoutes(app: FastifyInstance) {
       phoneVerified: contact?.phoneVerified ?? false,
     };
 
+    // A removed admin (deleted_at set) falls through to whatever else they are.
+    // The proxy's admin gate reads twoFactorEnabled (not enrolled → the
+    // enrolment page) and adminSessionExpired (signed in too long ago → sign
+    // in again); see lib/admin-access.ts.
+    const admin = await getAdminRow(userId);
+    if (admin) {
+      return reply.send({
+        role: "admin",
+        data: admin,
+        twoFactorEnabled: !!session.user.twoFactorEnabled,
+        adminSessionExpired: isAdminSessionExpired(session),
+        ...phone,
+      });
+    }
+
     const probes: { role: Role; row: () => Promise<unknown> }[] = [
-      { role: "admin", row: () => db.query.adminsTable.findFirst({ where: eq(adminsTable.user_id, userId) }) },
       { role: "customer", row: () => db.query.customersTable.findFirst({ where: eq(customersTable.user_id, userId) }) },
       { role: "courier", row: () => db.query.couriersTable.findFirst({ where: eq(couriersTable.user_id, userId) }) },
       { role: "owner", row: () => db.query.outletsTable.findFirst({ where: eq(outletsTable.user_id, userId) }) },

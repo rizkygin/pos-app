@@ -11,6 +11,7 @@
     "db:seed-plans": "tsx src/db/seed-plans.ts",
     "db:reset": "tsx src/db/reset.ts",
     "reset-password": "tsx src/scripts/reset-password-user.ts",
+    "admin": "tsx src/scripts/admin-access.ts",
     "db:clear": "tsx src/db/clear-test-data.ts",
     "db:backfill-subs": "tsx src/db/backfill-subscriptions.ts",
     "db:seed-materials": "tsx src/db/seed-building-materials.ts",

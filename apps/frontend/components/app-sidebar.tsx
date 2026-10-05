@@ -53,6 +53,7 @@ import {
   Truck,
   Home,
   ShieldCheck,
+  ScrollText,
   Wrench,
   Armchair,
   BookOpenText
@@ -331,6 +332,22 @@ const adminOutletSubItems = [
 ];
 
 const adminManageNavItems: NavItem[] = [
+  {
+    // Two-factor setup. Also where proxy.ts sends an admin who has not set it
+    // up yet, so it has to stay reachable from here.
+    name: 'Keamanan',
+    url: '/dashboard/admin/security',
+    icon: ShieldCheck,
+    iconBg: 'bg-emerald-100 dark:bg-emerald-950',
+    iconColor: 'text-emerald-600 dark:text-emerald-400',
+  },
+  {
+    name: 'Aktivitas Admin',
+    url: '/dashboard/admin/activity',
+    icon: ScrollText,
+    iconBg: 'bg-slate-100 dark:bg-slate-900',
+    iconColor: 'text-slate-600 dark:text-slate-400',
+  },
   {
     name: 'Pemeliharaan',
     url: '/dashboard/admin/maintenance',

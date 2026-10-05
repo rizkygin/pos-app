@@ -208,6 +208,11 @@ export const usersTable = pgTable('users', {
   address: varchar('address', { length: 255 }).default('Jl. Contoh'),
   emailVerified: boolean('email_verified').default(false).notNull(),
   image: text('image').default('avatar.png'),
+  // better-auth twoFactor plugin field (the property name is what the adapter
+  // looks up, so it must stay `twoFactorEnabled`). True only after the user has
+  // proven a code from their authenticator app, not when they merely started
+  // setting it up. Required for admins — see lib/admin-access.ts.
+  twoFactorEnabled: boolean('two_factor_enabled').default(false).notNull(),
   ...timestamps,
 });
 
@@ -1267,6 +1272,89 @@ export const verification = pgTable('verification', {
     .defaultNow()
     .$onUpdate(() => new Date())
     .notNull(),
+});
+
+// better-auth twoFactor plugin store: one row per user who has started TOTP
+// setup. `secret` and `backupCodes` are encrypted with BETTER_AUTH_SECRET, so
+// rotating that secret invalidates every enrolled authenticator. `verified`
+// stays false until the first code is proven; the failure columns drive the
+// plugin's account lockout. Keyed `twoFactor` in auth.ts's adapter schema.
+export const twoFactor = pgTable(
+  'two_factor',
+  {
+    id: text('id').primaryKey(),
+    secret: text('secret').notNull(),
+    backupCodes: text('backup_codes').notNull(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => usersTable.id, { onDelete: 'cascade' }),
+    verified: boolean('verified').default(true),
+    failedVerificationCount: integer('failed_verification_count').default(0),
+    lockedUntil: timestamp('locked_until', { withTimezone: true }),
+  },
+  (t) => [index('two_factor_user_id_idx').on(t.userId)],
+);
+
+// Append-only record of what platform admins did: every admin request that
+// passed the guard and changed something, every admin read of a merchant's
+// books, sign-ins, password re-checks and two-factor changes. Written by
+// lib/admin-activity.ts; nothing in the API updates or deletes a row.
+// admin_user_id is null for actions run from the server script (actor
+// 'script'); admin_email is a snapshot so a row stays readable after the
+// account is gone. ip_address is the address the proxy REPORTED — fine for
+// reading a log, never used to decide anything.
+export const adminActivityTable = pgTable(
+  'admin_activity_log',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    admin_user_id: text('admin_user_id').references(() => usersTable.id, { onDelete: 'set null' }),
+    admin_email: varchar('admin_email', { length: 255 }),
+    action: varchar('action', { length: 160 }).notNull(),
+    target: varchar('target', { length: 255 }),
+    detail: jsonb('detail'),
+    status_code: integer('status_code'),
+    ip_address: text('ip_address'),
+    user_agent: text('user_agent'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index('admin_activity_created_idx').on(t.createdAt),
+    index('admin_activity_admin_idx').on(t.admin_user_id),
+  ],
+);
+
+// Browsers an admin has signed in from, keyed by a random id kept in a
+// long-lived cookie (only its SHA-256 is stored). A sign-in from a browser not
+// in this table emails the admin. A cookie, not the IP: behind Railway's edge
+// the backend cannot resolve client IPs (see the trustedProxies TODO in
+// auth.ts), and an IP changes with every network anyway.
+export const adminDevicesTable = pgTable(
+  'admin_devices',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    user_id: text('user_id')
+      .notNull()
+      .references(() => usersTable.id, { onDelete: 'cascade' }),
+    device_hash: text('device_hash').notNull(),
+    user_agent: text('user_agent'),
+    ip_address: text('ip_address'),
+    first_seen_at: timestamp('first_seen_at', { withTimezone: true }).defaultNow().notNull(),
+    last_seen_at: timestamp('last_seen_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [uniqueIndex('admin_devices_user_device_uq').on(t.user_id, t.device_hash)],
+);
+
+// Password re-check ("step-up") state per session: a risky admin action needs
+// confirmed_at within the last few minutes. The failure columns cap password
+// guessing by someone who got hold of a live admin session. Dies with the
+// session (cascade), so signing out clears it.
+export const adminStepUpTable = pgTable('admin_step_up', {
+  session_id: text('session_id')
+    .primaryKey()
+    .references(() => session.id, { onDelete: 'cascade' }),
+  confirmed_at: timestamp('confirmed_at', { withTimezone: true }),
+  failed_count: integer('failed_count').default(0).notNull(),
+  locked_until: timestamp('locked_until', { withTimezone: true }),
 });
 
 

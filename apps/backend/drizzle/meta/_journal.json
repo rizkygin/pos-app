@@ -624,6 +624,20 @@
       "when": 1790825932786,
       "tag": "0088_staff_devices",
       "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1791166585209,
+      "tag": "0089_admin_two_factor",
+      "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1791168946156,
+      "tag": "0090_admin_activity",
+      "breakpoints": true
     }
   ]
 }

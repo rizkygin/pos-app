@@ -6,7 +6,6 @@ import { and, asc, count, countDistinct, desc, eq, gte, ilike, inArray, isNull, 
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "../db";
 import {
-  adminsTable,
   courierDocumentsTable,
   couriersTable,
   orderOffersTable,
@@ -26,8 +25,7 @@ import {
 } from "../db/schema";
 
 const OFFLINE_CUSTOMER_EMAIL = "rizkygin1@gmail.com";
-import { auth } from "../auth";
-import { toWebHeaders } from "../lib/web-headers";
+import { requireAdmin } from "../lib/admin-access";
 import { orderNotDeleted } from "../lib/order-scope";
 import { cappedShiftEnd, closeStaleCourierSessions, staleShiftCutoff } from "../lib/utils/courier-availability";
 import {
@@ -44,15 +42,6 @@ const COURIER_UPLOAD_URL_PREFIX = "/uploads/couriers/";
 import { getServiceArea, recomputeCourierReachable } from "../lib/service-area";
 import { parseCoordPair } from "../lib/utils/coords";
 
-async function requireAdmin(userId: string) {
-  const [admin] = await db
-    .select({ id: adminsTable.id })
-    .from(adminsTable)
-    .where(eq(adminsTable.user_id, userId))
-    .limit(1);
-  return !!admin;
-}
-
 function formatTimeSlot(slot: { day: string; hour: string }) {
   const day = slot.day.charAt(0).toUpperCase() + slot.day.slice(1);
   return `${day} ${slot.hour}:00`;
@@ -60,11 +49,8 @@ function formatTimeSlot(slot: { day: string; hour: string }) {
 
 export async function adminRoutes(app: FastifyInstance) {
   app.get("/api/admin/ads", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
-
-    const isAdmin = await requireAdmin(session.user.id);
-    if (!isAdmin) return reply.status(403).send({ success: false, error: "Forbidden" });
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
 
     const { page = "1", limit = "10", status = "" } = request.query as Record<string, string>;
     const pageNum = Math.max(1, Number(page) || 1);
@@ -147,11 +133,8 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/admin/products", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
-
-    const isAdmin = await requireAdmin(session.user.id);
-    if (!isAdmin) return reply.status(403).send({ success: false, error: "Forbidden" });
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
 
     const { page = "1", limit = "10", search = "", outletId = "", minRating = "", minPrice = "", maxPrice = "", sortBy = "", sortOrder = "desc" } = request.query as Record<string, string>;
     const pageNum = Math.max(1, Number(page) || 1);
@@ -237,11 +220,8 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/admin/outlets", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
-
-    const isAdmin = await requireAdmin(session.user.id);
-    if (!isAdmin) return reply.status(403).send({ success: false, error: "Forbidden" });
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
 
     const { page = "1", limit = "10", search = "", is_open = "", minRating = "", features = "", sortBy = "", sortOrder = "desc" } = request.query as Record<string, string>;
     const pageNum = Math.max(1, Number(page) || 1);
@@ -322,11 +302,8 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/admin/product-ratings", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
-
-    const isAdmin = await requireAdmin(session.user.id);
-    if (!isAdmin) return reply.status(403).send({ success: false, error: "Forbidden" });
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
 
     const { productId = "" } = request.query as Record<string, string>;
     if (!productId) return reply.status(400).send({ success: false, error: "productId is required" });
@@ -370,11 +347,8 @@ export async function adminRoutes(app: FastifyInstance) {
 
   // Toggle a product's recommended flag
   app.post("/api/admin/set-recommended", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, message: "Unauthorized" });
-
-    const isAdmin = await requireAdmin(session.user.id);
-    if (!isAdmin) return reply.status(403).send({ success: false, message: "Forbidden" });
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
 
     try {
       const { productId, isRecommended } = (request.body as {
@@ -397,11 +371,8 @@ export async function adminRoutes(app: FastifyInstance) {
 
   // Admin edits a product's core fields
   app.post("/api/admin/update-product", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, message: "Unauthorized" });
-
-    const isAdmin = await requireAdmin(session.user.id);
-    if (!isAdmin) return reply.status(403).send({ success: false, message: "Forbidden" });
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
 
     try {
       const { productId, data } = (request.body as {
@@ -438,9 +409,8 @@ export async function adminRoutes(app: FastifyInstance) {
 
   // ---- Manage Courier ----
   app.get("/api/admin/couriers", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
-    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
 
     const { page = "1", limit = "10", search = "", sortBy = "", sortOrder = "desc" } = request.query as Record<string, string>;
     const pageNum = Math.max(1, Number(page) || 1);
@@ -504,9 +474,8 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/admin/couriers/update", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
-    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
 
     const { id, vehicle_plate, vehicle_type } = request.body as { id?: number; vehicle_plate?: string; vehicle_type?: "car" | "motorcycle" };
     if (!id) return reply.status(400).send({ success: false, message: "id is required" });
@@ -526,9 +495,8 @@ export async function adminRoutes(app: FastifyInstance) {
 
   /** Everything an admin needs to judge one application, on one screen. */
   app.get("/api/admin/couriers/:id/verification", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
-    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
 
     const id = Number((request.params as { id: string }).id);
     if (!id) return reply.status(400).send({ success: false, error: "id tidak valid" });
@@ -577,9 +545,8 @@ export async function adminRoutes(app: FastifyInstance) {
    * photo is somebody in a motorcycle helmet.
    */
   app.post("/api/admin/couriers/:id/verify", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
-    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+    const admin = await requireAdmin(request, reply, { stepUp: true });
+    if (!admin) return;
 
     const id = Number((request.params as { id: string }).id);
     const { approve, note } = (request.body as { approve?: boolean; note?: string }) ?? {};
@@ -618,7 +585,7 @@ export async function adminRoutes(app: FastifyInstance) {
         verification_status: approve ? "approved" : "rejected",
         verification_note: approve ? null : note!.trim().slice(0, 500),
         verified_at: new Date(),
-        verified_by: session.user.id,
+        verified_by: admin.id,
       })
       .where(eq(couriersTable.id, id));
 
@@ -655,9 +622,8 @@ export async function adminRoutes(app: FastifyInstance) {
    * and stays out of the courier's hands.
    */
   app.post("/api/admin/couriers/:id/documents", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
-    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
 
     const id = Number((request.params as { id: string }).id);
     if (!id) return reply.status(400).send({ success: false, error: "id tidak valid" });
@@ -736,9 +702,8 @@ export async function adminRoutes(app: FastifyInstance) {
    * account picture and isn't the platform's to overwrite.
    */
   app.post("/api/admin/couriers/:id/avatar", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
-    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
 
     const id = Number((request.params as { id: string }).id);
     if (!id) return reply.status(400).send({ success: false, error: "id tidak valid" });
@@ -790,9 +755,8 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/admin/couriers/delete", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
-    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+    const admin = await requireAdmin(request, reply, { stepUp: true });
+    if (!admin) return;
 
     const { id } = request.body as { id?: number };
     if (!id) return reply.status(400).send({ success: false, message: "id is required" });
@@ -803,9 +767,8 @@ export async function adminRoutes(app: FastifyInstance) {
 
   // ---- Manage Customer ----
   app.get("/api/admin/customers", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
-    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
 
     const { page = "1", limit = "10", search = "", sortBy = "", sortOrder = "desc" } = request.query as Record<string, string>;
     const pageNum = Math.max(1, Number(page) || 1);
@@ -852,9 +815,8 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/admin/customers/delete", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
-    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+    const admin = await requireAdmin(request, reply, { stepUp: true });
+    if (!admin) return;
 
     const { id } = request.body as { id?: number };
     if (!id) return reply.status(400).send({ success: false, message: "id is required" });
@@ -865,9 +827,8 @@ export async function adminRoutes(app: FastifyInstance) {
 
   // ---- Manage User ----
   app.get("/api/admin/users", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
-    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
 
     const { page = "1", limit = "10", search = "", sortBy = "", sortOrder = "desc" } = request.query as Record<string, string>;
     const pageNum = Math.max(1, Number(page) || 1);
@@ -931,9 +892,8 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/admin/users/update", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
-    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+    const admin = await requireAdmin(request, reply, { stepUp: true });
+    if (!admin) return;
 
     const { id, name, phone, address } = request.body as { id?: string; name?: string; phone?: string; address?: string };
     if (!id) return reply.status(400).send({ success: false, message: "id is required" });
@@ -951,9 +911,8 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/admin/users/delete", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
-    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+    const admin = await requireAdmin(request, reply, { stepUp: true });
+    if (!admin) return;
 
     const { id } = request.body as { id?: string };
     if (!id) return reply.status(400).send({ success: false, message: "id is required" });
@@ -964,9 +923,8 @@ export async function adminRoutes(app: FastifyInstance) {
 
   // ---- Admin dashboard analytics ----
   app.get("/api/admin/dashboard", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
-    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
 
     const now = new Date();
     const currentPeriodStart = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
@@ -1103,9 +1061,8 @@ export async function adminRoutes(app: FastifyInstance) {
 
   // ---- Manage Order ----
   app.get("/api/admin/orders", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
-    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
 
     const ORDER_STATUSES = ["pending", "confirmed", "preparing", "ready", "on_delivery", "delivered", "cancelled"] as const;
     const { page = "1", limit = "10", search = "", status = "", type = "", sortOrder = "desc" } = request.query as Record<string, string>;
@@ -1199,9 +1156,8 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/admin/orders/:id", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
-    if (!(await requireAdmin(session.user.id))) return reply.status(403).send({ success: false, error: "Forbidden" });
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
 
     const { id: orderId } = request.params as { id: string };
     const courierUser = alias(usersTable, "courier_user");
@@ -1283,11 +1239,8 @@ export async function adminRoutes(app: FastifyInstance) {
    * who lets a customer wait out the clock.
    */
   app.get("/api/admin/courier-offers", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
-    if (!(await requireAdmin(session.user.id))) {
-      return reply.status(403).send({ success: false, error: "Forbidden" });
-    }
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
 
     const {
       days = "7",
@@ -1392,11 +1345,8 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/admin/courier-sessions", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
-    if (!(await requireAdmin(session.user.id))) {
-      return reply.status(403).send({ success: false, error: "Forbidden" });
-    }
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
 
     const { limit = "50" } = request.query as Record<string, string>;
     const historyLimit = Math.min(200, Math.max(1, Number(limit) || 50));
@@ -1456,11 +1406,8 @@ export async function adminRoutes(app: FastifyInstance) {
    * has nothing to move.
    */
   app.get("/api/admin/errands", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false, error: "Unauthorized" });
-    if (!(await requireAdmin(session.user.id))) {
-      return reply.status(403).send({ success: false, error: "Forbidden" });
-    }
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
 
     const { limit = "100", status } = request.query as Record<string, string>;
     const rowLimit = Math.min(300, Math.max(1, Number(limit) || 100));
@@ -1536,10 +1483,8 @@ export async function adminRoutes(app: FastifyInstance) {
    * rather than discovering them through support tickets.
    */
   app.get("/api/admin/service-area", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false });
-    if (!(await requireAdmin(session.user.id)))
-      return reply.status(403).send({ success: false, error: "Admin only" });
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
 
     const area = await getServiceArea();
 
@@ -1572,10 +1517,8 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.put("/api/admin/service-area", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false });
-    if (!(await requireAdmin(session.user.id)))
-      return reply.status(403).send({ success: false, error: "Admin only" });
+    const admin = await requireAdmin(request, reply, { stepUp: true });
+    if (!admin) return;
 
     const body = (request.body ?? {}) as { lat?: unknown; lon?: unknown; radiusKm?: unknown };
     const coords = parseCoordPair(body.lat, body.lon);
@@ -1594,7 +1537,7 @@ export async function adminRoutes(app: FastifyInstance) {
       center_lat: String(coords.lat),
       center_lon: String(coords.lon),
       radius_km: Math.round(radiusKm),
-      updated_by: session.user.id,
+      updated_by: admin.id,
     });
 
     // Moving the circle changes who is inside it, so every outlet is
@@ -1620,10 +1563,8 @@ export async function adminRoutes(app: FastifyInstance) {
    * permanent exemption from future ones.
    */
   app.put("/api/admin/outlet/:outletId/reachable", async (request, reply) => {
-    const session = await auth.api.getSession({ headers: toWebHeaders(request.headers) });
-    if (!session?.user) return reply.status(401).send({ success: false });
-    if (!(await requireAdmin(session.user.id)))
-      return reply.status(403).send({ success: false, error: "Admin only" });
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
 
     const { outletId } = request.params as { outletId: string };
     const id = Number(outletId);

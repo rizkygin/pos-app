@@ -17,10 +17,16 @@ function isExempt(pathname: string) {
   return MAINTENANCE_EXEMPT.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 }
 
+// The one admin page reachable before two-factor is set up — it is where it
+// gets set up. Still admin-only, and inside /dashboard/admin so it stays exempt
+// from the maintenance gate.
+const ADMIN_SECURITY_PATH = '/dashboard/admin/security';
+
 // Admin gate for /dashboard/admin/*. Decoupled from the DB: the role check goes
 // through the backend /api/me endpoint (cookie forwarded — proxy fetches
 // don't carry credentials automatically). 401 => no session => home; any
-// non-admin role => the regular dashboard.
+// non-admin role => the regular dashboard; an admin without two-factor =>
+// the enrolment page (the backend refuses their admin calls anyway).
 async function adminGate(request: NextRequest) {
   const cookie = request.headers.get('cookie') ?? '';
   const res = await fetch(`${SERVER_API_URL}/api/me`, {
@@ -35,6 +41,18 @@ async function adminGate(request: NextRequest) {
   const me = res.ok ? await res.json() : null;
   if (me?.role !== 'admin') {
     return NextResponse.redirect(new URL('/dashboard', request.url));
+  }
+
+  const { pathname } = request.nextUrl;
+  if (!me.twoFactorEnabled && pathname !== ADMIN_SECURITY_PATH) {
+    return NextResponse.redirect(new URL(ADMIN_SECURITY_PATH, request.url));
+  }
+
+  // Admin rights lapse 12 hours after sign-in (lib/admin-access.ts in the
+  // backend); the session itself lives on, so the login page is told not to
+  // bounce them back as "already signed in".
+  if (me.twoFactorEnabled && me.adminSessionExpired) {
+    return NextResponse.redirect(new URL('/login?reauth=admin', request.url));
   }
 
   return NextResponse.next();
