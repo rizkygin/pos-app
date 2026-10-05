@@ -638,6 +638,13 @@
       "when": 1791168946156,
       "tag": "0090_admin_activity",
       "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1791188742465,
+      "tag": "0091_outlet_stock_reset",
+      "breakpoints": true
     }
   ]
 }

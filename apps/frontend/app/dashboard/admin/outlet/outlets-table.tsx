@@ -5,7 +5,9 @@ import { Loader2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { DataTable } from '@/app/dashboard/reports/data-table';
 import { ORDER_FEATURES } from '@/lib/order-features';
-import { AdminOutlet, columns } from './columns';
+import { AdminOutlet, getColumns } from './columns';
+import { ResetOutletDialog } from './reset-outlet-dialog';
+import { CostFixDialog } from './cost-fix-dialog';
 import { API_URL } from '@/lib/api-url';
 
 export const OutletsTable = () => {
@@ -19,6 +21,8 @@ export const OutletsTable = () => {
   const [isOpen, setIsOpen] = useState('');
   const [minRating, setMinRating] = useState('');
   const [features, setFeatures] = useState('');
+  const [resetting, setResetting] = useState<AdminOutlet | null>(null);
+  const [costFixing, setCostFixing] = useState<AdminOutlet | null>(null);
 
   const fetchOutlets = async () => {
     setLoading(true);
@@ -49,6 +53,8 @@ export const OutletsTable = () => {
     fetchOutlets();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, limit, search, isOpen, minRating, features]);
+
+  const columns = getColumns({ onReset: setResetting, onCostFix: setCostFixing });
 
   return (
     <div className="space-y-4">
@@ -133,6 +139,16 @@ export const OutletsTable = () => {
           count={count}
           setPage={setPage}
           setLimit={() => {}}
+        />
+      )}
+
+      {costFixing && <CostFixDialog outlet={costFixing} onClose={() => setCostFixing(null)} />}
+
+      {resetting && (
+        <ResetOutletDialog
+          outlet={resetting}
+          onClose={() => setResetting(null)}
+          onDone={fetchOutlets}
         />
       )}
     </div>

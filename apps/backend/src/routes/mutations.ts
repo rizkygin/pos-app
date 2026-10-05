@@ -759,6 +759,7 @@ export async function mutationRoutes(app: FastifyInstance) {
             note: ordersTable.note,
             taxAmount: ordersTable.tax_amount,
             taxInclusive: ordersTable.tax_inclusive,
+            createdAt: ordersTable.createdAt,
           })
           .from(ordersTable)
           .where(eq(ordersTable.id, orderId))
@@ -901,7 +902,14 @@ export async function mutationRoutes(app: FastifyInstance) {
           note: `Batal POS ${orderId}`,
         });
 
-        if (!replayed) {
+        // An order older than an admin's Reset Alur Stok has no movements
+        // because the reset deleted them, not because it predates 0062. Its
+        // stock left the ledger with the reset, so there is nothing to hand
+        // back, and re-deriving it from the recipe would inflate the shelf.
+        const resetAt = access.outlet.stock_reset_at;
+        const soldBeforeReset = !!resetAt && !!order.createdAt && order.createdAt < resetAt;
+
+        if (!replayed && !soldBeforeReset) {
           const lines = await tx
             .select({
               productId: orderDetailsTable.product_id,

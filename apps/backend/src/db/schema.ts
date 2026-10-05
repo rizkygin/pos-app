@@ -342,6 +342,10 @@ export const outletsTable = pgTable('outlets', {
   // from the outlet's pin a phone may be and still send an order (0086).
   self_order_enabled: boolean('self_order_enabled').default(false).notNull(),
   self_order_radius_m: integer('self_order_radius_m').default(150).notNull(),
+  // When an admin last reset this outlet's stock flow (migration 0091,
+  // lib/outlet-reset.ts). Orders older than this have no stock movements left,
+  // so cancelling one returns no stock. NULL = never reset.
+  stock_reset_at: timestamp('stock_reset_at', { withTimezone: true }),
 
   ...timestamps,
 });

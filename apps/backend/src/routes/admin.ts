@@ -22,6 +22,7 @@ import {
   orderDetailsTable,
   usersTable,
   serviceAreaTable,
+  stockOpnameSessionsTable,
 } from "../db/schema";
 
 const OFFLINE_CUSTOMER_EMAIL = "rizkygin1@gmail.com";
@@ -40,6 +41,9 @@ import {
 const COURIER_UPLOAD_DIR = path.join(process.cwd(), "uploads", "couriers");
 const COURIER_UPLOAD_URL_PREFIX = "/uploads/couriers/";
 import { getServiceArea, recomputeCourierReachable } from "../lib/service-area";
+import { countOutletData, countStockFlow, wipeOutletData, wipeStockFlow } from "../lib/outlet-reset";
+import { applyCostFix, costGroups, previewCostFix } from "../lib/cost-fix";
+import { getSubscriptionGate, usesCostLedger } from "../lib/outlet-access";
 import { parseCoordPair } from "../lib/utils/coords";
 
 function formatTimeSlot(slot: { day: string; hour: string }) {
@@ -299,6 +303,157 @@ export async function adminRoutes(app: FastifyInstance) {
       data: rows,
       count: (countRows as any[])[0]?.total ?? 0,
     };
+  });
+
+  // ---- Reset Data (lib/outlet-reset.ts) ----
+  // Two modes: 'all' wipes every transaction of a trial outlet; 'stock' wipes
+  // only the stock ledger of a live outlet whose stock history went wrong.
+  // GET is the preview the confirm dialog shows for both; POST does one, and
+  // only when the outlet's name is typed back exactly.
+  app.get("/api/admin/outlets/:id/reset", async (request, reply) => {
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
+
+    const id = Number((request.params as { id: string }).id);
+    const [outlet] = await db
+      .select({ id: outletsTable.id, name: outletsTable.name })
+      .from(outletsTable)
+      .where(eq(outletsTable.id, id))
+      .limit(1);
+    if (!outlet) return reply.status(404).send({ success: false, error: "Outlet tidak ditemukan" });
+
+    const [counts, stock] = await Promise.all([countOutletData(outlet.id), countStockFlow(outlet.id)]);
+    return { success: true, outlet, counts, stock };
+  });
+
+  app.post("/api/admin/outlets/:id/reset", async (request, reply) => {
+    const admin = await requireAdmin(request, reply, { stepUp: true });
+    if (!admin) return;
+
+    const id = Number((request.params as { id: string }).id);
+    const { confirm_name, mode } = (request.body ?? {}) as { confirm_name?: string; mode?: string };
+    // No default: a body missing the mode must not quietly pick the bigger wipe.
+    if (mode !== "all" && mode !== "stock")
+      return reply.status(400).send({ success: false, error: "Pilih jenis reset" });
+
+    const deleted = await db.transaction(async (tx) => {
+      // Row lock: two admins pressing Reset at once run one after the other.
+      const [outlet] = await tx
+        .select({ id: outletsTable.id, name: outletsTable.name })
+        .from(outletsTable)
+        .where(eq(outletsTable.id, id))
+        .for("update");
+      if (!outlet) return null;
+      if ((confirm_name ?? "").trim() !== outlet.name.trim()) return "mismatch" as const;
+      if (mode === "all") return wipeOutletData(tx, outlet.id);
+      // An open count compares each line with "stock at counted_at", rebuilt
+      // from the very movements this deletes. Finish or cancel it first.
+      const [open] = await tx
+        .select({ id: stockOpnameSessionsTable.id })
+        .from(stockOpnameSessionsTable)
+        .where(and(eq(stockOpnameSessionsTable.outlet_id, outlet.id), eq(stockOpnameSessionsTable.status, "open")))
+        .limit(1);
+      if (open) return "opname" as const;
+      return wipeStockFlow(tx, outlet.id);
+    });
+
+    if (deleted === null) return reply.status(404).send({ success: false, error: "Outlet tidak ditemukan" });
+    if (deleted === "mismatch")
+      return reply.status(400).send({ success: false, error: "Nama outlet tidak cocok" });
+    if (deleted === "opname")
+      return reply.status(409).send({
+        success: false,
+        error: "Masih ada sesi stok opname yang berjalan di outlet ini. Selesaikan atau batalkan dulu.",
+      });
+
+    request.log.warn({ outletId: id, adminUserId: admin.id, mode, deleted }, "admin reset outlet data");
+    return { success: true, mode, deleted };
+  });
+
+  // ---- Koreksi HPP (lib/cost-fix.ts) ----
+  // Re-cost the sales of one product that were booked at a wrong unit cost.
+  // GET lists what the outlet's sales were costed at; the preview shows what a
+  // correction changes, laba kotor per month included; POST applies it.
+  const costFixOutlet = async (id: number) => {
+    const [outlet] = await db
+      .select({ id: outletsTable.id, name: outletsTable.name, user_id: outletsTable.user_id })
+      .from(outletsTable)
+      .where(eq(outletsTable.id, id))
+      .limit(1);
+    if (!outlet) return null;
+    // Same basis the owner's laba kotor uses: on a plan without the ledger,
+    // movement costs are never read and a correction changes nothing there.
+    const ledger = usesCostLedger(await getSubscriptionGate(outlet.user_id));
+    return { ...outlet, ledger };
+  };
+  const costArgs = (q: Record<string, unknown>) => {
+    const productId = String(q.product_id ?? "");
+    const fromCost = Number(q.from_cost);
+    const toCost = Number(q.to_cost);
+    const ok =
+      productId !== "" &&
+      Number.isFinite(fromCost) &&
+      Number.isFinite(toCost) &&
+      toCost >= 0 &&
+      Math.abs(fromCost - toCost) >= 0.0001;
+    return ok ? { productId, fromCost, toCost } : null;
+  };
+
+  app.get("/api/admin/outlets/:id/cost-fix", async (request, reply) => {
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
+    const outlet = await costFixOutlet(Number((request.params as { id: string }).id));
+    if (!outlet) return reply.status(404).send({ success: false, error: "Outlet tidak ditemukan" });
+    return {
+      success: true,
+      outlet: { id: outlet.id, name: outlet.name },
+      ledger: outlet.ledger,
+      groups: await costGroups(outlet.id),
+    };
+  });
+
+  app.get("/api/admin/outlets/:id/cost-fix/preview", async (request, reply) => {
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
+    const outlet = await costFixOutlet(Number((request.params as { id: string }).id));
+    if (!outlet) return reply.status(404).send({ success: false, error: "Outlet tidak ditemukan" });
+    const args = costArgs(request.query as Record<string, unknown>);
+    if (!args) return reply.status(400).send({ success: false, error: "Biaya yang benar tidak valid" });
+    const preview = await previewCostFix(outlet.id, args.productId, args.fromCost, args.toCost, {
+      ledger: outlet.ledger,
+    });
+    return { success: true, ledger: outlet.ledger, ...preview };
+  });
+
+  app.post("/api/admin/outlets/:id/cost-fix", async (request, reply) => {
+    const admin = await requireAdmin(request, reply, { stepUp: true });
+    if (!admin) return;
+    const outlet = await costFixOutlet(Number((request.params as { id: string }).id));
+    if (!outlet) return reply.status(404).send({ success: false, error: "Outlet tidak ditemukan" });
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const args = costArgs(body);
+    if (!args) return reply.status(400).send({ success: false, error: "Biaya yang benar tidak valid" });
+
+    const [product] = await db
+      .select({ id: productsTable.id, name: productsTable.product_name, unit: productsTable.unit })
+      .from(productsTable)
+      .where(and(eq(productsTable.id, args.productId), eq(productsTable.outlet_id, outlet.id)))
+      .limit(1);
+    if (!product) return reply.status(404).send({ success: false, error: "Produk tidak ditemukan" });
+
+    const result = await db.transaction((tx) =>
+      applyCostFix(tx, {
+        outletId: outlet.id,
+        ...args,
+        setHpp: body.set_hpp === true,
+        note: `Koreksi HPP admin: ${args.fromCost} → ${args.toCost}/${product.unit}`.slice(0, 255),
+      }),
+    );
+    if (result.updated === 0)
+      return reply.status(409).send({ success: false, error: "Tidak ada penjualan dengan biaya itu lagi" });
+
+    request.log.warn({ outletId: outlet.id, adminUserId: admin.id, ...args, ...result }, "admin cost fix");
+    return { success: true, ...result };
   });
 
   app.get("/api/admin/product-ratings", async (request, reply) => {

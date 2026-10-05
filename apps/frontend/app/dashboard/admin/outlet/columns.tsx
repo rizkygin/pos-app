@@ -1,7 +1,7 @@
 'use client';
 
 import { Column, ColumnDef } from '@tanstack/react-table';
-import { ArrowUpDown, Star } from 'lucide-react';
+import { ArrowUpDown, RotateCcw, Star, Wrench } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { resolveOutletImage, isBackendImage } from '@/lib/image-src';
@@ -38,7 +38,12 @@ const sortableHeader = (label: string) =>
     );
   };
 
-export const columns: ColumnDef<AdminOutlet>[] = [
+export type OutletHandlers = {
+  onReset: (outlet: AdminOutlet) => void;
+  onCostFix: (outlet: AdminOutlet) => void;
+};
+
+export const getColumns = (handlers: OutletHandlers): ColumnDef<AdminOutlet>[] => [
   {
     accessorKey: 'avatar',
     header: '',
@@ -143,5 +148,32 @@ export const columns: ColumnDef<AdminOutlet>[] = [
         day: 'numeric',
       });
     },
+  },
+  {
+    id: 'actions',
+    header: 'Aksi',
+    cell: ({ row }) => (
+      <div className="flex items-center gap-1">
+        <Button
+          variant="ghost"
+          size="sm"
+          title="Koreksi biaya per unit yang salah tercatat di penjualan satu produk"
+          onClick={() => handlers.onCostFix(row.original)}
+        >
+          <Wrench className="h-4 w-4" />
+          Koreksi HPP
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          title="Reset alur stok atau semua transaksi outlet ini"
+          className="text-rose-600 hover:text-rose-600"
+          onClick={() => handlers.onReset(row.original)}
+        >
+          <RotateCcw className="h-4 w-4" />
+          Reset
+        </Button>
+      </div>
+    ),
   },
 ];
