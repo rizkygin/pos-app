@@ -20,6 +20,7 @@ import {
   Copy,
   Check,
   Search,
+  Archive,
   AlertTriangle,
   Barcode,
   Truck,
@@ -44,7 +45,6 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import {
   addProductAction,
   uploadImage,
-  deleteProductAction,
   updateProductAction,
   removeImage,
   checkImageUrlAccessable,
@@ -56,6 +56,8 @@ import { DashboardHeader } from '@/components/dashboard-header';
 import { RecipeEditor } from './recipe-editor';
 import { AddonEditor } from './addon-editor';
 import { VariantEditor } from './variant-editor';
+import { DeleteProductDialog } from './delete-product-dialog';
+import { ArchivedProducts, type ArchivedProduct } from './archived-products';
 import { ORDER_FEATURES } from '@/lib/order-features';
 import { resolveProductImage, isBackendImage } from '@/lib/image-src';
 import { API_URL } from '@/lib/api-url';
@@ -111,6 +113,8 @@ const rupiah = (v: number | string) =>
 type ProductsManagerProps = {
   outletId: number;
   initialProducts: Product[];
+  // The Arsip tab (GET /api/products/archived); kind is resolved here.
+  initialArchived?: Omit<ArchivedProduct, 'kind'>[];
   gate?: { features: Record<string, unknown> } | null;
 };
 
@@ -507,6 +511,7 @@ function MoneyInput({
 export const ProductsManager = ({
   outletId,
   initialProducts,
+  initialArchived = [],
   gate,
 }: ProductsManagerProps) => {
   const router = useRouter();
@@ -530,6 +535,8 @@ export const ProductsManager = ({
   );
   const [selectedCategory, setSelectedCategory] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // The product whose delete is being confirmed (DeleteProductDialog).
+  const [deletingProduct, setDeletingProduct] = useState<{ id: string; product_name: string } | null>(null);
   const [hasDiscount, setHasDiscount] = useState(false);
   const [imageUrl, setImageUrl] = useState<string>('');
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
@@ -582,6 +589,14 @@ export const ProductsManager = ({
     (variantFilter !== 'all' ? 1 : 0) +
     (groupFilter !== 'all' ? 1 : 0);
   const [tab, setTab] = useState<TableKind>('produk');
+  // The Arsip tab sits beside the three shelves but is not one of them: its
+  // rows are not Products (no status switch, no edit), so it renders its own
+  // list instead of going through byKind/filteredProducts.
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const archived = useMemo(
+    () => initialArchived.map((p) => ({ ...p, kind: kindOf(p.category ?? '') })),
+    [initialArchived],
+  );
 
   // ── Purchasable toggle ────────────────────────────────────────────────────
   // `isAvailable` is the owner's "customers may buy this right now" switch: the
@@ -1591,18 +1606,6 @@ export const ProductsManager = ({
     setView('form');
   };
 
-  const handleDelete = async (id: string) => {
-    if (!window.confirm('Yakin pian handak hapus produk ini?')) return;
-    setIsSubmitting(true);
-    const result = await deleteProductAction(id);
-    setIsSubmitting(false);
-    if (!result.success) {
-      alert(result.message);
-      return;
-    }
-    // Re-run the server component so the deleted product drops off the list.
-    router.refresh();
-  };
 
   // ── Photo ─────────────────────────────────────────────────────────────────
 
@@ -2673,7 +2676,7 @@ export const ProductsManager = ({
             </div>
           )}
 
-          {initialProducts.length === 0 ? (
+          {initialProducts.length === 0 && !archiveOpen ? (
             <div className="flex flex-col items-center justify-center p-12 border-2 border-dashed rounded-3xl bg-muted/10">
               <div className="p-4 rounded-full bg-blue-50 text-blue-500 mb-4">
                 <Package className="h-8 w-8" />
@@ -2691,6 +2694,16 @@ export const ProductsManager = ({
               >
                 Tambah Produk Pertama
               </Button>
+              {archived.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setArchiveOpen(true)}
+                  className="mt-3 inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground"
+                >
+                  <Archive className="h-4 w-4" />
+                  Lihat arsip ({archived.length})
+                </button>
+              )}
             </div>
           ) : (
             <>
@@ -2712,14 +2725,17 @@ export const ProductsManager = ({
                 {TABLE_TABS.filter(
                   (t) => t.id === 'produk' || bahanAddonsAllowed,
                 ).map((t) => {
-                  const active = tab === t.id;
+                  const active = !archiveOpen && tab === t.id;
                   return (
                     <button
                       key={t.id}
                       type="button"
                       role="tab"
                       aria-selected={active}
-                      onClick={() => setTab(t.id)}
+                      onClick={() => {
+                        setTab(t.id);
+                        setArchiveOpen(false);
+                      }}
                       // min-w-0 is what actually lets these shrink: a flex item
                       // refuses to go below its content width without it, so at
                       // 390px the three tabs overran the bar and clipped
@@ -2752,7 +2768,50 @@ export const ProductsManager = ({
                     </button>
                   );
                 })}
+                {/* Last and quieter: somewhere to look things up, not a shelf
+                    you work from every day. */}
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={archiveOpen}
+                  onClick={() => setArchiveOpen(true)}
+                  className={`flex min-w-0 flex-auto items-center justify-center gap-1 rounded-xl px-2 py-2 text-xs font-bold transition-colors sm:gap-1.5 sm:px-3 sm:text-sm ${
+                    archiveOpen
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground/80 hover:text-foreground'
+                  }`}
+                >
+                  <Archive className="hidden h-4 w-4 shrink-0 sm:block" />
+                  <span className="shrink-0 whitespace-nowrap">Arsip</span>
+                  <span
+                    className={`shrink-0 rounded-full px-1 py-0.5 text-[11px] tabular-nums sm:px-1.5 ${
+                      archiveOpen
+                        ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-400'
+                        : 'bg-muted text-muted-foreground'
+                    }`}
+                  >
+                    {archived.length}
+                  </span>
+                </button>
               </div>
+
+              {archiveOpen ? (
+                <ArchivedProducts
+                  products={archived}
+                  onRestored={() => router.refresh()}
+                  onShowProduct={(kind, name) => {
+                    // Straight to the restored row: its shelf, searched by
+                    // name, with any Produk filter that could hide it cleared.
+                    setTab(kind === 'produk' || bahanAddonsAllowed ? kind : 'produk');
+                    setCategoryFilter('all');
+                    setVariantFilter('all');
+                    setGroupFilter('all');
+                    setSearch(name);
+                    setArchiveOpen(false);
+                  }}
+                />
+              ) : (
+              <>
 
               {/* What the two internal shelves are, said once. Both are easy to
                   mistake for a menu the customer can see. */}
@@ -3266,11 +3325,14 @@ export const ProductsManager = ({
                                     <Edit className="h-4 w-4" />
                                   )}
                                 </button>
+                                {/* Set apart from Edit so a slightly-off tap
+                                    on Edit does not land here. */}
                                 <button
-                                  onClick={() => handleDelete(product.id)}
+                                  onClick={() => setDeletingProduct(product)}
                                   disabled={isSubmitting}
-                                  className="p-1.5 rounded-lg bg-muted/60 text-muted-foreground hover:text-rose-600 hover:bg-rose-50 transition-colors disabled:opacity-50"
+                                  className="ml-2 p-1.5 rounded-lg bg-muted/60 text-muted-foreground hover:text-rose-600 hover:bg-rose-50 transition-colors disabled:opacity-50"
                                   aria-label="Hapus produk"
+                                  title="Hapus produk"
                                 >
                                   <Trash2 className="h-4 w-4" />
                                 </button>
@@ -3294,9 +3356,23 @@ export const ProductsManager = ({
                 </div>
               </div>
               )}
+              </>
+              )}
             </>
           )}
         </>
+      )}
+
+      {deletingProduct && (
+        <DeleteProductDialog
+          product={deletingProduct}
+          onClose={() => setDeletingProduct(null)}
+          onDeleted={() => {
+            setDeletingProduct(null);
+            // Re-run the server component so the deleted product drops off the list.
+            router.refresh();
+          }}
+        />
       )}
 
       {view === 'form' && (

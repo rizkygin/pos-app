@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { and, asc, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import path from "node:path";
 import fs from "node:fs/promises";
@@ -19,6 +19,10 @@ import {
   addonGroupsTable,
   addonGroupOptionsTable,
   productAddonGroupsTable,
+  stockOpnameLinesTable,
+  stockOpnameSessionsTable,
+  tableSessionLinesTable,
+  tableSessionsTable,
 } from "../db/schema";
 import { auth } from "../auth";
 import { toWebHeaders } from "../lib/web-headers";
@@ -219,9 +223,96 @@ async function productIsReferenced(productId: string): Promise<boolean> {
     db.select({ id: ratingsTable.id }).from(ratingsTable).where(eq(ratingsTable.product_id, productId)).limit(1),
     db.select({ id: productAdsTable.id }).from(productAdsTable).where(eq(productAdsTable.product_id, productId)).limit(1),
     db.select({ id: recipeItemsTable.id }).from(recipeItemsTable).where(eq(recipeItemsTable.ingredient_id, productId)).limit(1),
+    // A bahan counted in an opname with no difference (or skipped) leaves no
+    // stock movement, only this line. Same for a dish on a cancelled table
+    // bill. Both are foreign keys, so a hard delete would be refused.
+    db.select({ id: stockOpnameLinesTable.id }).from(stockOpnameLinesTable).where(eq(stockOpnameLinesTable.product_id, productId)).limit(1),
+    db.select({ id: tableSessionLinesTable.id }).from(tableSessionLinesTable).where(eq(tableSessionLinesTable.product_id, productId)).limit(1),
   ]);
   return hits.some((rows) => rows.length > 0);
 }
+
+/**
+ * Why this product cannot go at all right now, or null.
+ *
+ * Archiving is the answer for history, not for work still in progress: an
+ * open opname would post a stock adjustment for a product nobody can see, and
+ * an unpaid table bill would settle an order line for one. Add-ons on a bill
+ * live in the line's `addons` json, not in product_id, so both are checked.
+ */
+async function productDeleteBlocker(product: { id: string; product_name: string }): Promise<string | null> {
+  const [inOpenOpname, onOpenBill] = await Promise.all([
+    db
+      .select({ id: stockOpnameLinesTable.id })
+      .from(stockOpnameLinesTable)
+      .innerJoin(stockOpnameSessionsTable, eq(stockOpnameSessionsTable.id, stockOpnameLinesTable.session_id))
+      .where(and(eq(stockOpnameLinesTable.product_id, product.id), eq(stockOpnameSessionsTable.status, "open")))
+      .limit(1),
+    db
+      .select({ id: tableSessionLinesTable.id })
+      .from(tableSessionLinesTable)
+      .innerJoin(tableSessionsTable, eq(tableSessionsTable.id, tableSessionLinesTable.session_id))
+      .where(
+        and(
+          eq(tableSessionsTable.status, "open"),
+          isNull(tableSessionLinesTable.order_id),
+          or(
+            eq(tableSessionLinesTable.product_id, product.id),
+            sql`${tableSessionLinesTable.addons} @> ${JSON.stringify([{ product_id: product.id }])}::jsonb`,
+          ),
+        ),
+      )
+      .limit(1),
+  ]);
+  if (inOpenOpname.length > 0)
+    return `"${product.product_name}" sedang dihitung di stok opname yang masih berjalan. Selesaikan atau batalkan sesi opname dulu.`;
+  if (onOpenBill.length > 0)
+    return `"${product.product_name}" masih ada di bill meja yang belum dibayar. Bayar atau hapus dari bill dulu.`;
+  return null;
+}
+
+/**
+ * Everything the delete needs to know, gathered BEFORE anything is written.
+ * Shared by the delete itself and the check the confirm dialog shows, so the
+ * dialog can never promise "dihapus" for a row that will be archived.
+ */
+async function planProductDelete(productId: string, outletId: number) {
+  const [product] = await db
+    .select()
+    .from(productsTable)
+    .where(eq(productsTable.id, productId))
+    .limit(1);
+  if (!product || product.outlet_id !== outletId) return null;
+
+  // Hard-deleting the base first would null these rows' variant_of (ON DELETE
+  // set null) and leave them unfindable — as standalone products the owner
+  // never authored.
+  const variants = product.variant_of
+    ? []
+    : await db
+        .select()
+        .from(productsTable)
+        .where(
+          and(
+            eq(productsTable.variant_of, productId),
+            eq(productsTable.outlet_id, outletId),
+            isNull(productsTable.deletedAt),
+          ),
+        );
+
+  // Variants first, base last, so a failure part way through never leaves a
+  // deleted base pointing at live children.
+  const rows = [...variants, product];
+  for (const row of rows) {
+    const blocked = await productDeleteBlocker(row);
+    if (blocked) return { product, variants, rows, blocked, referenced: new Set<string>() };
+  }
+  const referenced = new Set<string>();
+  for (const row of rows) if (await productIsReferenced(row.id)) referenced.add(row.id);
+  return { product, variants, rows, blocked: null, referenced };
+}
+
+const isForeignKeyViolation = (err: any) => (err?.code ?? err?.cause?.code) === "23503";
 
 type RecipeEdges = Map<string, { ingredient_id: string; qty: number }[]>;
 
@@ -508,12 +599,14 @@ export async function productRoutes(app: FastifyInstance) {
     }
   });
 
-  // Products with history (orders, invoices, stock ledger, ratings, ads, or
-  // used as someone's recipe ingredient) are SOFT-deleted: deletedAt is set,
-  // listings hide them, but old receipts/reports keep resolving their name —
-  // deleting a product must never rewrite financial history. Only a product
-  // nothing references is hard-deleted (image file included). Its own recipe
-  // rows cascade with the row; an ingredient in use never reaches this path.
+  // Products with history (orders, invoices, stock ledger, ratings, ads, opname
+  // counts, table bills, or used as someone's recipe ingredient) are
+  // SOFT-deleted: deletedAt is set, listings hide them, but old receipts/reports
+  // keep resolving their name — deleting a product must never rewrite
+  // financial history. Only a product nothing references is hard-deleted
+  // (image file included). Its own recipe rows cascade with the row; an
+  // ingredient in use never reaches this path. Work still in progress (an open
+  // opname, an unpaid table bill) blocks the delete outright.
   //
   // A BASE PRODUCT TAKES ITS VARIANTS WITH IT. A variant is only reachable
   // through its base's picker (the POS grid shows bases), so one left behind is
@@ -521,6 +614,125 @@ export async function productRoutes(app: FastifyInstance) {
   // by anybody. Each variant is judged on its OWN history though — a Large that
   // has been sold is archived, an unsold one is deleted — because the rule
   // being protected is about the books, not about the family.
+
+  // ---- Arsip: the products a delete archived, and the way back ----
+  // Never part of /api/products/mine: the cashier, faktur and stok read that
+  // list and must not see these.
+  app.get("/api/products/archived", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, "products");
+    if (!access) return;
+    const base = alias(productsTable, "base");
+    const products = await db
+      .select({
+        id: productsTable.id,
+        product_name: productsTable.product_name,
+        category: productsTable.category,
+        image: productsTable.image,
+        price: productsTable.price,
+        buying_price: productsTable.buying_price,
+        stock: productsTable.stock,
+        unit: productsTable.unit,
+        track_stock: productsTable.track_stock,
+        barcode: productsTable.barcode,
+        variant_of: productsTable.variant_of,
+        variant_name: productsTable.variant_name,
+        base_name: base.product_name,
+        archived_at: productsTable.deletedAt,
+      })
+      .from(productsTable)
+      .leftJoin(base, eq(base.id, productsTable.variant_of))
+      .where(and(eq(productsTable.outlet_id, access.outlet.id), isNotNull(productsTable.deletedAt)))
+      .orderBy(desc(productsTable.deletedAt));
+    return reply.send({ success: true, products });
+  });
+
+  // Undo an archive: the row comes back exactly as it was (price, stock,
+  // recipe, sale status). Barcodes need no check — the unique index covers
+  // archived rows too, so nothing can have taken this one meanwhile.
+  //
+  // A variant is only reachable through its base's picker, so restoring one
+  // whose base is archived brings the base back with it. A base can bring its
+  // archived variants along when asked (with_variants).
+  app.post("/api/products/:id/restore", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, "products");
+    if (!access) return;
+    const id = (request.params as { id: string }).id;
+    const { with_variants } = (request.body ?? {}) as { with_variants?: boolean };
+
+    const [product] = await db
+      .select()
+      .from(productsTable)
+      .where(and(eq(productsTable.id, id), eq(productsTable.outlet_id, access.outlet.id)))
+      .limit(1);
+    if (!product) return reply.status(404).send({ success: false, message: "Produk tidak ditemukan" });
+    if (!product.deletedAt)
+      return reply.status(409).send({ success: false, message: "Produk ini tidak ada di arsip." });
+    if (internalCategoryBlocked(access.gate, product.category ?? undefined)) {
+      return reply.status(403).send({
+        success: false,
+        message: "Bahan dan Tambahan tidak termasuk paket Pian — upgrade paket untuk memulihkannya.",
+      });
+    }
+
+    const ids = [product.id];
+    let baseName: string | null = null;
+    let variantCount = 0;
+    if (product.variant_of) {
+      const [base] = await db
+        .select({ id: productsTable.id, product_name: productsTable.product_name, deletedAt: productsTable.deletedAt })
+        .from(productsTable)
+        .where(eq(productsTable.id, product.variant_of))
+        .limit(1);
+      if (base?.deletedAt) {
+        ids.push(base.id);
+        baseName = base.product_name;
+      }
+    } else if (with_variants) {
+      const variants = await db
+        .select({ id: productsTable.id })
+        .from(productsTable)
+        .where(
+          and(
+            eq(productsTable.variant_of, product.id),
+            eq(productsTable.outlet_id, access.outlet.id),
+            isNotNull(productsTable.deletedAt),
+          ),
+        );
+      ids.push(...variants.map((v) => v.id));
+      variantCount = variants.length;
+    }
+
+    await db
+      .update(productsTable)
+      .set({ deletedAt: null })
+      .where(and(inArray(productsTable.id, ids), eq(productsTable.outlet_id, access.outlet.id)));
+    // A restored product can bring a category feature back to the outlet.
+    await recalcOutletFeatures(access.outlet.id);
+
+    const extra = baseName
+      ? ` bersama produk induknya "${baseName}"`
+      : variantCount > 0
+        ? ` bersama ${variantCount} varian`
+        : "";
+    return reply.send({ success: true, message: `"${product.product_name}" dipulihkan${extra}.`, restored: ids.length });
+  });
+
+  // What a delete WOULD do, for the confirm dialog: blocked, archived, or
+  // deleted for good. Read-only.
+  app.get("/api/products/:id/delete-check", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, "products");
+    if (!access) return;
+    const plan = await planProductDelete((request.params as { id: string }).id, access.outlet.id);
+    if (!plan) return reply.status(404).send({ success: false, message: "Produk tidak ditemukan" });
+    return reply.send({
+      success: true,
+      name: plan.product.product_name,
+      variants: plan.variants.length,
+      outcome: plan.blocked ? "blocked" : plan.referenced.has(plan.product.id) ? "archive" : "delete",
+      message: plan.blocked,
+    });
+  });
+
   app.post("/api/products/delete", async (request, reply) => {
     const access = await requireOutletAccess(request, reply, "products");
     if (!access) return;
@@ -528,46 +740,35 @@ export async function productRoutes(app: FastifyInstance) {
       const { productId } = (request.body as { productId?: string }) ?? {};
       if (!productId) return reply.send({ success: false, message: "productId is required" });
 
-      const [product] = await db
-        .select()
-        .from(productsTable)
-        .where(eq(productsTable.id, productId))
-        .limit(1);
-      if (!product || product.outlet_id !== access.outlet.id)
-        return reply.send({ success: false, message: "Product not found" });
-
-      // Gathered BEFORE anything is written: hard-deleting the base first would
-      // null these rows' variant_of (ON DELETE set null) and leave them
-      // unfindable — as standalone products the owner never authored.
-      const variants = product.variant_of
-        ? []
-        : await db
-            .select()
-            .from(productsTable)
-            .where(
-              and(
-                eq(productsTable.variant_of, productId),
-                eq(productsTable.outlet_id, access.outlet.id),
-                isNull(productsTable.deletedAt),
-              ),
-            );
+      const plan = await planProductDelete(productId, access.outlet.id);
+      if (!plan) return reply.send({ success: false, message: "Product not found" });
+      if (plan.blocked) return reply.status(409).send({ success: false, message: plan.blocked });
 
       let archived = 0;
       let removed = 0;
       let baseArchived = false;
-      // Variants first, base last, so a failure part way through never leaves a
-      // deleted base pointing at live children.
-      for (const row of [...variants, product]) {
-        if (await productIsReferenced(row.id)) {
-          if (row.id === productId) baseArchived = true;
-          await db
-            .update(productsTable)
-            .set({ deletedAt: new Date() })
-            .where(eq(productsTable.id, row.id));
-          archived += 1;
+      const archive = async (id: string) => {
+        if (id === productId) baseArchived = true;
+        await db.update(productsTable).set({ deletedAt: new Date() }).where(eq(productsTable.id, id));
+        archived += 1;
+      };
+      for (const row of plan.rows) {
+        if (plan.referenced.has(row.id)) {
+          await archive(row.id);
           continue;
         }
-        await db.delete(productsTable).where(eq(productsTable.id, row.id));
+        try {
+          await db.delete(productsTable).where(eq(productsTable.id, row.id));
+        } catch (err) {
+          // Something productIsReferenced does not know about still points at
+          // the row (a table added later, or a sale landing between the check
+          // and the delete). The database just proved it has history, so
+          // archive it instead of failing the owner's delete.
+          if (!isForeignKeyViolation(err)) throw err;
+          app.log.warn(err, `Product ${row.id} referenced by an unchecked table; archived instead`);
+          await archive(row.id);
+          continue;
+        }
         removed += 1;
         // Unlink the image only after the row delete succeeded, so a failed
         // delete can't orphan the product from its picture. A variant inherits
@@ -598,18 +799,18 @@ export async function productRoutes(app: FastifyInstance) {
       // one that has been sold is archived even when its base is deleted
       // outright — so the variants are counted separately rather than folded
       // into a single verb that would be wrong for half of them.
-      const suffix = variants.length > 0 ? ` (termasuk ${variants.length} varian)` : "";
+      const suffix = plan.variants.length > 0 ? ` (termasuk ${plan.variants.length} varian)` : "";
       return reply.send({
         success: true,
         message: baseArchived
-          ? `Produk diarsipkan (punya riwayat penjualan)${suffix}.`
+          ? `Produk diarsipkan (punya riwayat)${suffix}.`
           : `Produk dihapus${suffix}.`,
         archived,
         removed,
       });
     } catch (error) {
       app.log.error(error, "Failed to delete product");
-      return reply.status(500).send({ success: false, message: "Failed to delete product." });
+      return reply.status(500).send({ success: false, message: "Gagal menghapus produk. Coba lagi." });
     }
   });
 
