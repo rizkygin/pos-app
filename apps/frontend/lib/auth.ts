@@ -13,7 +13,9 @@ import { SERVER_API_URL } from "@/lib/api-url";
 // redirects to `/` when there is no session (preserved contract).
 export const getSession = cache(async (): Promise<{ session: Session; user: User }> => {
   const cookie = (await headers()).get("cookie") ?? "";
-  const res = await fetch(`${SERVER_API_URL}/api/auth/get-session`, {
+  // disableRefresh: a renewal triggered from this server would send the
+  // renewed cookie here instead of to the browser (backend auth.ts, `before`).
+  const res = await fetch(`${SERVER_API_URL}/api/auth/get-session?disableRefresh=true`, {
     headers: { cookie },
     cache: "no-store",
   });

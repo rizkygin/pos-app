@@ -1,8 +1,7 @@
 import Link from "next/link";
 import Image from "next/image";
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { SERVER_API_URL } from "@/lib/api-url";
+import { probeSession } from "@/lib/session-probe";
 import {
   Store,
   Smartphone,
@@ -271,21 +270,10 @@ const SHOWCASES = [
 
 // Returning users skip the marketing page: a valid session goes straight to
 // the dashboard. Sessionless visitors (and crawlers — SEO unaffected) get the
-// landing; the cookie sniff avoids a backend round-trip for them.
-async function hasSession() {
-  const cookie = (await headers()).get("cookie") ?? "";
-  if (!cookie.includes("auth_session")) return false;
-  const res = await fetch(`${SERVER_API_URL}/api/auth/get-session`, {
-    headers: { cookie },
-    cache: "no-store",
-  }).catch(() => null);
-  if (!res?.ok) return false;
-  const data = await res.json().catch(() => null);
-  return !!data?.user;
-}
-
+// landing. A session the backend could not check right now ("unknown") also
+// goes to the dashboard, which shows a retry rather than a logged-out page.
 export default async function LandingPage() {
-  if (await hasSession()) redirect("/dashboard");
+  if ((await probeSession()) !== "signed-out") redirect("/dashboard");
   return (
     <main className="min-h-screen bg-[#0a0a0f] text-white">
       {/* SoftwareApplication JSON-LD: price-range rich result eligibility. */}

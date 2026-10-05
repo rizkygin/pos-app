@@ -86,6 +86,29 @@ export const auth = betterAuth({
     },
   },
   hooks: {
+    // Only a BROWSER's own /get-session call may renew a session.
+    //
+    // A renewal (once a day, see session.updateAge) pushes expiresAt 30 days
+    // out in the database AND re-sends the auth_session cookie with a fresh
+    // 30-day Max-Age — but the cookie only helps if it reaches the browser.
+    // Every route here calls auth.api.getSession() server-side, and the
+    // frontend's server render calls /get-session over HTTP from its own
+    // process; whichever of those ran first each day took the renewal and the
+    // new cookie was thrown away. The database said "alive" while the browser's
+    // cookie still expired 30 days after sign-in, however active the merchant
+    // was — a logout that looked random.
+    //
+    // So: in-process calls (no `request`) never renew, and the frontend server
+    // asks for ?disableRefresh=true itself (its lib/auth.ts and
+    // lib/session-probe.ts). What is left is the browser's useSession(), which
+    // keeps the renewed cookie, and the desktop cashier's boot check — that app
+    // stores the cookie VALUE itself, which a renewal does not change, so the
+    // database expiry moving is all it needs.
+    before: createAuthMiddleware(async (ctx) => {
+      if (ctx.path === "/get-session" && !ctx.request) {
+        return { context: { query: { ...(ctx.query ?? {}), disableRefresh: true } } };
+      }
+    }),
     // User after hooks run BEFORE plugin ones, so on a two-factor account's
     // password step newSession is still set here; onSessionCreated skips it.
     after: createAuthMiddleware(async (ctx) => {
