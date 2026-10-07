@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { Printer, X, CheckCircle } from "lucide-react";
+import { Printer, X, CheckCircle, Loader2 } from "lucide-react";
 import { resolveOutletImage } from "@/lib/image-src";
 import { MIXED_PAYMENT, posPaymentLabel } from "@/lib/pos-payment";
 import { SERVICE_TYPE_LABEL, type ServiceType } from "@/lib/service-type";
 import { buildOrderLabelBatch, openOrderLabelApp, type OrderLabel } from "@/lib/labelbridge";
 import { resolveReceiptSettings, type ReceiptPrintSettings } from "@/lib/receipt-settings";
-import { isAndroid } from "@/lib/escpos";
+import { base64ToBytes, printDirect, printErrorMessage, resolvePrintRoute, warmDirectPrinter } from "@/lib/printer-device";
 import QRCode from "react-qr-code";
 import qrcode from "qrcode-generator";
 
@@ -412,6 +412,23 @@ async function buildLogoEscposBytes(src: string, paper: PaperWidth): Promise<num
         }
     }
     return out;
+}
+
+// One raster per logo and paper width for the life of the page. The same logo
+// heads every receipt, and loading it is a network round-trip on the counter's
+// connection — paid once here, not on every Cetak.
+const logoRasterCache = new Map<string, Promise<number[]>>();
+
+function cachedLogoBytes(src: string, paper: PaperWidth): Promise<number[]> {
+    const key = `${paper}|${src}`;
+    let hit = logoRasterCache.get(key);
+    if (!hit) {
+        hit = buildLogoEscposBytes(src, paper);
+        logoRasterCache.set(key, hit);
+        // A failed load is tried again next time, not remembered.
+        hit.catch(() => logoRasterCache.delete(key));
+    }
+    return hit;
 }
 
 // Largest the QR raster may be, in dots (square). On 58mm it matches
@@ -946,6 +963,17 @@ export function ReceiptModal({ data, onClose, heading = "Pesanan Berhasil!", var
         } catch {}
     };
 
+    // Do the slow parts while the cashier is still reading the screen, not
+    // after Cetak: open the Bluetooth link (held only a couple of seconds — see
+    // webserial-printer), and rasterize the logo (kept for the page).
+    useEffect(() => {
+        warmDirectPrinter();
+    }, []);
+    useEffect(() => {
+        if (isKitchen || !logoSrc || resolvePrintRoute() === "dialog") return;
+        cachedLogoBytes(logoSrc, paperWidth).catch(() => {});
+    }, [isKitchen, logoSrc, paperWidth]);
+
     // Desktop/iOS fallback: a self-contained, thermal-sized receipt built from
     // the data (NOT from the Tailwind-styled modal markup, which wouldn't carry
     // over to the print window). Monospace; auto-prints then closes. Returns
@@ -1192,43 +1220,61 @@ export function ReceiptModal({ data, onClose, heading = "Pesanan Berhasil!", var
         window.location.href = thermalBridgeUrl;
     };
 
+    // The route is this device's Pengaturan → Printer pick (lib/printer-device).
     // Android: hand the raw ESC/POS bytes to ThermalBridge
     // (thermalbridge://print?data=<base64url>, back=1 returns to the browser
     // after printing) or RawBT (rawbt:base64,<base64>) — either relays them to
-    // the paired Bluetooth/USB thermal printer. Other platforms have no such
-    // handler, so use the browser print dialog. Resolves to whether the job was
-    // handed off — a blocked popup is the one way it isn't.
+    // the paired Bluetooth/USB thermal printer. Bluetooth/USB: the same bytes
+    // straight from the browser to the printer, no dialog. Dialog: the browser
+    // print window. Resolves to whether the job was handed off — a blocked
+    // popup or a printer that didn't answer is how it isn't.
     const handlePrint = async (): Promise<boolean> => {
-        if (isAndroid()) {
+        const route = resolvePrintRoute();
+        if (route === "dialog") return isKitchen ? printKitchenViaBrowser() : printViaBrowser();
+
+        let b64: string;
+        if (isKitchen) {
             // Kitchen ticket carries no logo, so it skips the raster step entirely.
-            if (isKitchen) {
-                const b64 = buildKitchenEscposBase64(data, paperWidth);
-                const b64url = b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-                openPrintApp(`thermalbridge://print?back=1&data=${b64url}`, `rawbt:base64,${b64}`);
-                return true;
-            }
+            b64 = buildKitchenEscposBase64(data, paperWidth);
+        } else {
             let logoBytes: number[] = [];
             if (logoSrc) {
                 try {
-                    logoBytes = await buildLogoEscposBytes(logoSrc, paperWidth);
+                    // Usually already built — see the warm-up effect above.
+                    logoBytes = await cachedLogoBytes(logoSrc, paperWidth);
                 } catch {
                     // Logo unavailable (load/CORS failure) — print without it.
                 }
             }
-            const b64 = buildReceiptEscposBase64(data, paperWidth, logoBytes);
+            b64 = buildReceiptEscposBase64(data, paperWidth, logoBytes);
+        }
+
+        if (route === "android") {
             // base64url: query-string safe ("+" would decode to a space).
             const b64url = b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
             openPrintApp(`thermalbridge://print?back=1&data=${b64url}`, `rawbt:base64,${b64}`);
             return true;
         }
-        return isKitchen ? printKitchenViaBrowser() : printViaBrowser();
+        try {
+            await printDirect(route, base64ToBytes(b64));
+            return true;
+        } catch (e) {
+            alert(printErrorMessage(e));
+            return false;
+        }
     };
+
+    // A direct print holds the button while the printer connects (a Bluetooth
+    // link takes a second or two), so a second tap can't queue a second copy.
+    const [printing, setPrinting] = useState(false);
 
     // With a destination, a printed receipt is done with and files itself away
     // (it can be reprinted from there). Without one, the modal stays up as it
     // always has, ready for a second copy.
     const printAndFile = async () => {
-        const handedOff = await handlePrint();
+        if (printing) return;
+        setPrinting(true);
+        const handedOff = await handlePrint().finally(() => setPrinting(false));
         if (handedOff) onPrinted?.();
         if (handedOff && flyToRef) flyAway();
     };
@@ -1384,10 +1430,11 @@ export function ReceiptModal({ data, onClose, heading = "Pesanan Berhasil!", var
                     )}
                     <button
                         onClick={printAndFile}
-                        className="flex-1 h-11 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm flex items-center justify-center gap-2 transition-colors"
+                        disabled={printing}
+                        className="flex-1 h-11 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm flex items-center justify-center gap-2 transition-colors disabled:opacity-70"
                     >
-                        <Printer className="h-4 w-4" />
-                        Cetak
+                        {printing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />}
+                        {printing ? "Mencetak…" : "Cetak"}
                     </button>
                 </div>
             </div>

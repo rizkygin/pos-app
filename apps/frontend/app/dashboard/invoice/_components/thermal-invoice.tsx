@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Receipt, Ruler, Usb, Loader2 } from "lucide-react";
 import { resolveOutletImage } from "@/lib/image-src";
-import { isAndroid as isAndroidDevice } from "@/lib/escpos";
+import { printDirect, printErrorMessage, usePrintRoute } from "@/lib/printer-device";
 import {
   forgetUsbPrinter,
   getPairedPrinter,
@@ -689,7 +689,10 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
     }
   };
 
-  const isAndroid = isAndroidDevice();
+  // This device's Pengaturan → Printer pick. "dialog" on the server render.
+  const route = usePrintRoute();
+  // Bluetooth/USB picked in Pengaturan: the thermal row prints straight to it.
+  const direct = route === "bluetooth" || route === "usb";
   // Resolved after mount: `isSecureContext`/`navigator.usb` don't exist during
   // SSR, and rendering the button on the server would hydrate-mismatch.
   const [usbAvailable, setUsbAvailable] = useState(false);
@@ -700,10 +703,14 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
   // its own to have a user gesture to open on.
   const [offerAllDevices, setOfferAllDevices] = useState(false);
 
+  // The menu's own USB rows only offer themselves where the device hasn't
+  // picked a printer: Android already has ThermalBridge/RawBT, and a device set
+  // up in Pengaturan prints there from the thermal row — a second raw path
+  // would only be a way to get it wrong.
+  const legacyUsb = usbAvailable && route === "dialog";
+
   useEffect(() => {
-    // Android already has ThermalBridge/RawBT; a second raw path there would
-    // only be a way to get it wrong.
-    if (isAndroid || !isWebUsbSupported()) return;
+    if (route !== "dialog" || !isWebUsbSupported()) return;
     let live = true;
     // Both flags are set from the same async callback: enumeration is the only
     // thing that decides whether the button reads "Hubungkan" or "Cetak", and
@@ -718,7 +725,7 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
     return () => {
       live = false;
     };
-  }, [isAndroid]);
+  }, [route]);
 
   // The ESC/POS byte stream, logo included when it can be rasterized.
   const buildBytes = async () => {
@@ -734,9 +741,27 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
     return buildInvoiceEscposBytes(inv, paper, logoBytes, lineChars);
   };
 
+  /* Straight to the printer paired in Pengaturan → Printer. Shares the busy
+     flag with the USB rows — only one of the two is ever on screen. */
+  const runDirect = async (makeBytes: () => Promise<number[]> | number[]) => {
+    if (route !== "bluetooth" && route !== "usb") return;
+    setUsbBusy(true);
+    try {
+      await printDirect(route, await makeBytes());
+    } catch (e) {
+      alert(printErrorMessage(e));
+    } finally {
+      setUsbBusy(false);
+    }
+  };
+
   const handlePrint = async () => {
-    if (!isAndroid) {
+    if (route === "dialog") {
       printViaBrowser(inv, paper, widthMm);
+      return;
+    }
+    if (direct) {
+      await runDirect(buildBytes);
       return;
     }
     const b64 = toBase64(await buildBytes());
@@ -789,12 +814,13 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
      transport measures the wrong thing, which is the whole reason this took as
      long as it did. USB only when it is genuinely paired and working. */
   const handleRulerTest = async () => {
-    if (!isAndroid && !usbPaired) {
-      printRulerViaBrowser(paper, widthMm);
+    if (direct) {
+      await runDirect(() => buildRulerEscposBytes(paper, lineChars));
       return;
     }
-    if (usbPaired) {
-      await runUsb(() => buildRulerEscposBytes(paper, lineChars));
+    if (route === "dialog") {
+      if (legacyUsb && usbPaired) await runUsb(() => buildRulerEscposBytes(paper, lineChars));
+      else printRulerViaBrowser(paper, widthMm);
       return;
     }
     const b64 = toBase64(buildRulerEscposBytes(paper, lineChars));
@@ -825,7 +851,7 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
       {/* Two routes, two units, and a device can have both: the print dialog lays
           out in millimetres, raw ESC/POS counts characters. Each is shown only
           where it can do anything. */}
-      {!isAndroid && (
+      {route === "dialog" && (
         <div className="flex items-center justify-between gap-2 px-1">
           <span className="text-xs text-muted-foreground">Lebar cetak</span>
           <div className="flex items-center gap-1 rounded-lg border p-0.5">
@@ -849,7 +875,7 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
           </div>
         </div>
       )}
-      {(isAndroid || usbAvailable) && (
+      {(route !== "dialog" || legacyUsb) && (
         <div className="flex items-center justify-between gap-2 px-1">
           <span className="text-xs text-muted-foreground">Kolom cetak</span>
           <div className="flex items-center gap-1 rounded-lg border p-0.5">
@@ -875,13 +901,22 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
       )}
 
       <MenuRow
-        icon={<Receipt className="size-4" />}
+        icon={direct && usbBusy ? <Loader2 className="size-4 animate-spin" /> : <Receipt className="size-4" />}
         label="Struk thermal"
-        hint={isAndroid ? "Kirim ke ThermalBridge / RawBT" : "Lewat dialog cetak, kertas " + paper + "mm"}
+        hint={
+          route === "android"
+            ? "Kirim ke ThermalBridge / RawBT"
+            : route === "bluetooth"
+              ? "Langsung ke printer Bluetooth, tanpa dialog"
+              : route === "usb"
+                ? "Langsung ke printer USB, tanpa dialog"
+                : "Lewat dialog cetak, kertas " + paper + "mm"
+        }
         onClick={handlePrint}
+        disabled={direct && usbBusy}
       />
 
-      {usbAvailable && (
+      {legacyUsb && (
         <MenuRow
           icon={usbBusy ? <Loader2 className="size-4 animate-spin" /> : <Usb className="size-4" />}
           label={usbPaired ? "Cetak langsung ke USB" : "Hubungkan printer USB"}
@@ -890,7 +925,7 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
           disabled={usbBusy}
         />
       )}
-      {usbAvailable && offerAllDevices && (
+      {legacyUsb && offerAllDevices && (
         <MenuRow
           icon={<Usb className="size-4" />}
           label="Printer tidak muncul?"
@@ -906,7 +941,7 @@ export function ThermalPrintOptions({ inv }: { inv: ThermalInvoice }) {
           onClick={handleRulerTest}
           disabled={usbBusy}
       />
-      {usbAvailable && usbPaired && (
+      {legacyUsb && usbPaired && (
         <button
           onClick={async () => {
             await forgetUsbPrinter();

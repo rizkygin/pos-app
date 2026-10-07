@@ -15,6 +15,8 @@ import { getCurrentPosition, geolocationMessage, GEOLOCATION_OPTIONS } from "@/l
 import { usePushSubscription } from "@/lib/use-push-subscription";
 import { DEFAULT_SERVICE_TYPE, SERVICE_TYPES, SERVICE_TYPE_LABEL } from "@/lib/service-type";
 import { readPaperWidth } from "@/lib/escpos";
+import { usePrinterMode } from "@/lib/printer-device";
+import { PrinterSettings, PRINTER_MODE_TAG } from "./printer-settings";
 import {
     NOTE_MAX_CHARS,
     NOTE_MAX_LINES,
@@ -80,7 +82,7 @@ type TaxState = {
     label: string;
 };
 
-type SectionId = "profil" | "tag" | "lokasi" | "notifikasi" | "pajak" | "layanan" | "struk-awal" | "pesan-mandiri" | "struk";
+type SectionId = "profil" | "tag" | "lokasi" | "notifikasi" | "pajak" | "layanan" | "struk-awal" | "pesan-mandiri" | "printer" | "struk";
 
 const EMPTY_FORM: OutletForm = {
     isOpen: true,
@@ -244,6 +246,8 @@ export function OwnerSetting() {
     const [selfOrderMeta, setSelfOrderMeta] = useState<SelfOrderSettingsMeta | null>(null);
 
     const push = usePushSubscription();
+    // This device's printer pick — read here only for the nav tag.
+    const printerMode = usePrinterMode();
     const [testing, setTesting] = useState(false);
     const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
     // Empty on the server render; the browser's own answer after hydration.
@@ -428,11 +432,12 @@ export function OwnerSetting() {
                 tag: !selfOrderMeta.planAllowed ? "Max Lite" : selfOrder.enabled ? "aktif" : "mati",
             });
         }
+        items.push({ id: "printer", label: "Printer", tag: PRINTER_MODE_TAG[printerMode] });
         if (receipt) {
             items.push({ id: "struk", label: "Struk", tag: receipt.qrUrl && receipt.show.qr ? "QR" : "" });
         }
         return items;
-    }, [form.tags.length, coverage?.outside, push.state, tax, canUseTax, serviceType, preReceipt, selfOrder, selfOrderMeta, receipt]);
+    }, [form.tags.length, coverage?.outside, push.state, tax, canUseTax, serviceType, preReceipt, selfOrder, selfOrderMeta, printerMode, receipt]);
 
     const [active, setActive] = useState<SectionId>("profil");
     const headerRef = useRef<HTMLDivElement>(null);
@@ -1424,6 +1429,18 @@ export function OwnerSetting() {
                             />
                         </Section>
                     )}
+
+                    {/* ── Printer ────────────────────────────────────────────
+                        Acts on the spot rather than on Simpan, like
+                        Notifikasi: it is this device's printer, kept in this
+                        browser, not an outlet setting. */}
+                    <Section
+                        id="printer"
+                        title="Printer Perangkat Ini"
+                        desc="Disimpan di browser ini saja — atur di setiap HP atau komputer kasir. Langsung berlaku, tanpa tombol Simpan."
+                    >
+                        <PrinterSettings outletName={form.name} />
+                    </Section>
 
                     {/* ── Struk ──────────────────────────────────────────────
                         The customer receipt only; the kitchen ticket, shift

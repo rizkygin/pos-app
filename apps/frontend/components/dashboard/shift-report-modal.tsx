@@ -1,12 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { Printer, X, ClipboardCheck } from "lucide-react";
+import { Printer, X, ClipboardCheck, Loader2 } from "lucide-react";
 import {
   AUTO_PRINT_SCRIPT,
   escapeHtml,
   escposBuilder,
-  isAndroid,
   openAndroidPrintApp,
   printHtmlWindow,
   readPaperWidth,
@@ -14,6 +13,7 @@ import {
   writePaperWidth,
   type PaperWidth,
 } from "@/lib/escpos";
+import { base64ToBytes, printDirect, printErrorMessage, resolvePrintRoute } from "@/lib/printer-device";
 
 /**
  * The shift closing slip — "Laporan Penutupan Shift".
@@ -476,13 +476,29 @@ export function ShiftReportModal({ report, onClose, heading }: Props) {
     writePaperWidth(w);
   };
 
-  const handlePrint = () => {
-    if (isAndroid()) {
-      openAndroidPrintApp(buildShiftEscposBase64(report, paperWidth));
+  // Routed by this device's Pengaturan → Printer pick, like the receipt.
+  const [printing, setPrinting] = useState(false);
+  const handlePrint = async () => {
+    const route = resolvePrintRoute();
+    if (route === "dialog") {
+      if (!printHtmlWindow(buildShiftHtml(report, paperWidth))) {
+        alert("Popup diblokir. Izinkan popup untuk situs ini agar laporan bisa dicetak.");
+      }
       return;
     }
-    if (!printHtmlWindow(buildShiftHtml(report, paperWidth))) {
-      alert("Popup diblokir. Izinkan popup untuk situs ini agar laporan bisa dicetak.");
+    const b64 = buildShiftEscposBase64(report, paperWidth);
+    if (route === "android") {
+      openAndroidPrintApp(b64);
+      return;
+    }
+    if (printing) return;
+    setPrinting(true);
+    try {
+      await printDirect(route, base64ToBytes(b64));
+    } catch (e) {
+      alert(printErrorMessage(e));
+    } finally {
+      setPrinting(false);
     }
   };
 
@@ -714,10 +730,11 @@ export function ShiftReportModal({ report, onClose, heading }: Props) {
           </button>
           <button
             onClick={handlePrint}
-            className="flex-1 h-11 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm flex items-center justify-center gap-2 transition-colors"
+            disabled={printing}
+            className="flex-1 h-11 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm flex items-center justify-center gap-2 transition-colors disabled:opacity-70"
           >
-            <Printer className="h-4 w-4" />
-            Cetak
+            {printing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />}
+            {printing ? "Mencetak…" : "Cetak"}
           </button>
         </div>
       </div>
