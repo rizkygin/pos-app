@@ -181,6 +181,13 @@ export type Slip = {
 const lineValue = (l: PrintLine) => l.price + l.addons.reduce((n, a) => n + a.price * a.qty, 0);
 
 /**
+ * The name a printed line and a sold line are matched on. parsePrintLine trims
+ * the printed name, but product_name is stored as typed — "Chocolate " with a
+ * trailing space never matched its own slip, so every sale of it read as short.
+ */
+const itemKey = (name: string) => name.trim();
+
+/**
  * The slips printed in [from, to), one entry per slip rather than per press:
  * reprints of the same cart (same tab or table bill, same lines, same sale)
  * fold into one with a count, so an unpaid amount is never counted twice.
@@ -294,7 +301,8 @@ export async function printLogReport(outletId: number, from: Date, to: Date) {
     for (const d of details) {
       if (!d.orderId) continue;
       const m = charged.get(d.orderId) ?? new Map<string, number>();
-      m.set(d.name, (m.get(d.name) ?? 0) + Number(d.qty));
+      const name = itemKey(d.name);
+      m.set(name, (m.get(name) ?? 0) + Number(d.qty));
       charged.set(d.orderId, m);
     }
   }
@@ -337,9 +345,10 @@ export async function printLogReport(outletId: number, from: Date, to: Date) {
       }
       const printed = new Map<string, { qty: number; value: number }>();
       for (const l of lines) {
-        const p = printed.get(l.name) ?? { qty: 0, value: lineValue(l) };
+        const name = itemKey(l.name);
+        const p = printed.get(name) ?? { qty: 0, value: lineValue(l) };
         p.qty += l.qty;
-        printed.set(l.name, p);
+        printed.set(name, p);
       }
       for (const [name, p] of printed) {
         const short = p.qty - (sale.get(name) ?? 0);
