@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { and, count, eq, inArray, isNull } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNull, lt } from "drizzle-orm";
 import { db } from "../db";
 import {
   productsTable,
@@ -9,6 +9,15 @@ import {
 } from "../db/schema";
 import { requireOutletAccess } from "../lib/outlet-access";
 import { HttpError } from "../lib/tables";
+import {
+  opnameSheet,
+  SESSION_STATUSES,
+  sessionCards,
+  SHEET_FILTERS,
+  sheetPage,
+  type SessionStatus,
+  type SheetFilter,
+} from "../lib/opname-sheet";
 import {
   MAX_BACKDATE_DAYS,
   REASON_CODES,
@@ -213,6 +222,18 @@ async function sessionView(session: Session) {
   };
 }
 
+/**
+ * `?light=1`: the Android app's answers. Instead of the whole session (every
+ * line, recomputed), the rows a call changed and the counts around them; the
+ * sheet itself comes a page at a time from GET /:id/sheet.
+ */
+const isLight = (request: FastifyRequest) => (request.query as { light?: string } | undefined)?.light === "1";
+
+function clampInt(raw: unknown, min: number, max: number, fallback: number) {
+  const n = Math.trunc(Number(raw));
+  return Number.isFinite(n) && n >= min ? Math.min(n, max) : fallback;
+}
+
 async function openSession(outletId: number): Promise<Session | null> {
   const [s] = await db
     .select()
@@ -232,6 +253,45 @@ export async function stockOpnameRoutes(app: FastifyInstance) {
     return { success: true, session: s ? await sessionView(s) : null };
   });
 
+  // Every session of the outlet, newest first, a page at a time: the Android
+  // app's Riwayat Opname. What each one counted, and for a finished one what it
+  // booked (lib/opname-sheet.ts sessionCards). A session opens as a sheet from
+  // GET /:id/sheet, which shows a closed one as the record it is.
+  //   status  open | finished | cancelled; anything else is all of them
+  //   cursor  the last id of the previous page; limit 1–50, default 20
+  app.get("/api/stock/opname-sessions", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, STOCK);
+    if (!access) return;
+    return handle(reply, async () => {
+      const query = request.query as { status?: string; cursor?: string; limit?: string };
+      const status = SESSION_STATUSES.includes(query.status as SessionStatus) ? (query.status as SessionStatus) : null;
+      const cursor = query.cursor ? Number(query.cursor) : null;
+      if (cursor !== null && (!Number.isInteger(cursor) || cursor < 1)) throw new HttpError(400, "Cursor tidak valid");
+      const limit = clampInt(query.limit, 1, 50, 20);
+      const rows = await db
+        .select()
+        .from(stockOpnameSessionsTable)
+        .where(
+          and(
+            eq(stockOpnameSessionsTable.outlet_id, access.outlet.id),
+            status ? eq(stockOpnameSessionsTable.status, status) : undefined,
+            cursor ? lt(stockOpnameSessionsTable.id, cursor) : undefined,
+          ),
+        )
+        // Ids are handed out as sessions start, so this is newest first, and a
+        // cursor that cannot skip or repeat one.
+        .orderBy(desc(stockOpnameSessionsTable.id))
+        .limit(limit + 1);
+      const more = rows.length > limit;
+      const page = more ? rows.slice(0, limit) : rows;
+      return {
+        success: true,
+        data: await sessionCards(db, page),
+        next_cursor: more ? String(page[page.length - 1].id) : null,
+      };
+    });
+  });
+
   // Start a session — or return the one already open, so a second device
   // pressing the same button joins it instead of failing.
   app.post("/api/stock/opname-sessions", async (request, reply) => {
@@ -240,19 +300,22 @@ export async function stockOpnameRoutes(app: FastifyInstance) {
     const note = String((request.body as { note?: unknown } | null)?.note ?? "")
       .trim()
       .slice(0, 255);
+    const light = isLight(request);
+    const view = async (s: Session) =>
+      light ? (await opnameSheet(db, s, null)).header : await sessionView(s);
     const existing = await openSession(access.outlet.id);
-    if (existing) return { success: true, session: await sessionView(existing) };
+    if (existing) return { success: true, session: await view(existing) };
     try {
       const [s] = await db
         .insert(stockOpnameSessionsTable)
         .values({ outlet_id: access.outlet.id, note, started_by: access.userId })
         .returning();
-      return { success: true, session: await sessionView(s) };
+      return { success: true, session: await view(s) };
     } catch (err: any) {
       // Lost a race with another device: the partial unique index kept it to one.
       if ((err?.code ?? err?.cause?.code) === "23505") {
         const s = await openSession(access.outlet.id);
-        if (s) return { success: true, session: await sessionView(s) };
+        if (s) return { success: true, session: await view(s) };
       }
       throw err;
     }
@@ -272,6 +335,7 @@ export async function stockOpnameRoutes(app: FastifyInstance) {
         .set({ note })
         .where(eq(stockOpnameSessionsTable.id, id))
         .returning();
+      if (isLight(request)) return { success: true, session: (await opnameSheet(db, s, null)).header };
       return { success: true, session: await sessionView(s) };
     });
   });
@@ -392,6 +456,16 @@ export async function stockOpnameRoutes(app: FastifyInstance) {
       });
 
       const s = await loadSession(db, access.outlet.id, id);
+      if (isLight(request)) {
+        const saved = new Set(items.map((i) => i.product_id));
+        const sheet = await opnameSheet(db, s, body.counted_at ? countedAt : null);
+        return {
+          success: true,
+          rejected,
+          rows: sheet.rows.filter((r) => saved.has(r.productId)),
+          summary: sheet.summary,
+        };
+      }
       return { success: true, session: await sessionView(s), rejected };
     });
   });
@@ -407,6 +481,10 @@ export async function stockOpnameRoutes(app: FastifyInstance) {
       await db
         .delete(stockOpnameLinesTable)
         .where(and(eq(stockOpnameLinesTable.session_id, id), eq(stockOpnameLinesTable.product_id, productId)));
+      if (isLight(request)) {
+        const sheet = await opnameSheet(db, s, null);
+        return { success: true, row: sheet.rows.find((r) => r.productId === productId) ?? null, summary: sheet.summary };
+      }
       return { success: true, session: await sessionView(s) };
     });
   });
@@ -540,6 +618,40 @@ export async function stockOpnameRoutes(app: FastifyInstance) {
         .set({ status: "cancelled", finished_at: new Date(), finished_by: access.userId })
         .where(eq(stockOpnameSessionsTable.id, id));
       return { success: true };
+    });
+  });
+
+  // The session as a count sheet, a page at a time (lib/opname-sheet.ts): the
+  // Android app's view of it, where the web page loads everything at once.
+  //   q       name or code contains, any case
+  //   code    exactly this code (a scanned barcode), any case
+  //   filter  all | todo | done | diff | major | minor | ok | skipped
+  //   at      ISO time a count is being typed for ("Waktu lain"); pending rows
+  //           are then compared with the stock at that moment
+  //   page    from 1; limit 1–100, default 30
+  app.get("/api/stock/opname-sessions/:id/sheet", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, STOCK);
+    if (!access) return;
+    return handle(reply, async () => {
+      const id = sessionParam(request);
+      const query = request.query as { q?: string; code?: string; filter?: string; at?: string; page?: string; limit?: string };
+      const session = await loadSession(db, access.outlet.id, id);
+      const at = query.at ? parseCountedAt(query.at) : null;
+      const filter: SheetFilter = SHEET_FILTERS.includes(query.filter as SheetFilter) ? (query.filter as SheetFilter) : "all";
+      const page = clampInt(query.page, 1, 1_000_000, 1);
+      const limit = clampInt(query.limit, 1, 100, 30);
+      const sheet = await opnameSheet(db, session, at);
+      const code = (query.code ?? "").trim().toLowerCase();
+      const rows = code ? sheet.rows.filter((r) => (r.code ?? "").trim().toLowerCase() === code) : sheet.rows;
+      return {
+        success: true,
+        session: sheet.header,
+        summary: sheet.summary,
+        at: at ? at.toISOString() : null,
+        page,
+        limit,
+        ...sheetPage(rows, { q: query.q ?? "", filter, page, limit }),
+      };
     });
   });
 

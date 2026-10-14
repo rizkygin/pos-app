@@ -3,6 +3,7 @@ import {
   and,
   eq,
   desc,
+  asc,
   isNull,
   sql,
   gte,
@@ -29,6 +30,9 @@ import {
   cashInDetailTable,
   usersTable,
   menuGroupsTable,
+  recipeItemsTable,
+  stockOpnameSessionsTable,
+  stockOpnameLinesTable,
   INVOICE_PAYMENT_METHOD,
 } from "../db/schema";
 import { auth } from "../auth";
@@ -784,15 +788,22 @@ export async function invoiceRoutes(app: FastifyInstance) {
   // overdue invoices (billed, unsettled, due date passed). The response also
   // carries the outlet-wide late aggregates (count + outstanding) so the
   // client's warning banner doesn't depend on which page/filter is loaded.
+  //
+  // For the Android app: `status=open` is every billed, unsettled invoice
+  // (posted + partial, "Belum lunas"), and `summary=1` adds the chip counts
+  // (per status, for the search as typed) and the outlet-wide receivable
+  // (piutang). Each row also previews its first lines (`item_names`,
+  // `items_count`), so a card can say what was sold without opening it.
   app.get("/api/sales-invoices", async (request, reply) => {
     const outlet = await getOwnerOutlet(request, reply, "salesInvoice");
     if (!outlet) return;
-    const { status, q, late, page, limit } = request.query as {
+    const { status, q, late, page, limit, summary } = request.query as {
       status?: string;
       q?: string;
       late?: string;
       page?: string;
       limit?: string;
+      summary?: string;
     };
     const pageN = Math.max(1, Number(page) || 1);
     const limitN = Math.min(100, Math.max(1, Number(limit) || 10));
@@ -809,21 +820,25 @@ export async function invoiceRoutes(app: FastifyInstance) {
       eq(invoicesTable.type, "sales"),
       isNull(invoicesTable.deletedAt),
     ];
+    const searchCond = q?.trim()
+      ? or(
+          ilike(invoicesTable.number, `%${q.trim()}%`),
+          ilike(invoicesTable.party_name, `%${q.trim()}%`),
+        )
+      : undefined;
     const conds = [
       ...baseConds,
-      status && status !== "all"
-        ? eq(invoicesTable.status, status as "draft" | "posted" | "partial" | "paid" | "void")
-        : undefined,
-      q?.trim()
-        ? or(
-            ilike(invoicesTable.number, `%${q.trim()}%`),
-            ilike(invoicesTable.party_name, `%${q.trim()}%`),
-          )
-        : undefined,
+      status === "open"
+        ? inArray(invoicesTable.status, ["posted", "partial"])
+        : status && status !== "all"
+          ? eq(invoicesTable.status, status as "draft" | "posted" | "partial" | "paid" | "void")
+          : undefined,
+      searchCond,
       late === "1" || late === "true" ? lateCond : undefined,
     ];
 
-    const [rows, [{ n: count }], [lateAgg]] = await Promise.all([
+    const wantSummary = summary === "1" || summary === "true";
+    const [rows, [{ n: count }], [lateAgg], statusCounts, openAgg] = await Promise.all([
       db
         .select({
           id: invoicesTable.id,
@@ -835,6 +850,8 @@ export async function invoiceRoutes(app: FastifyInstance) {
           total: invoicesTable.total,
           amount_paid: invoicesTable.amount_paid,
           created_by_name: usersTable.name,
+          items_count: sql<number>`(select count(*)::int from invoice_items ii where ii.invoice_id = ${invoicesTable.id})`,
+          item_names: sql<string[] | null>`(select array_agg(f.description order by f.id) from (select ii.description, ii.id from invoice_items ii where ii.invoice_id = ${invoicesTable.id} order by ii.id limit 3) f)`,
         })
         .from(invoicesTable)
         .leftJoin(usersTable, eq(usersTable.id, invoicesTable.created_by))
@@ -853,14 +870,250 @@ export async function invoiceRoutes(app: FastifyInstance) {
         })
         .from(invoicesTable)
         .where(and(...baseConds, lateCond)),
+      wantSummary
+        ? db
+            .select({
+              status: invoicesTable.status,
+              n: sql<number>`count(*)::int`,
+              late: sql<number>`(count(*) filter (where ${lateCond!}))::int`,
+            })
+            .from(invoicesTable)
+            .where(and(...baseConds, searchCond))
+            .groupBy(invoicesTable.status)
+        : Promise.resolve(null),
+      wantSummary
+        ? db
+            .select({
+              n: sql<number>`count(*)::int`,
+              outstanding: sql<string>`coalesce(sum(${invoicesTable.total} - ${invoicesTable.amount_paid}), 0)`,
+            })
+            .from(invoicesTable)
+            .where(and(...baseConds, inArray(invoicesTable.status, ["posted", "partial"])))
+        : Promise.resolve(null),
     ]);
+
+    let counts: Record<string, number> | undefined;
+    if (statusCounts) {
+      counts = { all: 0, draft: 0, open: 0, late: 0, paid: 0, void: 0 };
+      for (const row of statusCounts) {
+        counts.all += row.n;
+        counts.late += row.late;
+        if (row.status === "posted" || row.status === "partial") counts.open += row.n;
+        else counts[row.status] = (counts[row.status] ?? 0) + row.n;
+      }
+    }
 
     return {
       success: true,
       data: rows,
       count,
       late: { count: lateAgg.n, outstanding: lateAgg.outstanding },
+      ...(counts ? { counts } : {}),
+      ...(openAgg ? { open: { count: openAgg[0].n, outstanding: openAgg[0].outstanding } } : {}),
     };
+  });
+
+  // ------------------------------------------------- Android: the create form
+  // The products a sales invoice may carry, lean: no add-ons, costs or recipes
+  // (unlike /api/products/mine, which feeds the till). Inventory-only items are
+  // in it too — a faktur can sell what the till never does. Stock is sent for
+  // tracked products so the picker can warn before posting oversells.
+  app.get("/api/sales-invoices/products", async (request, reply) => {
+    const outlet = await getOwnerOutlet(request, reply, "salesInvoice");
+    if (!outlet) return;
+    const rows = await db
+      .select({
+        id: productsTable.id,
+        name: productsTable.product_name,
+        price: productsTable.price,
+        unit: productsTable.unit,
+        image: productsTable.image,
+        is_for_sale: productsTable.is_for_sale,
+        track_stock: productsTable.track_stock,
+        stock: productsTable.stock,
+        barcode: productsTable.barcode,
+        menu_group: menuGroupsTable.name,
+      })
+      .from(productsTable)
+      .leftJoin(menuGroupsTable, eq(productsTable.menu_group_id, menuGroupsTable.id))
+      .where(and(eq(productsTable.outlet_id, outlet.id), isNull(productsTable.deletedAt)))
+      .orderBy(asc(productsTable.product_name));
+    return { success: true, data: rows };
+  });
+
+  // Customers this outlet has invoiced before, for the form's autocomplete.
+  // party_name is free text, so one customer typed "Toko Sinar" and "toko sinar "
+  // is grouped as one, shown under its latest spelling. Without `q`, the most
+  // recently invoiced first; with it, names that start with it before those
+  // that merely contain it. Each carries how often it was invoiced, when last,
+  // and what it still owes (posted + partial).
+  app.get("/api/sales-invoices/parties", async (request, reply) => {
+    const outlet = await getOwnerOutlet(request, reply, "salesInvoice");
+    if (!outlet) return;
+    const { q, limit } = request.query as { q?: string; limit?: string };
+    const limitN = Math.min(50, Math.max(1, Number(limit) || 8));
+    const term = q?.trim() ?? "";
+    const key = sql`lower(trim(${invoicesTable.party_name}))`;
+    const rows = await db
+      .select({
+        name: sql<string>`(array_agg(trim(${invoicesTable.party_name}) order by ${invoicesTable.issue_date} desc, ${invoicesTable.id} desc))[1]`,
+        invoices: sql<number>`count(*)::int`,
+        last_at: sql<string>`max(${invoicesTable.issue_date})`,
+        outstanding: sql<string>`coalesce(sum(case when ${invoicesTable.status} in ('posted', 'partial') then ${invoicesTable.total} - ${invoicesTable.amount_paid} else 0 end), 0)`,
+      })
+      .from(invoicesTable)
+      .where(
+        and(
+          eq(invoicesTable.outlet_id, outlet.id),
+          eq(invoicesTable.type, "sales"),
+          isNull(invoicesTable.deletedAt),
+          sql`${invoicesTable.status} <> 'void'`,
+          sql`trim(coalesce(${invoicesTable.party_name}, '')) <> ''`,
+          term ? ilike(invoicesTable.party_name, `%${term}%`) : undefined,
+        ),
+      )
+      .groupBy(key)
+      .orderBy(
+        ...(term ? [sql`(${key} like ${term.toLowerCase() + "%"}) desc`] : []),
+        sql`max(${invoicesTable.issue_date}) desc`,
+      )
+      .limit(limitN);
+    return { success: true, data: rows };
+  });
+
+  // What to suggest on the form. `popular`: the outlet's best sellers on sales
+  // invoices over the last 180 days, topped up from the till's last 30 days
+  // when invoices alone give too few. With `party`: that customer's latest
+  // invoice (`last`, to repeat it) and the items they usually take (`usual`,
+  // over their last 20 invoices, with the price they were last given).
+  // `exclude` leaves out the draft being edited, so it never suggests itself.
+  app.get("/api/sales-invoices/suggestions", async (request, reply) => {
+    const outlet = await getOwnerOutlet(request, reply, "salesInvoice");
+    if (!outlet) return;
+    const { party, exclude } = request.query as { party?: string; exclude?: string };
+    const partyKey = party?.trim().toLowerCase() ?? "";
+    const excludeId = Number(exclude);
+    const POPULAR = 12;
+
+    type Popular = {
+      product_id: string;
+      name: string;
+      unit: string | null;
+      times: number;
+      qty: string;
+      last_price: string | null;
+      source: "invoice" | "till";
+    };
+    const popularRows = await db.execute<Omit<Popular, "source">>(sql`
+      select ii.product_id, p.product_name as name, p.unit,
+             count(distinct ii.invoice_id)::int as times,
+             sum(ii.quantity) as qty,
+             (array_agg(ii.unit_price order by i.issue_date desc, ii.id desc))[1] as last_price
+      from invoice_items ii
+      join invoices i on i.id = ii.invoice_id
+      join products p on p.id = ii.product_id and p.deleted_at is null
+      where i.outlet_id = ${outlet.id} and i.type = 'sales' and i.deleted_at is null
+        and i.status in ('posted', 'partial', 'paid')
+        and i.issue_date >= now() - interval '180 days'
+      group by ii.product_id, p.product_name, p.unit
+      order by times desc, sum(ii.quantity) desc
+      limit ${POPULAR}
+    `);
+    const popular: Popular[] = popularRows.rows.map((r) => ({ ...r, source: "invoice" as const }));
+    if (popular.length < POPULAR) {
+      // Add-on lines are children of a dish, not something a customer orders
+      // on its own: parents only, as every item count in the app does.
+      const taken = popular.map((r) => r.product_id);
+      const tillRows = await db.execute<Omit<Popular, "source" | "last_price">>(sql`
+        select od.product_id, p.product_name as name, p.unit,
+               count(distinct od.order_id)::int as times,
+               sum(od.quantity)::text as qty
+        from "orderDetails" od
+        join orders o on o.id = od.order_id
+        join products p on p.id = od.product_id and p.deleted_at is null
+        where o.outlet_id = ${outlet.id} and o.status <> 'cancelled'
+          and od.parent_detail_id is null
+          and o.created_at >= now() - interval '30 days'
+          ${taken.length ? sql`and od.product_id not in (${sql.join(taken.map((t) => sql`${t}`), sql`, `)})` : sql``}
+        group by od.product_id, p.product_name, p.unit
+        order by times desc, sum(od.quantity) desc
+        limit ${POPULAR - popular.length}
+      `);
+      popular.push(...tillRows.rows.map((r) => ({ ...r, last_price: null, source: "till" as const })));
+    }
+
+    if (!partyKey) return { success: true, data: { popular, last: null, usual: [] } };
+
+    const partyCond = sql`lower(trim(i.party_name)) = ${partyKey}`;
+    const excludeCond = Number.isFinite(excludeId) && excludeId > 0 ? sql`and i.id <> ${excludeId}` : sql``;
+    const lastRows = await db.execute<{
+      id: number;
+      number: string;
+      status: string;
+      issue_date: string;
+      due_date: string | null;
+      tax_rate: string;
+      discount: string;
+      total: string;
+    }>(sql`
+      select i.id, i.number, i.status, i.issue_date, i.due_date, i.tax_rate, i.discount, i.total
+      from invoices i
+      where i.outlet_id = ${outlet.id} and i.type = 'sales' and i.deleted_at is null
+        and i.status <> 'void' and ${partyCond} ${excludeCond}
+      order by i.issue_date desc, i.id desc
+      limit 1
+    `);
+    const lastHead = lastRows.rows[0];
+    const last = lastHead
+      ? {
+          ...lastHead,
+          items: await db
+            .select({
+              product_id: invoiceItemsTable.product_id,
+              description: invoiceItemsTable.description,
+              quantity: invoiceItemsTable.quantity,
+              unit_price: invoiceItemsTable.unit_price,
+              discount_pct: invoiceItemsTable.discount_pct,
+            })
+            .from(invoiceItemsTable)
+            .where(eq(invoiceItemsTable.invoice_id, lastHead.id))
+            .orderBy(asc(invoiceItemsTable.id)),
+        }
+      : null;
+
+    const usualRows = await db.execute<{
+      product_id: string | null;
+      description: string;
+      times: number;
+      avg_qty: string;
+      last_price: string;
+      last_discount_pct: string;
+      last_at: string;
+    }>(sql`
+      with recent as (
+        select i.id, i.issue_date from invoices i
+        where i.outlet_id = ${outlet.id} and i.type = 'sales' and i.deleted_at is null
+          and i.status <> 'void' and ${partyCond} ${excludeCond}
+        order by i.issue_date desc, i.id desc
+        limit 20
+      )
+      select ii.product_id,
+             (array_agg(ii.description order by r.issue_date desc, ii.id desc))[1] as description,
+             count(distinct ii.invoice_id)::int as times,
+             round(avg(ii.quantity), 2) as avg_qty,
+             (array_agg(ii.unit_price order by r.issue_date desc, ii.id desc))[1] as last_price,
+             (array_agg(ii.discount_pct order by r.issue_date desc, ii.id desc))[1] as last_discount_pct,
+             max(r.issue_date) as last_at
+      from invoice_items ii
+      join recent r on r.id = ii.invoice_id
+      left join products p on p.id = ii.product_id
+      where ii.product_id is null or p.deleted_at is null
+      group by ii.product_id, case when ii.product_id is null then lower(trim(ii.description)) end
+      order by times desc, max(r.issue_date) desc
+      limit 30
+    `);
+
+    return { success: true, data: { popular, last, usual: usualRows.rows } };
   });
 
   app.get("/api/sales-invoices/:id", async (request, reply) => {
@@ -1068,7 +1321,11 @@ export async function invoiceRoutes(app: FastifyInstance) {
           .select()
           .from(invoicesTable)
           .where(and(eq(invoicesTable.id, id), eq(invoicesTable.outlet_id, outlet.id), eq(invoicesTable.type, "sales")))
-          .limit(1);
+          .limit(1)
+          // Locked until the transaction ends: two taps (or two devices) on the
+          // same action queue up here, and the second then sees the first's
+          // outcome instead of acting on the same stale row.
+          .for("update");
         if (!invoice) throw new Error("NOT_FOUND");
         if (invoice.status !== "draft") throw new Error("NOT_DRAFT");
 
@@ -1131,20 +1388,34 @@ export async function invoiceRoutes(app: FastifyInstance) {
   });
 
   // Pay: record cash IN (detail + cashFlows) and update amount_paid/status.
+  //
+  // `expected_paid` (optional; the Android app sends it) is what the caller saw
+  // already paid when it opened the payment form. When the invoice has moved
+  // on since — this very payment landed but its answer was lost and the app is
+  // trying again, or another device took a payment meanwhile — the request is
+  // refused with 409 PAID_CHANGED rather than booking the money twice.
   app.post("/api/sales-invoices/:id/pay", async (request, reply) => {
     const outlet = await getOwnerOutlet(request, reply, "salesInvoice");
     if (!outlet) return;
     const id = Number((request.params as { id: string }).id);
-    const body = request.body as { amount?: number | string; method?: string };
+    const body = request.body as { amount?: number | string; method?: string; expected_paid?: number | string };
     const method = parseMethod(body.method);
+    const expectedPaid = body.expected_paid != null && body.expected_paid !== "" ? Number(body.expected_paid) : null;
     try {
       const result = await db.transaction(async (tx) => {
         const [invoice] = await tx
           .select()
           .from(invoicesTable)
           .where(and(eq(invoicesTable.id, id), eq(invoicesTable.outlet_id, outlet.id), eq(invoicesTable.type, "sales")))
-          .limit(1);
+          .limit(1)
+          // Locked until the transaction ends: two taps (or two devices) on the
+          // same action queue up here, and the second then sees the first's
+          // outcome instead of acting on the same stale row.
+          .for("update");
         if (!invoice) throw new Error("NOT_FOUND");
+        if (expectedPaid != null && Number.isFinite(expectedPaid) && Math.abs(Number(invoice.amount_paid) - expectedPaid) > 0.001) {
+          throw new Error("PAID_CHANGED");
+        }
         if (invoice.status !== "posted" && invoice.status !== "partial") throw new Error("NOT_PAYABLE");
 
         const total = Number(invoice.total);
@@ -1172,6 +1443,13 @@ export async function invoiceRoutes(app: FastifyInstance) {
     } catch (e) {
       const msg = String(e instanceof Error ? e.message : e);
       if (msg.includes("NOT_FOUND")) return reply.status(404).send({ success: false, error: "Faktur tidak ditemukan" });
+      if (msg.includes("PAID_CHANGED")) {
+        return reply.status(409).send({
+          success: false,
+          code: "PAID_CHANGED",
+          error: "Pembayaran faktur ini sudah berubah (mungkin sudah tercatat). Muat ulang dulu.",
+        });
+      }
       if (msg.includes("NOT_PAYABLE")) return reply.status(409).send({ success: false, error: "Faktur harus diposting dulu" });
       if (msg.includes("BAD_AMOUNT")) return reply.status(400).send({ success: false, error: "Nominal pembayaran tidak valid" });
       return reply.status(500).send({ success: false, error: msg });
@@ -1189,7 +1467,11 @@ export async function invoiceRoutes(app: FastifyInstance) {
           .select()
           .from(invoicesTable)
           .where(and(eq(invoicesTable.id, id), eq(invoicesTable.outlet_id, outlet.id), eq(invoicesTable.type, "sales")))
-          .limit(1);
+          .limit(1)
+          // Locked until the transaction ends: two taps (or two devices) on the
+          // same action queue up here, and the second then sees the first's
+          // outcome instead of acting on the same stale row.
+          .for("update");
         if (!invoice) throw new Error("NOT_FOUND");
         if (invoice.status === "void") throw new Error("ALREADY_VOID");
 
@@ -2029,19 +2311,169 @@ export async function invoiceRoutes(app: FastifyInstance) {
     }
   });
 
+  // The Stok list a page at a time, for the Android app: the outlet's tracked
+  // products with the numbers the web's Stok page works out for itself from
+  // /api/products/mine. The web still reads that; a phone should not download
+  // the whole menu, add-ons and all, to show twenty rows of stock.
+  //
+  //   q       name or code contains, any case
+  //   status  all | ready | out | wip — Semua, Tersedia, Habis, Bahan setengah jadi
+  //   sort    name (A–Z) | stock (emptiest first) | value (most valuable first)
+  //   page    from 1; limit 1–100, default 20
+  //
+  // As on the web, `counts` (the tab numbers) follow the search, while `tabs`
+  // (which tabs to offer) and `summary` (the stat cards) follow the whole
+  // catalogue. `opname` is the outlet's open count, if any, for its banner.
+  app.get("/api/stock/items", async (request, reply) => {
+    const outlet = await getOwnerOutlet(request, reply, "stock");
+    if (!outlet) return;
+    const query = request.query as { q?: string; status?: string; sort?: string; page?: string; limit?: string };
+    const limit = clampInt(query.limit, 1, 100, 20);
+    const page = clampInt(query.page, 1, 1_000_000, 1);
+    const status = query.status === "ready" || query.status === "out" || query.status === "wip" ? query.status : "all";
+    const needle = (query.q ?? "").trim().slice(0, 100);
+
+    const recipe = hasRecipe(outlet.id);
+    const tracked = and(
+      eq(productsTable.outlet_id, outlet.id),
+      isNull(productsTable.deletedAt),
+      eq(productsTable.track_stock, true),
+    );
+    const pattern = `%${needle.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    const matches = needle
+      ? or(ilike(productsTable.product_name, pattern), ilike(productsTable.barcode, pattern))!
+      : sql`true`;
+    const inTab = {
+      all: sql`true`,
+      ready: sql`${stockQty} > 0`,
+      out: sql`${stockQty} <= 0`,
+      wip: recipe,
+    }[status];
+    const order =
+      query.sort === "stock"
+        ? [sql`${stockQty} asc`, sql`lower(${productsTable.product_name}) asc`]
+        : query.sort === "value"
+          ? [sql`${stockValue} desc`, sql`lower(${productsTable.product_name}) asc`]
+          : [sql`lower(${productsTable.product_name}) asc`];
+
+    const [[agg], rows, [opname]] = await Promise.all([
+      db
+        .select({
+          all: sql<number>`count(*) filter (where ${matches})`.mapWith(Number),
+          ready: sql<number>`count(*) filter (where ${matches} and ${stockQty} > 0)`.mapWith(Number),
+          out: sql<number>`count(*) filter (where ${matches} and ${stockQty} <= 0)`.mapWith(Number),
+          wip: sql<number>`count(*) filter (where ${matches} and ${recipe})`.mapWith(Number),
+          tracked: sql<number>`count(*)`.mapWith(Number),
+          outAll: sql<number>`count(*) filter (where ${stockQty} <= 0)`.mapWith(Number),
+          wipAll: sql<number>`count(*) filter (where ${recipe})`.mapWith(Number),
+          value: sql<number>`coalesce(sum(${stockValue}), 0)`.mapWith(Number),
+          needsCost: sql<number>`count(*) filter (where not ${ledgerCost} > 0)`.mapWith(Number),
+          estimated: sql<number>`coalesce(sum(${stockValue}) filter (where not ${ledgerCost} > 0), 0)`.mapWith(Number),
+        })
+        .from(productsTable)
+        .where(tracked),
+      db
+        .select(stockItemColumns(recipe))
+        .from(productsTable)
+        .where(and(tracked, matches, inTab))
+        .orderBy(...order, asc(productsTable.id))
+        .limit(limit)
+        .offset((page - 1) * limit),
+      db
+        .select({
+          id: stockOpnameSessionsTable.id,
+          started_at: stockOpnameSessionsTable.started_at,
+          counted: sql<number>`(select count(*) from ${stockOpnameLinesTable} where ${stockOpnameLinesTable.session_id} = ${stockOpnameSessionsTable.id})`.mapWith(Number),
+        })
+        .from(stockOpnameSessionsTable)
+        .where(and(eq(stockOpnameSessionsTable.outlet_id, outlet.id), eq(stockOpnameSessionsTable.status, "open")))
+        .limit(1),
+    ]);
+
+    const counts = { all: agg.all, ready: agg.ready, out: agg.out, wip: agg.wip };
+    return {
+      success: true,
+      data: rows,
+      total: counts[status],
+      page,
+      limit,
+      counts,
+      tabs: { ready: agg.tracked - agg.outAll > 0, out: agg.outAll > 0, wip: agg.wipAll > 0 },
+      summary: {
+        value: Math.round(agg.value),
+        tracked: agg.tracked,
+        out: agg.outAll,
+        // How much of `value` rests on a price typed into the product form
+        // rather than on anything the ledger worked out, and for how many.
+        needs_cost: agg.needsCost,
+        estimated_value: Math.round(agg.estimated),
+      },
+      opname: opname ?? null,
+    };
+  });
+
   // History of stock adjustments (opname reconciliations), newest first, grouped
   // by day on the client. Filtered to a date window (default: last 30 days) so
   // the payload/scan stays bounded — backed by the
   // stock_movements_outlet_reason_created_idx index. `from`/`to` are YYYY-MM-DD.
+  //
+  // Paged when `limit` is given (the Android app, at most 100 a page): the
+  // answer then carries `next_cursor`, to send back as `cursor` for the page
+  // after it. `fromAt`/`dateBefore` are ISO instants (the second exclusive)
+  // that take over from `from`/`to`, whose bare days are UTC days. Without
+  // `limit` the web's one 1000-row answer is exactly what it always was.
   app.get("/api/stock/opname-history", async (request, reply) => {
     const outlet = await getOwnerOutlet(request, reply, "stock");
     if (!outlet) return;
-    const { from, to } = request.query as { from?: string; to?: string };
+    const { from, to, fromAt, dateBefore, limit, cursor } = request.query as {
+      from?: string;
+      to?: string;
+      fromAt?: string;
+      dateBefore?: string;
+      limit?: string;
+      cursor?: string;
+    };
 
     const toDate = to ? new Date(`${to}T23:59:59.999Z`) : new Date();
     const fromDate = from
       ? new Date(`${from}T00:00:00.000Z`)
       : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000); // last 30 days
+
+    if (limit) {
+      const since = fromAt ? new Date(fromAt) : fromDate;
+      const before = dateBefore ? new Date(dateBefore) : null;
+      const after = cursor ? movementCursor(cursor) : null;
+      if (Number.isNaN(since.getTime()) || (before && Number.isNaN(before.getTime())) || after === undefined) {
+        return reply.status(400).send({ success: false, error: "Invalid date or cursor" });
+      }
+      const cap = clampInt(limit, 1, 100, 30);
+      const rows = await db
+        .select({
+          id: stockMovementsTable.id,
+          product_id: stockMovementsTable.product_id,
+          qty_change: sql<number>`${stockMovementsTable.qty_change}`.mapWith(Number),
+          note: stockMovementsTable.note,
+          created_at: stockMovementsTable.created_at,
+          product_name: productsTable.product_name,
+          unit: productsTable.unit,
+        })
+        .from(stockMovementsTable)
+        .innerJoin(productsTable, eq(stockMovementsTable.product_id, productsTable.id))
+        .where(
+          and(
+            eq(stockMovementsTable.outlet_id, outlet.id),
+            eq(stockMovementsTable.reason, "adjustment"),
+            gte(stockMovementsTable.created_at, since),
+            before ? lt(stockMovementsTable.created_at, before) : lte(stockMovementsTable.created_at, toDate),
+            after ? olderThanMovement(after) : undefined,
+          ),
+        )
+        .orderBy(desc(stockMovementsTable.created_at), desc(stockMovementsTable.id))
+        .limit(cap + 1);
+      const more = rows.length > cap;
+      const data = more ? rows.slice(0, cap) : rows;
+      return { success: true, data, next_cursor: more ? String(data[data.length - 1].id) : null };
+    }
 
     const rows = await db
       .select({
@@ -2071,11 +2503,23 @@ export async function invoiceRoutes(app: FastifyInstance) {
   // (purchase / sales / adjustment / void), newest first, with the invoice
   // number when one caused it. Outlet scoping comes from the movement rows
   // themselves, so a foreign productId simply returns nothing.
+  //
+  // `paged=1` (the Android app) answers a page at a time instead, each row with
+  // the stock left after it, and on request the summary its Alur Stok header
+  // shows: see pagedMovements. Without it the web's answer is unchanged.
   app.get("/api/stock/movements", async (request, reply) => {
     const outlet = await getOwnerOutlet(request, reply, "stock");
     if (!outlet) return;
-    const { productId, limit } = request.query as { productId?: string; limit?: string };
+    const { productId, limit, cursor, reason, paged, summary } = request.query as {
+      productId?: string;
+      limit?: string;
+      cursor?: string;
+      reason?: string;
+      paged?: string;
+      summary?: string;
+    };
     if (!productId) return reply.status(400).send({ success: false, error: "Missing productId" });
+    if (paged === "1") return pagedMovements(reply, outlet.id, productId, { limit, cursor, reason, summary: summary === "1" });
     const cap = Math.min(Number(limit) || 200, 500);
 
     const rows = await db
@@ -2099,4 +2543,206 @@ export async function invoiceRoutes(app: FastifyInstance) {
       .limit(cap);
     return { success: true, data: rows };
   });
+}
+
+// ───────────────────────────────────────────── stock, a page at a time
+// /api/stock/items and the paged /api/stock/movements + opname-history, which
+// the Android app reads instead of the whole catalogue and whole ledgers.
+
+function clampInt(raw: unknown, min: number, max: number, fallback: number) {
+  const n = Math.trunc(Number(raw));
+  return Number.isFinite(n) && n >= min ? Math.min(n, max) : fallback;
+}
+
+const round3 = (n: number) => +n.toFixed(3);
+
+function rowsOf<T>(result: unknown): T[] {
+  const r = result as { rows?: T[] };
+  return r.rows ?? (Array.isArray(result) ? (result as T[]) : []);
+}
+
+const stockQty = sql`coalesce(${productsTable.stock}, 0)`;
+const ledgerCost = sql`coalesce(${productsTable.avg_cost}, 0)`;
+// buying_price is the varchar typed into the product form: anything in it that
+// is not a plain number counts as nothing instead of failing the whole query.
+const typedCost = sql`(case when trim(${productsTable.buying_price}) ~ '^[0-9]+([.][0-9]+)?$' then trim(${productsTable.buying_price})::numeric else 0 end)`;
+// What one unit on the shelf is worth: the ledger's running average, or for a
+// product the ledger has never priced, what was typed into the form. The web
+// Stok page makes the same fallback in the browser (stock-client.tsx).
+const unitCost = sql`(case when ${ledgerCost} > 0 then ${ledgerCost} else ${typedCost} end)`;
+const stockValue = sql`(${stockQty} * ${unitCost})`;
+
+/** Made in-house from a composition of its own, so "Produksi" applies: /api/products/mine's has_recipe. */
+const hasRecipe = (outletId: number) =>
+  sql`exists (select 1 from ${recipeItemsTable} where ${recipeItemsTable.product_id} = ${productsTable.id} and ${recipeItemsTable.outlet_id} = ${outletId})`;
+
+/** A product as the Stok list shows it, in both endpoints. */
+const stockItemColumns = (recipe: SQL) => ({
+  id: productsTable.id,
+  product_name: productsTable.product_name,
+  unit: productsTable.unit,
+  code: productsTable.barcode,
+  stock: sql<number>`${stockQty}`.mapWith(Number),
+  unit_cost: sql<number>`${unitCost}`.mapWith(Number),
+  value: sql<number>`round(${stockValue})`.mapWith(Number),
+  // The ledger has never priced it: unit_cost is the form's guess.
+  needs_cost: sql<boolean>`not (${ledgerCost} > 0)`,
+  has_recipe: sql<boolean>`${recipe}`,
+  yield_qty: sql<number>`coalesce(${productsTable.yield_qty}, 1)`.mapWith(Number),
+});
+
+/** A paged answer's `cursor`: the id of the last movement on the page before. Undefined when it is not one. */
+function movementCursor(raw: string): number | undefined {
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
+// Keyset paging, newest first: the movements strictly older than movement
+// `id`. Looked up rather than carried in the cursor, because created_at keeps
+// microseconds a JS Date would round away, skipping or repeating rows where
+// two pages meet.
+const olderThanMovement = (id: number) =>
+  sql`(${stockMovementsTable.created_at}, ${stockMovementsTable.id}) < (select c.created_at, c.id from ${stockMovementsTable} c where c.id = ${id})`;
+
+const MOVEMENT_REASONS = new Set(["purchase", "sales", "adjustment", "void", "production"]);
+
+type MovementRow = {
+  id: number;
+  qty_change: number;
+  reason: string;
+  note: string | null;
+  created_at: string;
+  order_id: string | null;
+  invoice_number: string | null;
+  line_product: string | null;
+  line_qty: number | null;
+};
+
+// What a movement `m` says about itself: the invoice behind it, the POS order
+// behind it, and for a sale the menu line that took it ("Nasi Goreng" × 2)
+// when that line was another product, as every sale of an ingredient is.
+// created_at goes out in the same ISO form Drizzle gives a Date.
+const movementColumns = (productId: string) => sql`
+  m.id, m.qty_change::float8 as qty_change, m.reason, m.note,
+  to_char(m.created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at,
+  m.order_id, i.number as invoice_number,
+  case when d.product_id <> ${productId} then lp.product_name end as line_product,
+  case when d.product_id <> ${productId} then d.quantity end as line_qty`;
+const movementJoins = sql`
+  left join invoices i on i.id = m.invoice_id
+  left join "orderDetails" d on d.id = m.order_detail_id
+  left join products lp on lp.id = d.product_id`;
+
+/**
+ * One page of a product's Alur Stok, newest first, each movement with the stock
+ * left right after it (`balance_after`): the stock now, less every movement
+ * newer than that one. The running sum covers ALL the product's movements
+ * before `reason` narrows the page, so a filtered row still tells the truth
+ * about the shelf. It reads one product's movements per page, on the
+ * (product_id, created_at) index.
+ *
+ * `summary` adds what the app's header shows above the first page: the product
+ * as it stands, how many movements of each kind it has, what came in, went out
+ * and was used up in the last 30 days, and the latest movement in and out —
+ * which order or invoice, what, and when.
+ */
+async function pagedMovements(
+  reply: FastifyReply,
+  outletId: number,
+  productId: string,
+  query: { limit?: string; cursor?: string; reason?: string; summary: boolean },
+) {
+  const cap = clampInt(query.limit, 1, 100, 30);
+  const after = query.cursor ? movementCursor(query.cursor) : null;
+  if (after === undefined) return reply.status(400).send({ success: false, error: "Invalid cursor" });
+  const reason = query.reason && MOVEMENT_REASONS.has(query.reason) ? query.reason : null;
+
+  const filters = [sql`true`];
+  if (reason) filters.push(sql`m.reason = ${reason}`);
+  if (after) filters.push(sql`(m.created_at, m.id) < (select c.created_at, c.id from stock_movements c where c.id = ${after})`);
+
+  const latest = (sign: SQL) =>
+    db
+      .execute(sql`
+        select ${movementColumns(productId)}
+        from stock_movements m
+        ${movementJoins}
+        where m.outlet_id = ${outletId} and m.product_id = ${productId} and m.qty_change ${sign}
+        order by m.created_at desc, m.id desc
+        limit 1
+      `)
+      .then((r) => rowsOf<MovementRow>(r)[0] ?? null);
+
+  const [pageResult, header] = await Promise.all([
+    db.execute(sql`
+      select ${movementColumns(productId)},
+             (coalesce(p.stock, 0) - coalesce(m.newer, 0))::float8 as balance_after
+      from (
+        select s.*, sum(s.qty_change) over (
+                 order by s.created_at desc, s.id desc
+                 rows between unbounded preceding and 1 preceding
+               ) as newer
+        from stock_movements s
+        where s.outlet_id = ${outletId} and s.product_id = ${productId}
+      ) m
+      join products p on p.id = m.product_id
+      ${movementJoins}
+      where ${sql.join(filters, sql` and `)}
+      order by m.created_at desc, m.id desc
+      limit ${cap + 1}
+    `),
+    query.summary
+      ? Promise.all([
+          db
+            .select({ ...stockItemColumns(hasRecipe(outletId)), track_stock: productsTable.track_stock })
+            .from(productsTable)
+            .where(and(eq(productsTable.id, productId), eq(productsTable.outlet_id, outletId)))
+            .limit(1),
+          db.execute(sql`
+            select reason, count(*)::int as n,
+                   coalesce(sum(qty_change) filter (where qty_change > 0 and created_at >= now() - interval '30 days'), 0)::float8 as in_30d,
+                   coalesce(-sum(qty_change) filter (where qty_change < 0 and created_at >= now() - interval '30 days'), 0)::float8 as out_30d,
+                   coalesce(-sum(qty_change) filter (
+                     where created_at >= now() - interval '30 days'
+                       and (reason in ('sales', 'void') or (reason = 'production' and qty_change < 0))
+                   ), 0)::float8 as used_30d,
+                   to_char(min(created_at) at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as first_at
+            from stock_movements
+            where outlet_id = ${outletId} and product_id = ${productId}
+            group by reason
+          `),
+          latest(sql`> 0`),
+          latest(sql`< 0`),
+        ])
+      : null,
+  ]);
+
+  const rows = rowsOf<MovementRow & { balance_after: number }>(pageResult);
+  const more = rows.length > cap;
+  const data = more ? rows.slice(0, cap) : rows;
+  const next_cursor = more ? String(data[data.length - 1].id) : null;
+  if (!header) return { success: true, data, next_cursor };
+
+  const [[product], kinds, lastIn, lastOut] = header;
+  if (!product) return reply.status(404).send({ success: false, error: "Produk tidak ditemukan" });
+  const perReason = rowsOf<{ reason: string; n: number; in_30d: number; out_30d: number; used_30d: number; first_at: string }>(kinds);
+  const total = (key: "n" | "in_30d" | "out_30d" | "used_30d") => perReason.reduce((sum, r) => sum + Number(r[key]), 0);
+  return {
+    success: true,
+    data,
+    next_cursor,
+    summary: {
+      product,
+      reasons: Object.fromEntries(perReason.map((r) => [r.reason, r.n])),
+      total: total("n"),
+      in_30d: round3(total("in_30d")),
+      out_30d: round3(total("out_30d")),
+      // Sales net of their voids, plus what production took: what the outlet
+      // actually used up, as opposed to opname corrections.
+      used_30d: Math.max(0, round3(total("used_30d"))),
+      first_at: perReason.map((r) => r.first_at).sort()[0] ?? null,
+      last_in: lastIn,
+      last_out: lastOut,
+    },
+  };
 }

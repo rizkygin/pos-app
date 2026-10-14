@@ -102,7 +102,7 @@ async function lobbyOrdersByStatus(
 export async function ownerRoutes(app: FastifyInstance) {
   app.get("/api/get-outlet-orders", async (request, reply) => {
     try {
-      const { page = "1", limit = "10", search = "", status = "all", dateFrom = "", dateTo = "" } = request.query as Record<string, string>;
+      const { page = "1", limit = "10", search = "", status = "all", dateFrom = "", dateTo = "", dateBefore = "" } = request.query as Record<string, string>;
 
       const pageNum = Math.max(1, Number(page) || 1);
       const limitNum = Math.max(1, Number(limit) || 10);
@@ -116,6 +116,13 @@ export async function ownerRoutes(app: FastifyInstance) {
 
       const dateStart = dateFrom ? new Date(dateFrom) : undefined;
       const dateEnd = dateTo ? new Date(`${dateTo}T23:59:59.999Z`) : undefined;
+      // An exact instant, exclusive: the Android app's "up to and including
+      // this day" on the phone's own clock. A bare dateTo can only mean the end
+      // of that day in UTC, which in Jakarta is 07:00 the next morning.
+      const dateStop = dateBefore ? new Date(dateBefore) : undefined;
+      if (dateStop && Number.isNaN(dateStop.getTime())) {
+        return reply.status(400).send({ success: false, error: "Invalid dateBefore" });
+      }
 
       type OrderStatus = "pending" | "confirmed" | "preparing" | "ready" | "on_delivery" | "delivered" | "cancelled";
       const ACTIVE_STATUSES: OrderStatus[] = ["confirmed", "preparing", "ready", "on_delivery"];
@@ -145,6 +152,7 @@ export async function ownerRoutes(app: FastifyInstance) {
           : undefined,
         dateStart ? gte(orderDetailsTable.created_at, dateStart) : undefined,
         dateEnd ? lte(orderDetailsTable.created_at, dateEnd) : undefined,
+        dateStop ? lt(orderDetailsTable.created_at, dateStop) : undefined,
       );
 
       const [rows, countRows, statsRows] = await Promise.all([
