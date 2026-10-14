@@ -2330,6 +2330,42 @@ export async function productRoutes(app: FastifyInstance) {
     return reply.send({ success: true, price: String(Math.round(price)) });
   });
 
+  // Write back ONLY the harga modal (buying_price), for the same reason the
+  // price has its own route above. The Android Kalkulator HPP saves its HPP per
+  // portion here: exactly what typing it into the product form's "Harga modal"
+  // does, nothing more. The cost ledger (avg_cost) is not touched, so a product
+  // whose cost comes from Faktur or Produksi keeps reporting that. Whole
+  // rupiah, as the form keeps digits only (see lib/force-hpp.ts). Range-priced
+  // products are fine here: the range is about the selling price, not the cost.
+  app.patch("/api/products/:id/buying-price", async (request, reply) => {
+    const access = await requireOutletAccess(request, reply, "products");
+    if (!access) return;
+    const productId = (request.params as { id: string }).id;
+    // A number, or a string of one. Number(null) and Number("") are both 0, so
+    // a client sending an empty field would otherwise wipe the Harga modal.
+    const raw = (request.body as { buying_price?: unknown })?.buying_price;
+    const buyingPrice =
+      typeof raw === "number" || (typeof raw === "string" && raw.trim() !== "") ? Number(raw) : NaN;
+
+    if (!Number.isFinite(buyingPrice) || buyingPrice < 0) {
+      return reply.status(400).send({ success: false, message: "Harga modal tidak valid" });
+    }
+
+    const [existing] = await db
+      .select({ outlet_id: productsTable.outlet_id })
+      .from(productsTable)
+      .where(eq(productsTable.id, productId))
+      .limit(1);
+    if (!existing || existing.outlet_id !== access.outlet.id) {
+      return reply.status(404).send({ success: false, message: "Product not found" });
+    }
+
+    const rounded = String(Math.round(buyingPrice));
+    await db.update(productsTable).set({ buying_price: rounded }).where(eq(productsTable.id, productId));
+
+    return reply.send({ success: true, buying_price: rounded });
+  });
+
   // ── Menu groups: owner-defined sections for the public /menu page ────────
   // Separate from products.category on purpose — see menuGroupsTable in
   // db/schema.ts. Same "products" permission as the product routes above.

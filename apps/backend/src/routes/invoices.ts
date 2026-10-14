@@ -260,6 +260,65 @@ async function paymentHistory(invoiceId: number) {
     .orderBy(invoicePaymentsTable.created_at, invoicePaymentsTable.id);
 }
 
+// What the purchase create and update routes take. A supplier is either
+// `supplier_id`, as picked from the outlet's list (the web's select), or
+// `supplier_name`, a name typed into the Android form: see resolveSupplier.
+type PurchaseBody = {
+  supplier_id?: number | null;
+  supplier_name?: string | null;
+  party_name?: string;
+  issue_date?: string;
+  due_date?: string;
+  tax_rate?: number | string;
+  tax_inclusive?: boolean;
+  discount?: number | string;
+  down_payment?: number | string;
+  down_payment_method?: string;
+  notes?: string;
+  items?: ItemInput[];
+};
+
+// The supplier a purchase names, inside the invoice's own transaction: the
+// picked `supplier_id`, which must be this outlet's, or for a typed
+// `supplier_name` the outlet's live supplier of that name (case and spacing
+// aside), created when there is none yet. So a name typed once is in the list
+// next time, and a save that fails leaves no supplier behind. Null for none.
+async function resolveSupplier(
+  tx: Tx,
+  outletId: number,
+  body: { supplier_id?: number | null; supplier_name?: string | null },
+): Promise<number | null> {
+  if (body.supplier_id != null) {
+    const [row] = await tx
+      .select({ id: suppliersTable.id })
+      .from(suppliersTable)
+      .where(and(eq(suppliersTable.id, Number(body.supplier_id)), eq(suppliersTable.outlet_id, outletId)))
+      .limit(1);
+    if (!row) throw new Error("BAD_SUPPLIER");
+    return row.id;
+  }
+  const name = body.supplier_name?.trim().replace(/\s+/g, " ").slice(0, 255);
+  if (!name) return null;
+  const [found] = await tx
+    .select({ id: suppliersTable.id })
+    .from(suppliersTable)
+    .where(
+      and(
+        eq(suppliersTable.outlet_id, outletId),
+        isNull(suppliersTable.deletedAt),
+        sql`lower(trim(${suppliersTable.name})) = ${name.toLowerCase()}`,
+      ),
+    )
+    .orderBy(asc(suppliersTable.id))
+    .limit(1);
+  if (found) return found.id;
+  const [created] = await tx
+    .insert(suppliersTable)
+    .values({ outlet_id: outletId, name })
+    .returning({ id: suppliersTable.id });
+  return created.id;
+}
+
 // Resolve a period key ("today" | "7d" | "30d" | "month") to the instant the
 // window opens, plus the calendar cursors the trend series needs.
 //
@@ -412,35 +471,383 @@ export async function invoiceRoutes(app: FastifyInstance) {
   });
 
   // -------------------------------------------------------- purchase invoices
+  // Without `page`/`limit` (the web's Faktur Pembelian): every invoice, as it
+  // always was. With either (the Android app): one page, newest first, and the
+  // sales list's extras. `q` searches the number, the supplier and party_name;
+  // `status=open` is posted + partial ("Belum lunas"); `late=1` keeps the
+  // overdue ones; `summary=1` adds the chip counts (for the search as typed)
+  // and the outlet's hutang (everything posted and not yet paid off). Each row
+  // also previews its first lines (`item_names`, `items_count`).
   app.get("/api/purchase-invoices", async (request, reply) => {
     const outlet = await getOwnerOutlet(request, reply, "purchaseInvoice");
     if (!outlet) return;
-    const { status } = request.query as { status?: string };
-    const rows = await db
-      .select({
-        id: invoicesTable.id,
-        number: invoicesTable.number,
-        status: invoicesTable.status,
-        supplier_id: invoicesTable.supplier_id,
-        supplier_name: suppliersTable.name,
-        party_name: invoicesTable.party_name,
-        issue_date: invoicesTable.issue_date,
-        due_date: invoicesTable.due_date,
-        total: invoicesTable.total,
-        amount_paid: invoicesTable.amount_paid,
-      })
-      .from(invoicesTable)
-      .leftJoin(suppliersTable, eq(invoicesTable.supplier_id, suppliersTable.id))
-      .where(
-        and(
-          eq(invoicesTable.outlet_id, outlet.id),
-          eq(invoicesTable.type, "purchase"),
-          isNull(invoicesTable.deletedAt),
-          status && status !== "all" ? eq(invoicesTable.status, status as "draft" | "posted" | "partial" | "paid" | "void") : undefined,
-        ),
+    const { status, q, late, page, limit, summary } = request.query as {
+      status?: string;
+      q?: string;
+      late?: string;
+      page?: string;
+      limit?: string;
+      summary?: string;
+    };
+
+    if (page === undefined && limit === undefined) {
+      const rows = await db
+        .select({
+          id: invoicesTable.id,
+          number: invoicesTable.number,
+          status: invoicesTable.status,
+          supplier_id: invoicesTable.supplier_id,
+          supplier_name: suppliersTable.name,
+          party_name: invoicesTable.party_name,
+          issue_date: invoicesTable.issue_date,
+          due_date: invoicesTable.due_date,
+          total: invoicesTable.total,
+          amount_paid: invoicesTable.amount_paid,
+        })
+        .from(invoicesTable)
+        .leftJoin(suppliersTable, eq(invoicesTable.supplier_id, suppliersTable.id))
+        .where(
+          and(
+            eq(invoicesTable.outlet_id, outlet.id),
+            eq(invoicesTable.type, "purchase"),
+            isNull(invoicesTable.deletedAt),
+            status && status !== "all" ? eq(invoicesTable.status, status as "draft" | "posted" | "partial" | "paid" | "void") : undefined,
+          ),
+        )
+        .orderBy(desc(invoicesTable.issue_date));
+      return { success: true, data: rows };
+    }
+
+    const pageN = Math.max(1, Number(page) || 1);
+    const limitN = Math.min(100, Math.max(1, Number(limit) || 10));
+
+    // Late = posted but not paid off by the end of the due date, as on sales.
+    const lateCond = and(
+      inArray(invoicesTable.status, ["posted", "partial"]),
+      lt(invoicesTable.due_date, sql`CURRENT_DATE`),
+    );
+    const baseConds = [
+      eq(invoicesTable.outlet_id, outlet.id),
+      eq(invoicesTable.type, "purchase"),
+      isNull(invoicesTable.deletedAt),
+    ];
+    const term = q?.trim();
+    const searchCond = term
+      ? or(
+          ilike(invoicesTable.number, `%${term}%`),
+          ilike(invoicesTable.party_name, `%${term}%`),
+          ilike(suppliersTable.name, `%${term}%`),
+        )
+      : undefined;
+    const conds = [
+      ...baseConds,
+      status === "open"
+        ? inArray(invoicesTable.status, ["posted", "partial"])
+        : status && status !== "all"
+          ? eq(invoicesTable.status, status as "draft" | "posted" | "partial" | "paid" | "void")
+          : undefined,
+      searchCond,
+      late === "1" || late === "true" ? lateCond : undefined,
+    ];
+    const supplierJoin = eq(invoicesTable.supplier_id, suppliersTable.id);
+
+    const wantSummary = summary === "1" || summary === "true";
+    const [rows, [{ n: count }], [lateAgg], statusCounts, openAgg] = await Promise.all([
+      db
+        .select({
+          id: invoicesTable.id,
+          number: invoicesTable.number,
+          status: invoicesTable.status,
+          supplier_id: invoicesTable.supplier_id,
+          supplier_name: suppliersTable.name,
+          party_name: invoicesTable.party_name,
+          issue_date: invoicesTable.issue_date,
+          due_date: invoicesTable.due_date,
+          total: invoicesTable.total,
+          amount_paid: invoicesTable.amount_paid,
+          created_by_name: usersTable.name,
+          items_count: sql<number>`(select count(*)::int from invoice_items ii where ii.invoice_id = ${invoicesTable.id})`,
+          item_names: sql<string[] | null>`(select array_agg(f.description order by f.id) from (select ii.description, ii.id from invoice_items ii where ii.invoice_id = ${invoicesTable.id} order by ii.id limit 3) f)`,
+        })
+        .from(invoicesTable)
+        .leftJoin(suppliersTable, supplierJoin)
+        .leftJoin(usersTable, eq(usersTable.id, invoicesTable.created_by))
+        .where(and(...conds))
+        .orderBy(desc(invoicesTable.issue_date), desc(invoicesTable.id))
+        .limit(limitN)
+        .offset((pageN - 1) * limitN),
+      db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(invoicesTable)
+        .leftJoin(suppliersTable, supplierJoin)
+        .where(and(...conds)),
+      db
+        .select({
+          n: sql<number>`count(*)::int`,
+          outstanding: sql<string>`coalesce(sum(${invoicesTable.total} - ${invoicesTable.amount_paid}), 0)`,
+        })
+        .from(invoicesTable)
+        .where(and(...baseConds, lateCond)),
+      wantSummary
+        ? db
+            .select({
+              status: invoicesTable.status,
+              n: sql<number>`count(*)::int`,
+              late: sql<number>`(count(*) filter (where ${lateCond!}))::int`,
+            })
+            .from(invoicesTable)
+            .leftJoin(suppliersTable, supplierJoin)
+            .where(and(...baseConds, searchCond))
+            .groupBy(invoicesTable.status)
+        : Promise.resolve(null),
+      wantSummary
+        ? db
+            .select({
+              n: sql<number>`count(*)::int`,
+              outstanding: sql<string>`coalesce(sum(${invoicesTable.total} - ${invoicesTable.amount_paid}), 0)`,
+            })
+            .from(invoicesTable)
+            .where(and(...baseConds, inArray(invoicesTable.status, ["posted", "partial"])))
+        : Promise.resolve(null),
+    ]);
+
+    let counts: Record<string, number> | undefined;
+    if (statusCounts) {
+      counts = { all: 0, draft: 0, open: 0, late: 0, paid: 0, void: 0 };
+      for (const row of statusCounts) {
+        counts.all += row.n;
+        counts.late += row.late;
+        if (row.status === "posted" || row.status === "partial") counts.open += row.n;
+        else counts[row.status] = (counts[row.status] ?? 0) + row.n;
+      }
+    }
+
+    return {
+      success: true,
+      data: rows,
+      count,
+      late: { count: lateAgg.n, outstanding: lateAgg.outstanding },
+      ...(counts ? { counts } : {}),
+      ...(openAgg ? { open: { count: openAgg[0].n, outstanding: openAgg[0].outstanding } } : {}),
+    };
+  });
+
+  // ---------------------------------------------- Android: the purchase form
+  // What a purchase may carry, lean (the sales form's twin): every live
+  // product, inventory items included, with the buying price from the product
+  // form and the price it was last actually bought at (`last_price`, from the
+  // newest posted purchase line), which is usually the better guess. Stock is
+  // sent for tracked products: the form shows what posting will bring it to.
+  app.get("/api/purchase-invoices/products", async (request, reply) => {
+    const outlet = await getOwnerOutlet(request, reply, "purchaseInvoice");
+    if (!outlet) return;
+    const [rows, lastRows] = await Promise.all([
+      db
+        .select({
+          id: productsTable.id,
+          name: productsTable.product_name,
+          price: productsTable.price,
+          buying_price: productsTable.buying_price,
+          unit: productsTable.unit,
+          image: productsTable.image,
+          is_for_sale: productsTable.is_for_sale,
+          track_stock: productsTable.track_stock,
+          stock: productsTable.stock,
+          barcode: productsTable.barcode,
+          menu_group: menuGroupsTable.name,
+        })
+        .from(productsTable)
+        .leftJoin(menuGroupsTable, eq(productsTable.menu_group_id, menuGroupsTable.id))
+        .where(and(eq(productsTable.outlet_id, outlet.id), isNull(productsTable.deletedAt)))
+        .orderBy(asc(productsTable.product_name)),
+      db.execute<{ product_id: string; unit_price: string }>(sql`
+        select distinct on (ii.product_id) ii.product_id, ii.unit_price
+        from invoice_items ii
+        join invoices i on i.id = ii.invoice_id
+        where i.outlet_id = ${outlet.id} and i.type = 'purchase' and i.deleted_at is null
+          and i.status in ('posted', 'partial', 'paid')
+          and ii.product_id is not null
+        order by ii.product_id, i.issue_date desc, ii.id desc
+      `),
+    ]);
+    const lastPrice = new Map(lastRows.rows.map((r) => [r.product_id, r.unit_price]));
+    return {
+      success: true,
+      data: rows.map((r) => ({ ...r, last_price: lastPrice.get(r.id) ?? null })),
+    };
+  });
+
+  // The outlet's suppliers for the form's autocomplete, each with how many
+  // purchases it has (void ones aside), when the last was, and what is still
+  // owed to it (posted + partial). Without `q`, the most recently bought from
+  // first, then the rest by name; with it, names that start with it before
+  // those that merely contain it.
+  app.get("/api/purchase-invoices/parties", async (request, reply) => {
+    const outlet = await getOwnerOutlet(request, reply, "purchaseInvoice");
+    if (!outlet) return;
+    const { q, limit } = request.query as { q?: string; limit?: string };
+    const limitN = Math.min(50, Math.max(1, Number(limit) || 8));
+    const term = q?.trim() ?? "";
+    const rows = await db.execute<{
+      id: number;
+      name: string;
+      phone: string | null;
+      invoices: number;
+      last_at: string | null;
+      outstanding: string;
+    }>(sql`
+      select s.id, trim(s.name) as name, s.phone,
+             count(i.id)::int as invoices,
+             max(i.issue_date) as last_at,
+             coalesce(sum(case when i.status in ('posted', 'partial') then i.total - i.amount_paid else 0 end), 0) as outstanding
+      from suppliers s
+      left join invoices i on i.supplier_id = s.id and i.outlet_id = s.outlet_id
+        and i.type = 'purchase' and i.deleted_at is null and i.status <> 'void'
+      where s.outlet_id = ${outlet.id} and s.deleted_at is null
+        and trim(s.name) <> ''
+        ${term ? sql`and s.name ilike ${`%${term}%`}` : sql``}
+      group by s.id, s.name, s.phone
+      order by ${term ? sql`(lower(trim(s.name)) like ${term.toLowerCase() + "%"}) desc,` : sql``}
+               max(i.issue_date) desc nulls last, lower(trim(s.name))
+      limit ${limitN}
+    `);
+    return { success: true, data: rows.rows };
+  });
+
+  // What to suggest on the purchase form. `popular`: what the outlet bought
+  // most over the last 180 days, topped up, when purchases alone give too few,
+  // with the tracked products the till used up most over the last 30 days
+  // (`source: "usage"`): what runs out is what gets bought. With `supplier`:
+  // that supplier's latest purchase (`last`, to repeat it) and what is usually
+  // bought from it (`usual`, over its last 20, at the price last paid).
+  // `exclude` leaves out the draft being edited, so it never suggests itself.
+  app.get("/api/purchase-invoices/suggestions", async (request, reply) => {
+    const outlet = await getOwnerOutlet(request, reply, "purchaseInvoice");
+    if (!outlet) return;
+    const { supplier, exclude } = request.query as { supplier?: string; exclude?: string };
+    const supplierId = Number(supplier);
+    const excludeId = Number(exclude);
+    const POPULAR = 12;
+
+    type Popular = {
+      product_id: string;
+      name: string;
+      unit: string | null;
+      times: number;
+      qty: string;
+      last_price: string | null;
+      source: "invoice" | "usage";
+    };
+    const popularRows = await db.execute<Omit<Popular, "source">>(sql`
+      select ii.product_id, p.product_name as name, p.unit,
+             count(distinct ii.invoice_id)::int as times,
+             sum(ii.quantity) as qty,
+             (array_agg(ii.unit_price order by i.issue_date desc, ii.id desc))[1] as last_price
+      from invoice_items ii
+      join invoices i on i.id = ii.invoice_id
+      join products p on p.id = ii.product_id and p.deleted_at is null
+      where i.outlet_id = ${outlet.id} and i.type = 'purchase' and i.deleted_at is null
+        and i.status in ('posted', 'partial', 'paid')
+        and i.issue_date >= now() - interval '180 days'
+      group by ii.product_id, p.product_name, p.unit
+      order by times desc, sum(ii.quantity) desc
+      limit ${POPULAR}
+    `);
+    const popular: Popular[] = popularRows.rows.map((r) => ({ ...r, source: "invoice" as const }));
+    if (popular.length < POPULAR) {
+      // Ordered by how often, not how much: an ingredient's grams and a
+      // bottle's count don't add up to anything comparable.
+      const taken = popular.map((r) => r.product_id);
+      const usageRows = await db.execute<Omit<Popular, "source" | "last_price">>(sql`
+        select m.product_id, p.product_name as name, p.unit,
+               count(*)::int as times,
+               (-sum(m.qty_change))::text as qty
+        from stock_movements m
+        join products p on p.id = m.product_id and p.deleted_at is null and p.track_stock
+        where m.outlet_id = ${outlet.id} and m.reason = 'sales' and m.qty_change < 0
+          and m.created_at >= now() - interval '30 days'
+          ${taken.length ? sql`and m.product_id not in (${sql.join(taken.map((t) => sql`${t}`), sql`, `)})` : sql``}
+        group by m.product_id, p.product_name, p.unit
+        order by times desc
+        limit ${POPULAR - popular.length}
+      `);
+      popular.push(...usageRows.rows.map((r) => ({ ...r, last_price: null, source: "usage" as const })));
+    }
+
+    if (!(Number.isFinite(supplierId) && supplierId > 0)) {
+      return { success: true, data: { popular, last: null, usual: [] } };
+    }
+
+    const supplierCond = sql`i.supplier_id = ${supplierId}`;
+    const excludeCond = Number.isFinite(excludeId) && excludeId > 0 ? sql`and i.id <> ${excludeId}` : sql``;
+    const lastRows = await db.execute<{
+      id: number;
+      number: string;
+      status: string;
+      issue_date: string;
+      due_date: string | null;
+      tax_rate: string;
+      discount: string;
+      total: string;
+    }>(sql`
+      select i.id, i.number, i.status, i.issue_date, i.due_date, i.tax_rate, i.discount, i.total
+      from invoices i
+      where i.outlet_id = ${outlet.id} and i.type = 'purchase' and i.deleted_at is null
+        and i.status <> 'void' and ${supplierCond} ${excludeCond}
+      order by i.issue_date desc, i.id desc
+      limit 1
+    `);
+    const lastHead = lastRows.rows[0];
+    const last = lastHead
+      ? {
+          ...lastHead,
+          items: await db
+            .select({
+              product_id: invoiceItemsTable.product_id,
+              description: invoiceItemsTable.description,
+              quantity: invoiceItemsTable.quantity,
+              unit_price: invoiceItemsTable.unit_price,
+              discount_pct: invoiceItemsTable.discount_pct,
+            })
+            .from(invoiceItemsTable)
+            .where(eq(invoiceItemsTable.invoice_id, lastHead.id))
+            .orderBy(asc(invoiceItemsTable.id)),
+        }
+      : null;
+
+    const usualRows = await db.execute<{
+      product_id: string | null;
+      description: string;
+      times: number;
+      avg_qty: string;
+      last_price: string;
+      last_discount_pct: string;
+      last_at: string;
+    }>(sql`
+      with recent as (
+        select i.id, i.issue_date from invoices i
+        where i.outlet_id = ${outlet.id} and i.type = 'purchase' and i.deleted_at is null
+          and i.status <> 'void' and ${supplierCond} ${excludeCond}
+        order by i.issue_date desc, i.id desc
+        limit 20
       )
-      .orderBy(desc(invoicesTable.issue_date));
-    return { success: true, data: rows };
+      select ii.product_id,
+             (array_agg(ii.description order by r.issue_date desc, ii.id desc))[1] as description,
+             count(distinct ii.invoice_id)::int as times,
+             round(avg(ii.quantity), 2) as avg_qty,
+             (array_agg(ii.unit_price order by r.issue_date desc, ii.id desc))[1] as last_price,
+             (array_agg(ii.discount_pct order by r.issue_date desc, ii.id desc))[1] as last_discount_pct,
+             max(r.issue_date) as last_at
+      from invoice_items ii
+      join recent r on r.id = ii.invoice_id
+      left join products p on p.id = ii.product_id
+      where ii.product_id is null or p.deleted_at is null
+      group by ii.product_id, case when ii.product_id is null then lower(trim(ii.description)) end
+      order by times desc, max(r.issue_date) desc
+      limit 30
+    `);
+
+    return { success: true, data: { popular, last, usual: usualRows.rows } };
   });
 
   app.get("/api/purchase-invoices/:id", async (request, reply) => {
@@ -505,19 +912,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
     const access = await requireOutletAccess(request, reply, "purchaseInvoice");
     if (!access) return;
     const outlet = access.outlet;
-    const body = request.body as {
-      supplier_id?: number | null;
-      party_name?: string;
-      issue_date?: string;
-      due_date?: string;
-      tax_rate?: number | string;
-      tax_inclusive?: boolean;
-      discount?: number | string;
-      down_payment?: number | string;
-      down_payment_method?: string;
-      notes?: string;
-      items?: ItemInput[];
-    };
+    const body = request.body as PurchaseBody;
 
     const items = Array.isArray(body.items) ? body.items : [];
     if (items.length === 0) return reply.status(400).send({ success: false, error: "Minimal satu item" });
@@ -535,47 +930,131 @@ export async function invoiceRoutes(app: FastifyInstance) {
 
     const number = await nextInvoiceNumber(outlet.id, "purchase");
 
-    const created = await db.transaction(async (tx) => {
-      const [invoice] = await tx
-        .insert(invoicesTable)
-        .values({
-          outlet_id: outlet.id,
-          type: "purchase",
-          number,
-          status: "draft",
-          supplier_id: body.supplier_id ?? null,
-          party_name: body.party_name ?? "",
-          issue_date: body.issue_date ? new Date(body.issue_date) : new Date(),
-          due_date: body.due_date ? new Date(body.due_date) : null,
-          subtotal: String(subtotal),
-          tax_rate: String(taxRate),
-          tax_amount: String(tax_amount),
-          tax_inclusive: taxInclusive,
-          discount: String(discount),
-          total: String(total),
-          amount_paid: "0",
-          created_by: access.userId,
-          down_payment: String(downPayment),
-          down_payment_method: dpMethod,
-          notes: body.notes ?? "",
-        })
-        .returning();
+    try {
+      const created = await db.transaction(async (tx) => {
+        const supplierId = await resolveSupplier(tx, outlet.id, body);
+        const [invoice] = await tx
+          .insert(invoicesTable)
+          .values({
+            outlet_id: outlet.id,
+            type: "purchase",
+            number,
+            status: "draft",
+            supplier_id: supplierId,
+            party_name: body.party_name ?? "",
+            issue_date: body.issue_date ? new Date(body.issue_date) : new Date(),
+            due_date: body.due_date ? new Date(body.due_date) : null,
+            subtotal: String(subtotal),
+            tax_rate: String(taxRate),
+            tax_amount: String(tax_amount),
+            tax_inclusive: taxInclusive,
+            discount: String(discount),
+            total: String(total),
+            amount_paid: "0",
+            created_by: access.userId,
+            down_payment: String(downPayment),
+            down_payment_method: dpMethod,
+            notes: body.notes ?? "",
+          })
+          .returning();
 
-      await tx.insert(invoiceItemsTable).values(
-        items.map((it, i) => ({
-          invoice_id: invoice.id,
-          product_id: it.product_id ?? null,
-          description: it.description ?? "",
-          quantity: String(lines[i].qty),
-          unit_price: String(lines[i].price),
-          discount_pct: String(lines[i].discPct),
-          line_total: String(lines[i].line_total),
-        })),
-      );
-      return invoice;
-    });
+        await tx.insert(invoiceItemsTable).values(
+          items.map((it, i) => ({
+            invoice_id: invoice.id,
+            product_id: it.product_id ?? null,
+            description: it.description ?? "",
+            quantity: String(lines[i].qty),
+            unit_price: String(lines[i].price),
+            discount_pct: String(lines[i].discPct),
+            line_total: String(lines[i].line_total),
+          })),
+        );
+        return invoice;
+      });
 
-    return reply.status(201).send({ success: true, data: created });
+      return reply.status(201).send({ success: true, data: created });
+    } catch (e) {
+      const msg = String(e instanceof Error ? e.message : e);
+      if (msg.includes("BAD_SUPPLIER")) return reply.status(400).send({ success: false, error: "Supplier tidak ditemukan" });
+      return reply.status(500).send({ success: false, error: msg });
+    }
+  });
+
+  // Edit a draft purchase invoice (the Android form's Ubah): replace the
+  // header and the lines and recompute the totals, as the sales PUT does. Only
+  // a draft may change; a posted one is voided and made again instead.
+  app.put("/api/purchase-invoices/:id", async (request, reply) => {
+    const outlet = await getOwnerOutlet(request, reply, "purchaseInvoice");
+    if (!outlet) return;
+    const id = Number((request.params as { id: string }).id);
+    const body = request.body as PurchaseBody;
+
+    const items = Array.isArray(body.items) ? body.items : [];
+    if (items.length === 0) return reply.status(400).send({ success: false, error: "Minimal satu item" });
+
+    const taxRate = Number(body.tax_rate ?? 0);
+    const discount = Number(body.discount ?? 0);
+
+    try {
+      const result = await db.transaction(async (tx) => {
+        const [invoice] = await tx
+          .select()
+          .from(invoicesTable)
+          .where(and(eq(invoicesTable.id, id), eq(invoicesTable.outlet_id, outlet.id), eq(invoicesTable.type, "purchase")))
+          .limit(1)
+          .for("update");
+        if (!invoice) throw new Error("NOT_FOUND");
+        if (invoice.status !== "draft") throw new Error("NOT_DRAFT");
+
+        // Tax-inclusive pricing is whatever the draft was made with: the app's
+        // form never sets it, so it is never switched off from here.
+        const taxInclusive = body.tax_inclusive ?? invoice.tax_inclusive;
+        const { lines, subtotal, tax_amount, total } = computeTotals(items, taxRate, discount, taxInclusive);
+        const downPayment = Math.max(0, Math.min(Number(body.down_payment ?? 0), total));
+        const supplierId = await resolveSupplier(tx, outlet.id, body);
+
+        const [updated] = await tx
+          .update(invoicesTable)
+          .set({
+            supplier_id: supplierId,
+            party_name: body.party_name ?? "",
+            ...(body.issue_date ? { issue_date: new Date(body.issue_date) } : {}),
+            due_date: body.due_date ? new Date(body.due_date) : null,
+            subtotal: String(subtotal),
+            tax_rate: String(taxRate),
+            tax_amount: String(tax_amount),
+            tax_inclusive: taxInclusive,
+            discount: String(discount),
+            total: String(total),
+            down_payment: String(downPayment),
+            down_payment_method: parseMethod(body.down_payment_method),
+            notes: body.notes ?? "",
+          })
+          .where(eq(invoicesTable.id, id))
+          .returning();
+
+        await tx.delete(invoiceItemsTable).where(eq(invoiceItemsTable.invoice_id, id));
+        await tx.insert(invoiceItemsTable).values(
+          items.map((it, i) => ({
+            invoice_id: id,
+            product_id: it.product_id ?? null,
+            description: it.description ?? "",
+            quantity: String(lines[i].qty),
+            unit_price: String(lines[i].price),
+            discount_pct: String(lines[i].discPct),
+            line_total: String(lines[i].line_total),
+          })),
+        );
+        return updated;
+      });
+      return { success: true, data: result };
+    } catch (e) {
+      const msg = String(e instanceof Error ? e.message : e);
+      if (msg.includes("NOT_FOUND")) return reply.status(404).send({ success: false, error: "Faktur tidak ditemukan" });
+      if (msg.includes("NOT_DRAFT")) return reply.status(409).send({ success: false, error: "Hanya draft yang bisa diubah" });
+      if (msg.includes("BAD_SUPPLIER")) return reply.status(400).send({ success: false, error: "Supplier tidak ditemukan" });
+      return reply.status(500).send({ success: false, error: msg });
+    }
   });
 
   // Post a draft: write stock-IN movements + bump products.stock. Idempotent —
@@ -591,7 +1070,11 @@ export async function invoiceRoutes(app: FastifyInstance) {
           .select()
           .from(invoicesTable)
           .where(and(eq(invoicesTable.id, id), eq(invoicesTable.outlet_id, outlet.id), eq(invoicesTable.type, "purchase")))
-          .limit(1);
+          .limit(1)
+          // Locked until the transaction ends: two taps (or two devices) on the
+          // same action queue up here, and the second then sees the first's
+          // outcome instead of posting the same stock in twice.
+          .for("update");
         if (!invoice) throw new Error("NOT_FOUND");
         if (invoice.status !== "draft") throw new Error("NOT_DRAFT");
 
@@ -662,12 +1145,17 @@ export async function invoiceRoutes(app: FastifyInstance) {
 
   // Pay (full or partial): record a cash-OUT (detail + cashFlows link) and update
   // amount_paid/status. Requires a posted/partial invoice.
+  //
+  // `expected_paid` (optional; the Android app sends it) works as on the sales
+  // side: when what is paid already is no longer what the caller saw, the
+  // payment is refused with 409 PAID_CHANGED instead of booked twice.
   app.post("/api/purchase-invoices/:id/pay", async (request, reply) => {
     const outlet = await getOwnerOutlet(request, reply, "purchaseInvoice");
     if (!outlet) return;
     const id = Number((request.params as { id: string }).id);
-    const body = request.body as { amount?: number | string; method?: string };
+    const body = request.body as { amount?: number | string; method?: string; expected_paid?: number | string };
     const method = parseMethod(body.method);
+    const expectedPaid = body.expected_paid != null && body.expected_paid !== "" ? Number(body.expected_paid) : null;
 
     try {
       const result = await db.transaction(async (tx) => {
@@ -675,8 +1163,15 @@ export async function invoiceRoutes(app: FastifyInstance) {
           .select()
           .from(invoicesTable)
           .where(and(eq(invoicesTable.id, id), eq(invoicesTable.outlet_id, outlet.id), eq(invoicesTable.type, "purchase")))
-          .limit(1);
+          .limit(1)
+          // Locked until the transaction ends: two taps (or two devices) on the
+          // same action queue up here, and the second then sees the first's
+          // outcome instead of acting on the same stale row.
+          .for("update");
         if (!invoice) throw new Error("NOT_FOUND");
+        if (expectedPaid != null && Number.isFinite(expectedPaid) && Math.abs(Number(invoice.amount_paid) - expectedPaid) > 0.001) {
+          throw new Error("PAID_CHANGED");
+        }
         if (invoice.status !== "posted" && invoice.status !== "partial") throw new Error("NOT_PAYABLE");
 
         const total = Number(invoice.total);
@@ -704,6 +1199,13 @@ export async function invoiceRoutes(app: FastifyInstance) {
     } catch (e) {
       const msg = String(e instanceof Error ? e.message : e);
       if (msg.includes("NOT_FOUND")) return reply.status(404).send({ success: false, error: "Faktur tidak ditemukan" });
+      if (msg.includes("PAID_CHANGED")) {
+        return reply.status(409).send({
+          success: false,
+          code: "PAID_CHANGED",
+          error: "Pembayaran faktur ini sudah berubah (mungkin sudah tercatat). Muat ulang dulu.",
+        });
+      }
       if (msg.includes("NOT_PAYABLE")) return reply.status(409).send({ success: false, error: "Faktur harus diposting dulu" });
       if (msg.includes("BAD_AMOUNT")) return reply.status(400).send({ success: false, error: "Nominal pembayaran tidak valid" });
       if (msg.includes("NO_CATEGORY")) return reply.status(500).send({ success: false, error: "Kategori kas keluar belum ada" });
@@ -724,7 +1226,10 @@ export async function invoiceRoutes(app: FastifyInstance) {
           .select()
           .from(invoicesTable)
           .where(and(eq(invoicesTable.id, id), eq(invoicesTable.outlet_id, outlet.id), eq(invoicesTable.type, "purchase")))
-          .limit(1);
+          .limit(1)
+          // Locked until the transaction ends: a second void waits here and
+          // then finds it void, rather than taking the stock out twice.
+          .for("update");
         if (!invoice) throw new Error("NOT_FOUND");
         if (invoice.status === "void") throw new Error("ALREADY_VOID");
 
