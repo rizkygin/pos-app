@@ -7,7 +7,9 @@ const Page = async () => {
         serverFetch("/api/products/mine"),
         serverFetch("/api/products/archived"),
     ]);
-    const { outlet, products, gate } = res.ok ? await res.json() : { outlet: null, products: [], gate: null };
+    const { outlet, products, gate, cost_ledger, is_owner } = res.ok
+        ? await res.json()
+        : { outlet: null, products: [], gate: null, cost_ledger: false, is_owner: false };
     const archived = archivedRes.ok ? ((await archivedRes.json()).products ?? []) : [];
 
     if (!outlet) {
@@ -23,7 +25,14 @@ const Page = async () => {
 
     return (
         <main className="px-4 mx-2 md:mx-6 pb-12">
-            <ProductsManager outletId={outlet.id} initialProducts={products} initialArchived={archived} gate={gate} />
+            <ProductsManager
+                outletId={outlet.id}
+                initialProducts={products}
+                initialArchived={archived}
+                gate={gate}
+                costLedger={cost_ledger === true}
+                isOwner={is_owner === true}
+            />
         </main>
     );
 };

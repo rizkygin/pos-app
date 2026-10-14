@@ -35,9 +35,11 @@ import {
   applyForceHpp,
   applyUnitCost,
   bookedHpp,
+  loadGraph,
   moneyNum,
   previewForceHpp,
   previewUnitCost,
+  stockRecipeHpp,
   type ForceHppItem,
 } from "../lib/force-hpp";
 import {
@@ -391,19 +393,15 @@ export async function productRoutes(app: FastifyInstance) {
         ),
       );
 
-    // Which products have a composition at all. One flat query over the
-    // outlet's recipe rows rather than an EXISTS per product: the Stok page
-    // needs this only to decide whether to offer the "Produksi" button, and
-    // recipe_items is small enough per outlet that the set is cheaper than the
-    // correlated subquery would be.
-    const withRecipe = new Set(
-      (
-        await db
-          .selectDistinct({ product_id: recipeItemsTable.product_id })
-          .from(recipeItemsTable)
-          .where(eq(recipeItemsTable.outlet_id, outlet.id))
-      ).map((r) => r.product_id),
-    );
+    // The outlet's whole recipe graph, loaded flat rather than an EXISTS per
+    // product: recipe_items is small enough per outlet that one read is cheaper
+    // than the correlated subqueries would be. It answers two questions. Which
+    // products have a composition at all (the Stok page's "Produksi" button,
+    // the etalase's explorer buttons) — any product with edges. And what a
+    // recipe books when a product sells, for the etalase's HPP column.
+    const graph = await loadGraph(db, outlet.id);
+    const gate = await getSubscriptionGate(outlet.user_id);
+    const ledger = usesCostLedger(gate);
 
     // And the other direction: which products sit inside a live product's
     // recipe. The etalase offers Jelajah Barang Jadi on these — every bahan,
@@ -432,18 +430,26 @@ export async function productRoutes(app: FastifyInstance) {
       rows.map((r) => r.products.id),
     );
 
-    const products = rows.map((r) => ({
-      ...r.products,
-      menu_group: r.menu_groups?.name ?? null,
-      menu_group_order: r.menu_groups?.sort_order ?? null,
-      has_recipe: withRecipe.has(r.products.id),
-      is_ingredient: usedAsIngredient.has(r.products.id),
-      addon_groups: addonsByProduct.get(r.products.id) ?? [],
-    }));
+    const products = rows.map((r) => {
+      const hasRecipe = graph.kidsOf.has(r.products.id);
+      return {
+        ...r.products,
+        menu_group: r.menu_groups?.name ?? null,
+        menu_group_order: r.menu_groups?.sort_order ?? null,
+        has_recipe: hasRecipe,
+        is_ingredient: usedAsIngredient.has(r.products.id),
+        addon_groups: addonsByProduct.get(r.products.id) ?? [],
+        // What the recipe books per unit if this product tracks no stock of
+        // its own; null = it books nothing and the buying price stands in.
+        // Only a ledger plan ever costs from a recipe — see usesCostLedger.
+        recipe_hpp: ledger && hasRecipe ? stockRecipeHpp(graph, r.products.id) : null,
+      };
+    });
 
-    const gate = await getSubscriptionGate(outlet.user_id);
-
-    return reply.send({ outlet, products, gate });
+    // cost_ledger: the costing basis, decided here once (usesCostLedger), so
+    // the etalase never re-derives it from plan features — a trial grants
+    // `stock` yet still costs from the buying price.
+    return reply.send({ outlet, products, gate, cost_ledger: ledger, is_owner: access.isOwner });
   });
 
   app.post("/api/products", async (request, reply) => {

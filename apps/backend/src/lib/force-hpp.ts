@@ -156,6 +156,19 @@ export function bookedHpp(g: RecipeGraph, rootId: string, ledger: boolean): numb
   );
 }
 
+// bookedHpp's last branch on its own, for the product list: what one unit
+// books from the recipe IF the product tracks no stock of its own, on a ledger
+// plan. null when no leaf moves stock — the sale then leaves no movement and
+// falls back to the product's buying_price — or when the recipe is broken.
+// The list decides the rest itself (it needs the answer live, while the owner
+// is still flipping the form's stock toggle); see hpp-source.tsx.
+export function stockRecipeHpp(g: RecipeGraph, rootId: string): number | null {
+  const { leaves, broken } = costLeaves(g, rootId);
+  if (broken) return null;
+  const moving = leaves.filter((l) => l.kind !== "plain");
+  return moving.length ? recipeHpp(g, moving) : null;
+}
+
 export class ForceHppError extends Error {
   constructor(
     public status: number,
@@ -167,7 +180,10 @@ export class ForceHppError extends Error {
 
 type Product = CostedProduct & { price: string; price_mark_down: string | null };
 
-async function loadGraph(tx: Tx, outletId: number): Promise<RecipeGraph<Product>> {
+// Every product of the outlet, archived ones included (an old recipe can still
+// name one), and every recipe edge. Takes the plain `db` too — only `select`
+// is used, so a read outside a transaction needs no transaction to call it.
+export async function loadGraph(tx: Pick<Tx, "select">, outletId: number): Promise<RecipeGraph<Product>> {
   const [catalogue, edges] = await Promise.all([
     tx
       .select({

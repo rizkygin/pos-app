@@ -58,6 +58,16 @@ import { AddonEditor } from './addon-editor';
 import { VariantEditor } from './variant-editor';
 import { DeleteProductDialog } from './delete-product-dialog';
 import { ArchivedProducts, type ArchivedProduct } from './archived-products';
+import {
+  HppCell,
+  HppFieldHint,
+  HppLegend,
+  hppMissing,
+  hppOf,
+  hppSourceLabel,
+  type Hpp,
+  type HppSource,
+} from './hpp-source';
 import { ORDER_FEATURES } from '@/lib/order-features';
 import { resolveProductImage, isBackendImage } from '@/lib/image-src';
 import { API_URL } from '@/lib/api-url';
@@ -101,6 +111,13 @@ type Product = {
   has_recipe?: boolean;
   /** …and is it inside another live product's recipe (a Paket Hemat's item). */
   is_ingredient?: boolean;
+  /** The cost ledger's weighted average — what a sale books when it tracks stock. */
+  avg_cost?: string | null;
+  /**
+   * What its recipe books per unit if it tracks no stock of its own; null when
+   * the recipe moves no stock (or the plan has no ledger). See hpp-source.tsx.
+   */
+  recipe_hpp?: number | null;
 };
 
 const rupiah = (v: number | string) =>
@@ -116,6 +133,9 @@ type ProductsManagerProps = {
   // The Arsip tab (GET /api/products/archived); kind is resolved here.
   initialArchived?: Omit<ArchivedProduct, 'kind'>[];
   gate?: { features: Record<string, unknown> } | null;
+  /** cost_ledger from /api/products/mine: does a sale cost from the stock ledger. */
+  costLedger?: boolean;
+  isOwner?: boolean;
 };
 
 const CATEGORIES = ORDER_FEATURES.map((feature) => ({
@@ -513,6 +533,8 @@ export const ProductsManager = ({
   initialProducts,
   initialArchived = [],
   gate,
+  costLedger = false,
+  isOwner = false,
 }: ProductsManagerProps) => {
   const router = useRouter();
   // Bahan and Tambahan piggyback on the `stock` plan feature: both shelves are
@@ -581,13 +603,17 @@ export const ProductsManager = ({
   // A menu group's id, or 'none' for the products in no group — the ones that
   // fall back to their category on the public menu.
   const [groupFilter, setGroupFilter] = useState<'all' | 'none' | number>('all');
+  // Where a sale's HPP comes from (see hpp-source.tsx), or 'missing' for the
+  // rows that book Rp 0 whatever the source — the ones worth fixing first.
+  const [hppFilter, setHppFilter] = useState<'all' | 'missing' | HppSource>('all');
   const [filterOpen, setFilterOpen] = useState(false);
   // How many filters are narrowing the list — shown on the Filter button so a
   // half-empty table always explains itself even with the popup closed.
   const activeFilterCount =
     (categoryFilter !== 'all' ? 1 : 0) +
     (variantFilter !== 'all' ? 1 : 0) +
-    (groupFilter !== 'all' ? 1 : 0);
+    (groupFilter !== 'all' ? 1 : 0) +
+    (hppFilter !== 'all' ? 1 : 0);
   const [tab, setTab] = useState<TableKind>('produk');
   // The Arsip tab sits beside the three shelves but is not one of them: its
   // rows are not Products (no status switch, no edit), so it renders its own
@@ -757,6 +783,47 @@ export const ProductsManager = ({
     return acc;
   }, [initialProducts]);
 
+  // What one sale of each product books as HPP, and from which field — the
+  // etalase's HPP column and its filter.
+  const hppById = useMemo(
+    () =>
+      new Map<string, Hpp>(
+        initialProducts.map((p) => [
+          p.id,
+          hppOf({
+            ledger: costLedger,
+            category: p.category,
+            trackStock: p.track_stock,
+            buyingPrice: p.buying_price,
+            avgCost: p.avg_cost,
+            recipeHpp: p.recipe_hpp,
+          }),
+        ]),
+      ),
+    [initialProducts, costLedger],
+  );
+
+  // The filter offers only what the Produk table actually has: on a plan
+  // without the ledger every row is Harga modal, and a choice that matches
+  // everything (or nothing) is noise.
+  const hppFilterOptions = useMemo(() => {
+    const present = new Set<HppSource>();
+    let missing = false;
+    for (const p of byKind.produk) {
+      const h = hppById.get(p.id);
+      if (!h) continue;
+      present.add(h.source);
+      if (hppMissing(h)) missing = true;
+    }
+    const order: HppSource[] = ['avg', 'recipe', 'buying', 'service'];
+    const options: ['all' | 'missing' | HppSource, string][] = [['all', 'Semua']];
+    if (present.size > 1) {
+      for (const s of order) if (present.has(s)) options.push([s, hppSourceLabel(s)]);
+    }
+    if (missing) options.push(['missing', 'HPP Rp 0']);
+    return options;
+  }, [byKind, hppById]);
+
   // The dropdown now only refines the Produk table — "bahan" and "tambahan" are
   // whole tabs, so offering them here as well would be two controls fighting
   // over the same question.
@@ -812,7 +879,11 @@ export const ProductsManager = ({
   // out rather than vanishing.
   const showsGroup = tab === 'produk';
   const showsStatus = tab !== 'bahan';
-  const columnCount = 3 + (showsGroup ? 1 : 0) + (showsStatus ? 1 : 0);
+  // HPP is what a SALE books, and a bahan is never sold — its row already
+  // shows what it cost, and what a recipe books for it is its dish's question.
+  const showsHpp = tab !== 'bahan';
+  const columnCount =
+    3 + (showsGroup ? 1 : 0) + (showsHpp ? 1 : 0) + (showsStatus ? 1 : 0);
 
   // Same `isAvailable` column, two different sentences. Turning a dish off
   // removes it from the customer's menu; turning an add-on off leaves it listed
@@ -855,7 +926,12 @@ export const ProductsManager = ({
         tab !== 'produk' ||
         groupFilter === 'all' ||
         (groupFilter === 'none' ? p.menu_group_id == null : p.menu_group_id === groupFilter);
-      return matchesSearch && matchesCategory && matchesVariant && matchesGroup;
+      const hpp = hppById.get(p.id);
+      const matchesHpp =
+        tab !== 'produk' ||
+        hppFilter === 'all' ||
+        (!!hpp && (hppFilter === 'missing' ? hppMissing(hpp) : hpp.source === hppFilter));
+      return matchesSearch && matchesCategory && matchesVariant && matchesGroup && matchesHpp;
     });
 
     const dir = sortDir === 'asc' ? 1 : -1;
@@ -886,6 +962,8 @@ export const ProductsManager = ({
     categoryFilter,
     variantFilter,
     groupFilter,
+    hppFilter,
+    hppById,
     variantCountByBase,
     sortBy,
     sortDir,
@@ -1240,6 +1318,20 @@ export const ProductsManager = ({
   // ── Money feedback ────────────────────────────────────────────────────────
   const sellNum = Number(formData.price) || 0;
   const buyNum = Number(formData.buying_price) || 0;
+  // What a sale of this product will book as HPP, following the stock toggle
+  // and the kind as they change, before anything is saved. The ledger's
+  // figures are the saved product's: a new one has no average and no recipe.
+  const formHpp = hppOf({
+    ledger: costLedger,
+    category: selectedCategory,
+    trackStock,
+    buyingPrice: formData.buying_price,
+    avgCost: editingProduct?.avg_cost,
+    recipeHpp: editingProduct?.recipe_hpp,
+  });
+  // The margin is made on that figure — the Harga modal typed here only when
+  // it is the source.
+  const costNum = formHpp.source === 'buying' ? buyNum : formHpp.cost;
   const discNum = hasDiscount ? Number(formData.price_mark_down) || 0 : 0;
   const discountInvalid = hasDiscount && discNum > 0 && discNum >= sellNum;
   const discountPct =
@@ -1249,8 +1341,8 @@ export const ProductsManager = ({
   // What the customer actually pays, which is what the margin is made on.
   const effectiveSell = discountPct !== null ? discNum : sellNum;
   const showMargin =
-    asksSellingPrice && !usesPriceRange && effectiveSell > 0 && buyNum > 0;
-  const profit = effectiveSell - buyNum;
+    asksSellingPrice && !usesPriceRange && effectiveSell > 0 && costNum > 0;
+  const profit = effectiveSell - costNum;
   const marginPct = effectiveSell > 0 ? Math.round((profit / effectiveSell) * 100) : 0;
   const lowNum = Number(formData.lowest_price) || 0;
   const highNum = Number(formData.highest_price) || 0;
@@ -2139,11 +2231,14 @@ export const ProductsManager = ({
                 placeholder="15.000"
                 unit={unitLabel}
               />
-              <p className="mt-1.5 text-xs text-muted-foreground">
-                {asksSellingPrice
-                  ? 'Untuk menghitung untung. Tidak dilihat pelanggan.'
-                  : `Harga beli per ${unitLabel}.`}
-              </p>
+              <div className="mt-1.5">
+                <HppFieldHint
+                  hpp={formHpp}
+                  ledger={costLedger}
+                  isIngredient={!asksSellingPrice}
+                  unit={unitLabel}
+                />
+              </div>
             </div>
           </div>
 
@@ -2167,6 +2262,8 @@ export const ProductsManager = ({
                   <>
                     Untung <b>{rupiah(profit)}</b> per {unitLabel} · {marginPct}% dari
                     harga {discountPct !== null ? 'setelah diskon' : 'jual'}
+                    {formHpp.source !== 'buying' &&
+                      ` · HPP ${hppSourceLabel(formHpp.source).toLowerCase()}`}
                   </>
                 ) : profit === 0 ? (
                   'Harga jual sama dengan modal — belum ada untung.'
@@ -2871,6 +2968,7 @@ export const ProductsManager = ({
                               setCategoryFilter('all');
                               setVariantFilter('all');
                               setGroupFilter('all');
+                              setHppFilter('all');
                             }}
                             className="text-xs font-medium text-blue-600 hover:underline"
                           >
@@ -2969,6 +3067,37 @@ export const ProductsManager = ({
                           </div>
                         </div>
                       )}
+
+                      {/* Kept while a choice is active even if its rows are
+                          gone, so the filter narrowing the list stays visible. */}
+                      {(hppFilterOptions.length > 1 || hppFilter !== 'all') && (
+                        <div className="space-y-1.5">
+                          <p className="text-xs font-medium text-muted-foreground">
+                            Asal HPP
+                          </p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {hppFilterOptions.map(([value, label]) => {
+                              const active = hppFilter === value;
+                              return (
+                                <button
+                                  key={value}
+                                  type="button"
+                                  onClick={() => setHppFilter(value)}
+                                  className={`rounded-full border px-3 py-1 text-xs transition-colors ${
+                                    active
+                                      ? 'border-blue-600 bg-blue-600 text-white'
+                                      : value === 'missing'
+                                        ? 'border-amber-300 bg-background text-amber-700 hover:bg-amber-50 dark:border-amber-800 dark:text-amber-400 dark:hover:bg-amber-950/40'
+                                        : 'border-input bg-background hover:bg-muted'
+                                  }`}
+                                >
+                                  {label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
                     </PopoverContent>
                   </Popover>
                 )}
@@ -3043,6 +3172,14 @@ export const ProductsManager = ({
                             align="right"
                           />
                         </th>
+                        {showsHpp && (
+                          <th className="px-3 py-2.5 text-right font-semibold">
+                            <span className="flex items-center justify-end gap-1">
+                              HPP
+                              <HppLegend ledger={costLedger} isOwner={isOwner} />
+                            </span>
+                          </th>
+                        )}
                         <th
                           className="px-3 py-2.5 text-right font-semibold"
                           data-tour="col-stock"
@@ -3070,6 +3207,7 @@ export const ProductsManager = ({
                           product.menu_group_id != null
                             ? groupById.get(product.menu_group_id)?.name
                             : null;
+                        const hpp = hppById.get(product.id);
                         return (
                           <tr
                             key={product.id}
@@ -3185,6 +3323,28 @@ export const ProductsManager = ({
                                 </span>
                               )}
                             </td>
+                            {/* HPP — what one sale books and from which
+                                field; the popover says why. */}
+                            {showsHpp && (
+                              <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                                {hpp && (
+                                  <HppCell
+                                    hpp={hpp}
+                                    name={product.product_name}
+                                    unit={product.unit}
+                                    buyingPrice={Number(product.buying_price) || 0}
+                                    ledger={costLedger}
+                                    hasRecipe={!!product.has_recipe}
+                                    explorerHref={
+                                      recipeAllowed && kindOf(product.category) !== 'tambahan'
+                                        ? `/dashboard/addproducts/recipe-explorer/${product.id}?name=${encodeURIComponent(product.product_name)}`
+                                        : null
+                                    }
+                                    isOwner={isOwner}
+                                  />
+                                )}
+                              </td>
+                            )}
                             {/* Stok */}
                             <td className="px-3 py-2.5 text-right tabular-nums whitespace-nowrap">
                               {product.track_stock ? (
