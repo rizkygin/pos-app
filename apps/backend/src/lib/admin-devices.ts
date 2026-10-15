@@ -3,7 +3,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { Resend } from "resend";
 import { db } from "../db";
 import { adminDevicesTable, usersTable } from "../db/schema";
-import { COOKIE_DOMAIN, COOKIE_SECURE, FRONTEND_URL } from "./app-env";
+import { APP_ENV, COOKIE_DOMAIN, COOKIE_SECURE, FRONTEND_URL } from "./app-env";
 import { hasAdminRow } from "./admin-rows";
 import { recordAdminActivity, reportedIp } from "./admin-activity";
 import { APP_TIMEZONE } from "./timezone";
@@ -65,6 +65,13 @@ export function describeUserAgent(ua: string | null | undefined) {
 }
 
 export async function sendNewDeviceEmail(user: { email: string; name: string }, device: string, ip: string | null) {
+  // A laptop (APP_ENV=local, i.e. no Railway) never mails: the local
+  // RESEND_API_KEY is the live one, so every fresh browser or curl sign-in
+  // would spend the same send quota production depends on.
+  if (APP_ENV === "local") {
+    console.log(`[admin-devices] new-device email skipped (local): ${user.email} — ${device}`);
+    return;
+  }
   const when = new Date().toLocaleString("id-ID", {
     timeZone: APP_TIMEZONE,
     dateStyle: "full",
