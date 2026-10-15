@@ -4,6 +4,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { RegisterServiceWorker } from "@/components/register-service-worker";
 import { ThemeProvider } from "@/components/theme-provider";
+import { Toaster } from "@/components/ui/sonner";
 import { MaintenanceBanner } from "@/components/maintenance/maintenance-banner";
 
 const geistSans = Geist({
@@ -115,6 +116,7 @@ export default function RootLayout({
               navigation and without making every page dynamic. */}
           <MaintenanceBanner />
           {children}
+          <Toaster />
         </ThemeProvider>
       </body>
     </html>
