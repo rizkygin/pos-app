@@ -323,6 +323,21 @@ export function employeeAddonFor(
   return { seats, amount: Math.round(seats * perMonth * PERIOD_MONTHS[plan.interval]) };
 }
 
+// What one period of `plan` costs this merchant, before the 3-digit unique
+// code: the deal discounts the PLAN, then the add-on goes on top — the order
+// matters and is not commutative. The one place a quote is priced, shared by
+// the real payment (createPendingPayment) and the admin renewal forecast so the
+// two can never disagree.
+export function renewalQuote(
+  sub: Parameters<typeof effectiveDiscountPct>[0] & Parameters<typeof employeeAddonFor>[0],
+  plan: { tier: string; interval: 'monthly' | 'yearly'; price: string },
+) {
+  const discountPct = effectiveDiscountPct(sub, plan);
+  const planAmount = Math.round(Number(plan.price) * (1 - discountPct / 100));
+  const addon = employeeAddonFor(sub, plan);
+  return { discountPct, planAmount, addon, payable: planAmount + addon.amount };
+}
+
 // Merchant picks a plan → returns the pending payment carrying the unique
 // transfer amount (amount_due = discounted plan price + 3-digit unique code) so
 // the admin can match the bank mutation at a glance. Idempotent per plan: an
@@ -348,13 +363,7 @@ export async function createPendingPayment(userId: string, planId: number) {
           eq(subscriptionPaymentsTable.status, 'pending'),
         ),
       );
-    // Apply the merchant's marketing deal (if it matches this plan), then add
-    // their paid staff seats on top — the deal discounts the PLAN, the add-on
-    // is a pass-through charge, so the order matters and is not commutative.
-    const discountPct = effectiveDiscountPct(sub, plan);
-    const discountedPrice = Math.round(Number(plan.price) * (1 - discountPct / 100));
-    const addon = employeeAddonFor(sub, plan);
-    const payable = discountedPrice + addon.amount;
+    const { discountPct, addon, payable } = renewalQuote(sub, plan);
 
     const now = new Date();
     for (const p of pendings) {
@@ -366,6 +375,10 @@ export async function createPendingPayment(userId: string, planId: number) {
       ) {
         return { payment: p, subscription: sub, reused: true };
       }
+      // Proof already uploaded = the merchant has most likely transferred. Never
+      // void that one to make room for a new quote — the money would land on a
+      // dead payment the admin queue no longer shows. They wait for the review.
+      if (p.proof_image) throw new Error('PROOF_PENDING');
       // Different plan, changed deal, changed add-on, or stale: void it so only
       // one live quote (with a current price) exists.
       await tx
@@ -731,16 +744,172 @@ export async function applyScheduledTierIfDue<
   return updated as T;
 }
 
-// Lazy sweep: void pending payments past their expiry. Called from the admin
-// list endpoint so the queue self-cleans without a cron.
-export async function expireStalePayments() {
+// The merchant takes back a bill they have not paid — usually a mis-tap on a
+// plan button. Only while nothing has been sent: once a proof is attached the
+// money may be in the bank and only the admin can close it. Lands on
+// 'expired', the state an unpaid quote reaches on its own after
+// PAYMENT_EXPIRY_DAYS anyway; the event row records that it was the merchant.
+export async function cancelPendingPayment(paymentId: number, userId: string) {
+  return db.transaction(async (tx) => {
+    const [row] = await tx
+      .update(subscriptionPaymentsTable)
+      .set({ status: 'expired', expires_at: new Date() })
+      .where(
+        and(
+          eq(subscriptionPaymentsTable.id, paymentId),
+          eq(subscriptionPaymentsTable.user_id, userId),
+          eq(subscriptionPaymentsTable.status, 'pending'),
+          sql`${subscriptionPaymentsTable.proof_image} IS NULL`,
+        ),
+      )
+      .returning();
+    if (!row) return null;
+    await logEvent(tx, {
+      subscription_id: row.subscription_id,
+      user_id: userId,
+      payment_id: row.id,
+      type: 'payment_canceled',
+      actor: 'merchant',
+      actor_id: userId,
+    });
+    return row;
+  });
+}
+
+// Lazy sweep: void UNPAID bills past their expiry, so a plan tapped and never
+// paid closes itself without a cron. Run by the admin queue (everyone) and by
+// the owner's own subscription read (just them, so their page never shows a
+// dead bill as still payable).
+//
+// Only bills WITHOUT a proof. expires_at is set when the bill is created and a
+// proof upload does not move it, so sweeping every pending row voided bills an
+// owner had paid and proved on day three before an admin got to review them —
+// their money then sat on a payment the queue no longer listed. A proved bill
+// waits for the admin however long that takes.
+export async function expireStalePayments(userId?: string) {
   await db
     .update(subscriptionPaymentsTable)
     .set({ status: 'expired' })
     .where(
       and(
         eq(subscriptionPaymentsTable.status, 'pending'),
+        sql`${subscriptionPaymentsTable.proof_image} IS NULL`,
         sql`${subscriptionPaymentsTable.expires_at} < now()`,
+        userId ? eq(subscriptionPaymentsTable.user_id, userId) : undefined,
       ),
     );
+}
+
+// ---------------------------------------------------------------------------
+// Admin "Proyeksi Bulan Depan": money monthly subscribers are DUE to pay in one
+// calendar month, assuming each renews on time at the plan they will be on.
+//
+// Only PAID monthly accounts: trials have never paid, and a yearly plan's
+// renewal is a lump once a year — counting it would make a one-off month look
+// like recurring demand. Driven by due dates, not by "every monthly owner pays
+// every month": Model 2 stacking lets a merchant prepay months ahead, and one
+// whose paid time already covers the month owes nothing in it.
+// ---------------------------------------------------------------------------
+
+type ForecastRow = {
+  user_name: string;
+  user_email: string;
+  plan_name: string;
+  tier: SubscriptionTier;
+  due_at: Date;
+  discount_pct: number;
+  plan_amount: number;
+  addon_seats: number;
+  addon_amount: number;
+  amount: number;
+};
+
+export async function forecastMonthlyRenewals(range: { startUTC: Date; endUTC: Date }) {
+  // The plan a renewal will be priced at: a scheduled downgrade has already
+  // taken effect by the time the paid period runs out (next_tier_at is never
+  // after current_period_end), so it wins over the current plan.
+  const renewalPlanId = sql`coalesce(${subscriptionsTable.next_plan_id}, ${subscriptionsTable.plan_id})`;
+  const subs = await db
+    .select({
+      user_name: usersTable.name,
+      user_email: usersTable.email,
+      current_period_end: subscriptionsTable.current_period_end,
+      discount_pct: subscriptionsTable.discount_pct,
+      discount_tier: subscriptionsTable.discount_tier,
+      discount_interval: subscriptionsTable.discount_interval,
+      addon_employee_seats: subscriptionsTable.addon_employee_seats,
+      addon_seat_price: subscriptionsTable.addon_seat_price,
+      plan_name: subscriptionPlansTable.name,
+      tier: subscriptionPlansTable.tier,
+      interval: subscriptionPlansTable.interval,
+      price: subscriptionPlansTable.price,
+    })
+    .from(subscriptionsTable)
+    .innerJoin(usersTable, eq(usersTable.id, subscriptionsTable.user_id))
+    .innerJoin(subscriptionPlansTable, eq(subscriptionPlansTable.id, renewalPlanId))
+    .where(
+      and(
+        eq(subscriptionsTable.status, 'active'),
+        eq(subscriptionPlansTable.interval, 'monthly'),
+        eq(subscriptionsTable.cancel_at_period_end, false),
+        sql`${usersTable.deletedAt} IS NULL`,
+      ),
+    );
+
+  const now = new Date();
+  const due: ForecastRow[] = [];
+  // 'active' is never flipped to 'expired' when the period runs out, so a
+  // lapsed account still reads active. Reported apart: whether they come back
+  // is a guess, not demand.
+  const lapsed: ForecastRow[] = [];
+  let prepaid = 0;
+
+  for (const s of subs) {
+    if (!s.current_period_end) continue;
+    const q = renewalQuote(s, s);
+    const row = (dueAt: Date): ForecastRow => ({
+      user_name: s.user_name,
+      user_email: s.user_email,
+      plan_name: s.plan_name,
+      tier: s.tier,
+      due_at: dueAt,
+      discount_pct: q.discountPct,
+      plan_amount: q.planAmount,
+      addon_seats: q.addon.seats,
+      addon_amount: q.addon.amount,
+      amount: q.payable,
+    });
+
+    if (s.current_period_end <= now) {
+      lapsed.push(row(s.current_period_end));
+      continue;
+    }
+    // Walk the renewals forward with the engine's own arithmetic (an on-time
+    // renewal stacks from the old end): one ending later THIS month renews now
+    // and is due again next month. Usually one hit, but the calendar drift
+    // addInterval accepts (31 Jan → 3 Mar) can make it zero or two.
+    let hits = 0;
+    for (let d = s.current_period_end; d < range.endUTC; d = addInterval(d, 'monthly')) {
+      if (d >= range.startUTC) {
+        due.push(row(d));
+        hits++;
+      }
+    }
+    if (!hits && s.current_period_end >= range.endUTC) prepaid++;
+  }
+
+  due.sort((a, b) => a.due_at.getTime() - b.due_at.getTime());
+  lapsed.sort((a, b) => b.due_at.getTime() - a.due_at.getTime());
+  const sum = (rows: ForecastRow[], k: 'amount' | 'plan_amount' | 'addon_amount') =>
+    rows.reduce((t, r) => t + r[k], 0);
+
+  return {
+    total: sum(due, 'amount'),
+    plan_total: sum(due, 'plan_amount'),
+    addon_total: sum(due, 'addon_amount'),
+    owners: new Set(due.map((r) => r.user_email)).size,
+    due,
+    prepaid,
+    lapsed: { total: sum(lapsed, 'amount'), rows: lapsed },
+  };
 }

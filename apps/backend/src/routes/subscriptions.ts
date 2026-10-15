@@ -25,6 +25,8 @@ import {
   rejectPayment,
   expireStalePayments,
   applyScheduledTierIfDue,
+  forecastMonthlyRenewals,
+  cancelPendingPayment,
 } from "../lib/subscription";
 import { getSubscriptionGate, invalidateGate, maxEmployeesFor } from "../lib/outlet-access";
 import { getUTCRangeFromLocalMonth } from "../lib/timezone";
@@ -116,6 +118,8 @@ export async function subscriptionRoutes(app: FastifyInstance) {
       .limit(1);
     // Apply a scheduled downgrade whose boundary has passed (lazy, cron-free).
     if (sub) sub = await applyScheduledTierIfDue(sub);
+    // Close this owner's own unpaid bills that ran out, before listing them.
+    if (sub) await expireStalePayments(user.id);
     const payments = sub
       ? await db
           .select({
@@ -158,8 +162,28 @@ export async function subscriptionRoutes(app: FastifyInstance) {
       const msg = String(e instanceof Error ? e.message : e);
       if (msg.includes("PLAN_NOT_FOUND"))
         return reply.status(404).send({ success: false, error: "Paket tidak ditemukan" });
+      if (msg.includes("PROOF_PENDING"))
+        return reply.status(409).send({
+          success: false,
+          error: "Bukti transfer Pian masih dicek admin. Tunggu konfirmasinya dulu sebelum memilih paket lain.",
+        });
       return reply.status(500).send({ success: false, error: msg });
     }
+  });
+
+  // Cancel an unpaid bill (lib/subscription.ts cancelPendingPayment). Refused
+  // once a proof is attached — by then only the admin can close it.
+  app.post("/api/subscription-payments/:id/cancel", async (request, reply) => {
+    const user = await getOwnerUser(request, reply);
+    if (!user) return;
+    const id = Number((request.params as { id: string }).id);
+    const row = await cancelPendingPayment(id, user.id);
+    if (!row)
+      return reply.status(409).send({
+        success: false,
+        error: "Tagihan ini tidak bisa dibatalkan — sudah diproses atau bukti transfer sudah dikirim.",
+      });
+    return { success: true };
   });
 
   // Upload the transfer proof (multipart image + optional sender fields). Only
@@ -272,15 +296,27 @@ export async function subscriptionRoutes(app: FastifyInstance) {
     // Self-cleaning queue: void anything past its expiry before listing.
     await expireStalePayments();
 
+    // A pending bill is two different queues. With a proof, the merchant says
+    // they paid and the admin owes a review ('pending'). Without one, nothing
+    // has happened yet — often a plan tapped and abandoned — so it stays out of
+    // the to-do list and its count, and sits under 'unpaid' in case the money
+    // did arrive without a screenshot.
+    const proofSent = sql`${subscriptionPaymentsTable.proof_image} IS NOT NULL`;
+    const noProof = sql`${subscriptionPaymentsTable.proof_image} IS NULL`;
+    const isPending = eq(subscriptionPaymentsTable.status, "pending");
     const statusFilter =
       status === "all"
         ? undefined
-        : eq(
-            subscriptionPaymentsTable.status,
-            status as "pending" | "paid" | "rejected" | "expired" | "failed" | "refunded",
-          );
+        : status === "pending"
+          ? and(isPending, proofSent)
+          : status === "unpaid"
+            ? and(isPending, noProof)
+            : eq(
+                subscriptionPaymentsTable.status,
+                status as "paid" | "rejected" | "expired" | "failed" | "refunded",
+              );
 
-    const [rows, [{ n: total }], [{ n: pendingCount }]] = await Promise.all([
+    const [rows, [{ n: total }], [{ n: pendingCount }], [{ n: unpaidCount }]] = await Promise.all([
       db
         .select({
           id: subscriptionPaymentsTable.id,
@@ -325,10 +361,14 @@ export async function subscriptionRoutes(app: FastifyInstance) {
       db
         .select({ n: sql<number>`count(*)::int` })
         .from(subscriptionPaymentsTable)
-        .where(eq(subscriptionPaymentsTable.status, "pending")),
+        .where(and(isPending, proofSent)),
+      db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(subscriptionPaymentsTable)
+        .where(and(isPending, noProof)),
     ]);
 
-    return { success: true, data: rows, total, pendingCount, page: pageNum, limit: limitNum };
+    return { success: true, data: rows, total, pendingCount, unpaidCount, page: pageNum, limit: limitNum };
   });
 
   // Revenue accumulation — computed straight from PAID payments (the source of
@@ -480,6 +520,28 @@ export async function subscriptionRoutes(app: FastifyInstance) {
         yearly: yearlyRows.map((r) => ({ period: r.year, ...bucket(r) })),
       },
     };
+  });
+
+  // Next calendar month's monthly-renewal demand (lib/subscription.ts
+  // forecastMonthlyRenewals). "Next month" is the viewer's local month, cut the
+  // same way as the revenue panel above — never UTC.
+  app.get("/api/admin/subscription-forecast", async (request, reply) => {
+    const admin = await requireAdmin(request, reply);
+    if (!admin) return;
+
+    const { timezone = "Asia/Jakarta" } = request.query as Record<string, string>;
+    const todayLocal = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+    const [localYear, localMonth] = todayLocal.split("-").map(Number);
+    const next = new Date(Date.UTC(localYear, localMonth, 1));
+    const month = `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}`;
+
+    const forecast = await forecastMonthlyRenewals(getUTCRangeFromLocalMonth(month, timezone));
+    return { success: true, data: { month, ...forecast } };
   });
 
   // Set (or clear, with discount_pct 0) a marketing deal on a merchant's
