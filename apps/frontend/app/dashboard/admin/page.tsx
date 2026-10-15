@@ -20,6 +20,7 @@ const adminDashboardPage = async () => {
         activeOrdersCount: 0,
         onlineCouriersCount: 0,
         totalOutlets: 0,
+        activeOutlets: 0,
         totalCouriers: 0,
         totalCustomers: 0,
         recentOrders: [],
@@ -33,6 +34,7 @@ const adminDashboardPage = async () => {
       activeOrdersCount={data.activeOrdersCount}
       onlineCouriersCount={data.onlineCouriersCount}
       totalOutlets={data.totalOutlets}
+      activeOutlets={data.activeOutlets}
       totalCouriers={data.totalCouriers}
       totalCustomers={data.totalCustomers}
       recentOrders={data.recentOrders}

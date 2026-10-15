@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import fs from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
-import { and, asc, count, countDistinct, desc, eq, gte, ilike, inArray, isNull, lt, notInArray, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, countDistinct, desc, eq, gt, gte, ilike, inArray, isNull, lt, notInArray, or, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "../db";
 import {
@@ -23,6 +23,7 @@ import {
   usersTable,
   serviceAreaTable,
   stockOpnameSessionsTable,
+  subscriptionsTable,
 } from "../db/schema";
 
 const OFFLINE_CUSTOMER_EMAIL = "rizkygin1@gmail.com";
@@ -1105,6 +1106,7 @@ export async function adminRoutes(app: FastifyInstance) {
       [{ total: activeOrdersCount }],
       [{ total: onlineCouriersCount }],
       [{ total: totalOutlets }],
+      [{ total: activeOutlets }],
       [{ total: totalCouriers }],
       [{ total: totalCustomers }],
       recentOrdersRaw,
@@ -1155,6 +1157,21 @@ export async function adminRoutes(app: FastifyInstance) {
           ),
         ),
       db.select({ total: count() }).from(outletsTable).where(isNull(outletsTable.deletedAt)),
+      // Outlets whose owner is on a PAID plan right now — trials excluded.
+      // Same liveness rule as getSubscriptionGate's `alive` (status alone can
+      // lag: nothing flips 'active' to 'expired' when the period runs out).
+      // subscriptions.user_id is unique, so the join never double-counts.
+      db
+        .select({ total: count() })
+        .from(outletsTable)
+        .innerJoin(subscriptionsTable, eq(subscriptionsTable.user_id, outletsTable.user_id))
+        .where(
+          and(
+            isNull(outletsTable.deletedAt),
+            eq(subscriptionsTable.status, "active"),
+            gt(subscriptionsTable.current_period_end, now),
+          ),
+        ),
       db.select({ total: count() }).from(couriersTable).where(isNull(couriersTable.deletedAt)),
       db.select({ total: count() }).from(customersTable).where(isNull(customersTable.deletedAt)),
       db
@@ -1208,6 +1225,7 @@ export async function adminRoutes(app: FastifyInstance) {
       activeOrdersCount,
       onlineCouriersCount,
       totalOutlets,
+      activeOutlets,
       totalCouriers,
       totalCustomers,
       recentOrders,

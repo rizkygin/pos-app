@@ -38,6 +38,7 @@ type AdminDashboardProps = {
   activeOrdersCount: number;
   onlineCouriersCount: number;
   totalOutlets: number;
+  activeOutlets: number;
   totalCouriers: number;
   totalCustomers: number;
   recentOrders: RecentOrder[];
@@ -79,6 +80,7 @@ export const AdminDashboard = ({
   activeOrdersCount,
   onlineCouriersCount,
   totalOutlets,
+  activeOutlets,
   totalCouriers,
   totalCustomers,
   recentOrders,
@@ -188,8 +190,11 @@ export const AdminDashboard = ({
             <Building2 className="h-4 w-4" />
           </div>
           <div>
-            <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Outlet</p>
-            <p className="text-base font-bold">{totalOutlets}</p>
+            <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Outlet Aktif</p>
+            <p className="text-base font-bold">
+              {activeOutlets ?? 0} / {totalOutlets}
+            </p>
+            <p className="text-[10px] text-muted-foreground">berbayar, tanpa trial</p>
           </div>
         </Link>
         <Link
