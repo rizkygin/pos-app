@@ -3,14 +3,24 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { AlertTriangle, Clock, CreditCard, Hourglass, X } from 'lucide-react';
+import { AlertTriangle, Clock, CreditCard, Hourglass, Receipt, X } from 'lucide-react';
 import { API_URL } from '@/lib/api-url';
 
 type Subscription = {
   status: 'trialing' | 'active' | 'past_due' | 'expired' | 'canceled';
   current_period_end: string | null;
 };
-type Payment = { status: string; proof_image: string | null };
+type Payment = {
+  status: string;
+  proof_image: string | null;
+  amount_due: string;
+  expires_at: string | null;
+};
+
+const rupiah = (v: number | string) =>
+  new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(
+    Number(v) || 0,
+  );
 
 // Session-only dismissal by design: plain state, no localStorage — the banner
 // must reappear on every browser refresh until the underlying state resolves.
@@ -20,6 +30,9 @@ export function SubscriptionWarningBanner() {
   const [sub, setSub] = useState<Subscription | null>(null);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [loaded, setLoaded] = useState(false);
+  // Clock read once per mount: day precision is all "N hari" needs, and
+  // render must stay pure.
+  const [now] = useState(Date.now);
 
   useEffect(() => {
     fetch(`${API_URL}/api/my-subscription`, { credentials: 'include' })
@@ -38,11 +51,12 @@ export function SubscriptionWarningBanner() {
     if (!sub?.current_period_end) return null;
     return Math.max(
       0,
-      Math.ceil((new Date(sub.current_period_end).getTime() - Date.now()) / 86400000),
+      Math.ceil((new Date(sub.current_period_end).getTime() - now) / 86400000),
     );
-  }, [sub]);
+  }, [sub, now]);
 
-  // Priority: payment being verified > dead subscription > trial > expiring soon.
+  // Priority: payment being verified > unpaid bill > dead subscription > trial
+  // > expiring soon.
   const warning = useMemo(() => {
     const verifying = payments.some((p) => p.status === 'pending' && p.proof_image);
     if (verifying)
@@ -51,6 +65,25 @@ export function SubscriptionWarningBanner() {
         icon: Hourglass,
         text: 'Pembayaran Pian sedang diverifikasi — konfirmasi biasanya kurang dari 24 jam.',
         cta: 'Lihat Status',
+      };
+    // A bill the owner opened and never finished: say so on every page until
+    // they pay or cancel it — it closes itself at expires_at either way.
+    const unpaid = payments.find((p) => p.status === 'pending' && !p.proof_image);
+    if (unpaid)
+      return {
+        tone: 'warn' as const,
+        icon: Receipt,
+        text: `Tagihan langganan ${rupiah(unpaid.amount_due)} belum dibayar — transfer lalu kirim bukti${
+          unpaid.expires_at
+            ? ` sebelum ${new Date(unpaid.expires_at).toLocaleDateString('id-ID', {
+                day: 'numeric',
+                month: 'short',
+                hour: '2-digit',
+                minute: '2-digit',
+              })}`
+            : ''
+        }, atau batalkan kalau tidak jadi.`,
+        cta: 'Bayar',
       };
     if (!sub)
       return {
